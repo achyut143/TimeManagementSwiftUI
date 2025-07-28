@@ -11,25 +11,57 @@ struct HabitDashboardView: View {
     @State private var filterMode = "all"
     @State private var showDeleteConfirmation = false
     @State private var habitToDelete = ""
+    @State private var searchText = ""
     
     var body: some View {
         VStack(spacing: 16) {
             headerView
             dateFilters
-            if !habitNames.isEmpty {
-                habitTabs
-                habitCalendar
-                statsView
-            } else {
-                emptyStateView
+                HStack {
+        Image(systemName: "magnifyingglass")
+        TextField("Search habits…", text: $searchText)
+          .textFieldStyle(.roundedBorder)
+      }
+      .padding(.horizontal)
+            
+    if filteredHabitNames.isEmpty {
+        Text("No habits match “\(searchText)”")
+          .foregroundColor(.secondary)
+          .padding(.vertical, 20)
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 12) {
+            ForEach(filteredHabitNames, id: \.self) { habitName in
+              habitTabView(habitName: habitName)
+                .id("\(habitName)-\(fromDate)-\(toDate)-\(filterMode)")
             }
+          }
+          .padding(.horizontal)
         }
-        .navigationTitle("Habit Tracker")
-        .onAppear {
-            if !habitNames.isEmpty && selectedHabit.isEmpty {
-                selectedHabit = habitNames.first ?? ""
-            }
-        }
+      }
+
+      // 3. The rest of your content shows only if there’s a selected habit
+    if !selectedHabit.isEmpty {
+    habitCalendar
+    statsView
+} else {
+    emptyStateView
+}
+    }
+    .navigationTitle("Habit Tracker")
+    .onAppear {
+      // Ensure we start with a valid selection
+      if selectedHabit.isEmpty, let first = filteredHabitNames.first {
+        selectedHabit = first
+      }
+    }
+    .onChange(of: filteredHabitNames) { newList in
+      // Reset selectedHabit if it was filtered out
+      if !newList.contains(selectedHabit) {
+        selectedHabit = newList.first ?? ""
+      }
+    }
+
         .alert("Delete Habit", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -70,17 +102,32 @@ struct HabitDashboardView: View {
         .padding(.horizontal)
     }
     
-    private var habitTabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(habitNames, id: \.self) { habitName in
-                    habitTabView(habitName: habitName)
-                        .id("\(habitName)-\(fromDate)-\(toDate)-\(filterMode)")
-                }
-            }
-            .padding(.horizontal)
+   private var filteredHabitNames: [String] {
+    habitNames
+      .filter { name in
+        switch filterMode {
+          case "routines": return name.lowercased().contains("routine")
+          case "repeats":  return !name.lowercased().contains("routine")
+          default:         return true
         }
+      }
+      .filter { searchText.isEmpty
+               || $0.localizedCaseInsensitiveContains(searchText) }
+  }
+
+  private var habitTabs: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 12) {
+        ForEach(filteredHabitNames, id: \.self) { habitName in
+          habitTabView(habitName: habitName)
+            .id("\(habitName)-\(fromDate)-\(toDate)-\(filterMode)")
+        }
+      }
+      .padding(.horizontal)
     }
+  }
+
+ 
     
     private func habitTabView(habitName: String) -> some View {
         let stats = calculateStatsForHabit(habitName)
@@ -217,9 +264,13 @@ struct HabitDashboardView: View {
         }
     }
     
-    private var habitNames: [String] {
-        Array(Set(filteredHabitTasks.map { $0.title })).sorted()
-    }
+   private var habitNames: [String] {
+    Array(Set(
+      tasks.filter { $0.repeatAgain != nil }
+           .map { $0.title }
+    ))
+    .sorted()
+  }
     
     private var dateRange: [Date] {
         var dates: [Date] = []
