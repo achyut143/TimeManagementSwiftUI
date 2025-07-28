@@ -10,6 +10,8 @@ struct TaskTableView: View {
     @State private var showOnlyWithNotes = false
     @State private var selectedTask: Task?
     @State private var showNotes = false
+    @State private var taskToDelete: Task?
+    @State private var showDeleteConfirmation = false
     
     var filteredTasks: [Task] {
         tasks.filter { task in
@@ -32,6 +34,12 @@ struct TaskTableView: View {
                     selectedTask = task
                     showNotes = true
                 }
+                .swipeActions {
+                    Button("Delete", role: .destructive) {
+                        taskToDelete = task
+                        showDeleteConfirmation = true
+                    }
+                }
             }
         }
         .navigationTitle("Task Table")
@@ -39,6 +47,16 @@ struct TaskTableView: View {
             if let task = selectedTask {
                 NotesView(task: task)
             }
+        }
+        .alert("Delete Task", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let task = taskToDelete {
+                    modelContext.delete(task)
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete this task?")
         }
     }
     

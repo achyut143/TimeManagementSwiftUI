@@ -7,7 +7,7 @@ import UserNotifications
 @main
 struct FocusFlowSwiftApp: App {
     init() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: "voice-alert-refresh", using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.focusflow.refresh", using: nil) { task in
             Self.handleBackgroundRefresh(task: task as! BGAppRefreshTask)
         }
         
@@ -33,8 +33,8 @@ struct FocusFlowSwiftApp: App {
     }
     
     private static func scheduleBackgroundTask() {
-        let request = BGAppRefreshTaskRequest(identifier: "voice-alert-refresh")
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 60)
+        let request = BGAppRefreshTaskRequest(identifier: "com.focusflow.refresh")
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         try? BGTaskScheduler.shared.submit(request)
     }
 }

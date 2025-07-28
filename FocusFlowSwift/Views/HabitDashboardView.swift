@@ -75,6 +75,7 @@ struct HabitDashboardView: View {
             HStack(spacing: 12) {
                 ForEach(habitNames, id: \.self) { habitName in
                     habitTabView(habitName: habitName)
+                        .id("\(habitName)-\(fromDate)-\(toDate)-\(filterMode)")
                 }
             }
             .padding(.horizontal)
@@ -82,7 +83,7 @@ struct HabitDashboardView: View {
     }
     
     private func habitTabView(habitName: String) -> some View {
-        let stats = calculateStats(for: habitName)
+        let stats = calculateStatsForHabit(habitName)
         let isSelected = selectedHabit == habitName
         
         return VStack(spacing: 4) {
@@ -150,7 +151,7 @@ struct HabitDashboardView: View {
     }
     
     private var statsView: some View {
-        let stats = calculateStats(for: selectedHabit)
+        let stats = calculateStatsForHabit(selectedHabit)
         let percentage = stats.total > 0 ? Int((Double(stats.completed) / Double(stats.total)) * 100) : 0
         
         return VStack(spacing: 10) {
@@ -264,16 +265,38 @@ struct HabitDashboardView: View {
         }
     }
     
-    private func calculateStats(for habitName: String) -> HabitStats {
+    // Fixed stats calculation method for individual habits
+    private func calculateStatsForHabit(_ habitName: String) -> HabitStats {
         var completed = 0
         var missed = 0
         
-        for date in activeDates {
-            let status = getStatusForDay(date: date)
-            switch status {
-            case .completed: completed += 1
-            case .missed: missed += 1
-            case .noData: break
+        // Get tasks for this specific habit with proper filtering
+        let habitSpecificTasks = tasks.filter { task in
+            guard task.repeatAgain != nil && task.title == habitName else { return false }
+            
+            // Apply filter mode
+            switch filterMode {
+            case "routines":
+                return task.title.lowercased().contains("routine")
+            case "repeats":
+                return !task.title.lowercased().contains("routine")
+            default:
+                return true
+            }
+        }
+        
+        // Calculate stats for each date in range
+        for date in dateRange {
+            let dayTasks = habitSpecificTasks.filter { task in
+                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
+            }
+            
+            if !dayTasks.isEmpty {
+                if dayTasks.contains(where: { $0.completed }) {
+                    completed += 1
+                } else if dayTasks.contains(where: { $0.notCompleted }) {
+                    missed += 1
+                }
             }
         }
         

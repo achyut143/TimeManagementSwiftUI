@@ -13,18 +13,38 @@ struct TasksCalendarView: View {
     @State private var editingTask: Task?
     @State private var showEditDialog = false
     @State private var taskInput = ""
+    @State private var taskTitle = ""
+    @State private var taskTags = ""
+    @State private var startTime = Date()
+    @State private var endTime = Calendar.current.date(byAdding: .minute, value: 30, to: Date()) ?? Date()
     @State private var repeatDays = 0
+    @State private var taskWeight = 1.0
     @State private var showNotesDialog = false
     @State private var notesTask: Task?
     @State private var showDeleteConfirmation = false
     @State private var taskToDelete: Task?
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
+    @State private var showTaskCreation = false
     
     var body: some View {
         VStack(spacing: 0) {
             pointsIndicator
-            taskCreationHeader
+            
+            HStack {
+Button(showTaskCreation ? "Close" : "Add Task") {
+                    showTaskCreation.toggle()
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Spacer()
+            }
+            .padding()
+            
+            if showTaskCreation {
+                taskCreationHeader
+            }
+            
             dateHeader
             timelineView
         }
@@ -76,37 +96,63 @@ struct TasksCalendarView: View {
     
     private var taskCreationHeader: some View {
         VStack(spacing: 12) {
-            Text("Task Management")
-                .font(.title2)
-                .fontWeight(.semibold)
+            Text("Create New Task")
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundStyle(.primary)
             
-            Text("Format: StartTime - EndTime - TaskName - Description")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            
-            HStack {
-                TextField("e.g., 9:00 - 10:00 - Meeting - Weekly sync", text: $taskInput)
+            VStack(spacing: 8) {
+                TextField("Task Title", text: $taskTitle)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        createTaskFromInput()
-                    }
                 
-                Button("Add") {
-                    createTaskFromInput()
+                TextField("Tags (comma separated)", text: $taskTags)
+                    .textFieldStyle(.roundedBorder)
+                
+                HStack {
+                    DatePicker("Start", selection: $startTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.compact)
+                        .onChange(of: startTime) { _, newValue in
+                            startTime = roundToNearestFiveMinutes(newValue)
+                            endTime = Calendar.current.date(byAdding: .minute, value: 30, to: startTime) ?? startTime
+                        }
+                    
+                    DatePicker("End", selection: $endTime, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.compact)
+                        .onChange(of: endTime) { _, newValue in
+                            endTime = roundToNearestFiveMinutes(newValue)
+                        }
                 }
-                .buttonStyle(.borderedProminent)
-            }
-            
-            HStack {
-                TextField("Repeat every _ days", value: $repeatDays, format: .number)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
                 
-                DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
-                    .datePickerStyle(.compact)
-                    .onChange(of: selectedDate) { _, _ in
-                        updateQuery()
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Weight")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("1-10", value: $taskWeight, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
                     }
+                    
+                    VStack(alignment: .leading) {
+                        Text("Repeat (days)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("0 = no repeat", value: $repeatDays, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                    }
+                    
+                    DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                        .onChange(of: selectedDate) { _, _ in
+                            updateQuery()
+                        }
+                    
+                    Button("Add") {
+                        createTaskFromSeparateFields()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
         }
         .padding()
@@ -189,7 +235,7 @@ struct TasksCalendarView: View {
     : (24 * 60 - startMinutes) + endMinutes
 
   // Compute taskHeight based on duration
-  let taskHeight = max(10.0, Double(duration) / 5.0 * 12.5)
+  let taskHeight = max(10.0, (Double(duration) / 5.0 * 14.2)-20)
 
   return VStack(alignment: .leading, spacing: 4) {
     if isStartSlot {
@@ -327,8 +373,8 @@ HStack {
     }
     
     // Calculate offset: each hour = 180 units, plus proportional minutes
-    let hourOffset = CGFloat(adjustedHour) * 150
-    let minuteOffset = CGFloat(minute) * 2.5//(166.0 / 60.0)  // 3 units per minute
+    let hourOffset = CGFloat(adjustedHour) * 170
+    let minuteOffset = CGFloat(minute) * (170.0 / 60.0)  // 3 units per minute
     
     return hourOffset + minuteOffset
 }
@@ -437,8 +483,11 @@ HStack {
     
     private func scrollToCurrentTime(proxy: ScrollViewProxy) {
         let currentHour = Calendar.current.component(.hour, from: Date())
+        let currentMinute = Calendar.current.component(.minute, from: Date())
+        let roundedMinute = (currentMinute / 5) * 5
+        
         withAnimation {
-            proxy.scrollTo(currentHour, anchor: .center)
+            proxy.scrollTo("\(currentHour)-\(roundedMinute)", anchor: .center)
         }
     }
     
@@ -454,10 +503,8 @@ HStack {
             
             if currentMinutes == startMinutes {
                 speakText("Time to start: \(task.title)")
-                NotificationManager.shared.scheduleTaskStartNotification(task: task)
             } else if currentMinutes == endMinutes {
                 speakText("Time to end: \(task.title)")
-                NotificationManager.shared.scheduleTaskEndNotification(task: task)
             }
         }
     }
@@ -496,6 +543,41 @@ HStack {
         modelContext.delete(task)
         try? modelContext.save()
         updateQuery()
+    }
+    
+    private func createTaskFromSeparateFields() {
+        guard !taskTitle.isEmpty else { return }
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "H:mm"
+        
+        let startTimeString = formatter.string(from: startTime)
+        let endTimeString = formatter.string(from: endTime)
+        
+        let task = Task(
+            title: taskTitle,
+            taskDescription: taskTags,
+            startTime: startTimeString,
+            endTime: endTimeString,
+            weight: taskWeight,
+            date: selectedDate,
+            repeatAgain: repeatDays > 0 ? repeatDays : nil
+        )
+        
+        modelContext.insert(task)
+        scheduleTaskNotifications(for: task)
+        
+        do {
+            try modelContext.save()
+            updateQuery()
+        } catch {
+            print("Error saving task: \(error)")
+        }
+        
+        taskTitle = ""
+        taskTags = ""
+        repeatDays = 0
+        taskWeight = 1.0
     }
     
     private func createTaskFromInput() {
@@ -606,28 +688,42 @@ HStack {
     private func scheduleTaskNotifications(for task: Task) {
         guard let taskDate = task.date else { return }
         
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
+        let calendar = Calendar.current
+        let startMinutes = timeToMinutes(task.startTime)
+        let endMinutes = timeToMinutes(task.endTime)
         
-        if let startTime = formatter.date(from: task.startTime) {
-            let calendar = Calendar.current
-            var components = calendar.dateComponents([.year, .month, .day], from: taskDate)
-            components.hour = calendar.component(.hour, from: startTime)
-            components.minute = calendar.component(.minute, from: startTime)
-            
-            if let taskStartDateTime = calendar.date(from: components), taskStartDateTime > Date() {
-                let timeInterval = taskStartDateTime.timeIntervalSinceNow
-                NotificationManager.shared.scheduleNotification(
-                    title: "Task Starting",
-                    body: "Time to start: \(task.title)",
-                    identifier: "task-start-\(task.title)-\(taskDate.timeIntervalSince1970)",
-                    timeInterval: timeInterval
-                )
-            }
+        // Create start time components
+        var startComponents = calendar.dateComponents([.year, .month, .day], from: taskDate)
+        startComponents.hour = startMinutes / 60
+        startComponents.minute = startMinutes % 60
+        
+        // Create end time components  
+        var endComponents = calendar.dateComponents([.year, .month, .day], from: taskDate)
+        endComponents.hour = endMinutes / 60
+        endComponents.minute = endMinutes % 60
+        
+        if let startDateTime = calendar.date(from: startComponents), startDateTime > Date() {
+            let startInterval = startDateTime.timeIntervalSinceNow
+            NotificationManager.shared.scheduleNotification(
+                title: "Task Starting",
+                body: "Time to start: \(task.title)",
+                identifier: "task-start-\(task.title)-\(taskDate.timeIntervalSince1970)",
+                timeInterval: startInterval
+            )
+        }
+        
+        if let endDateTime = calendar.date(from: endComponents), endDateTime > Date() {
+            let endInterval = endDateTime.timeIntervalSinceNow
+            NotificationManager.shared.scheduleNotification(
+                title: "Task Ending", 
+                body: "Time to end: \(task.title)",
+                identifier: "task-end-\(task.title)-\(taskDate.timeIntervalSince1970)",
+                timeInterval: endInterval
+            )
         }
     }
 }
+
 
 struct TimeSlot: Hashable {
     let hour: Int
@@ -706,6 +802,10 @@ struct EditTaskView: View {
         try? modelContext.save()
     }
 }
+
+
+
+
 
 #Preview {
     TasksCalendarView()
@@ -866,4 +966,18 @@ struct TaskActionsView: View {
         try? modelContext.save()
         onTaskDeleted()
     }
+}
+
+// MARK: - Helper Functions
+func roundToNearestFiveMinutes(_ date: Date) -> Date {
+    let calendar = Calendar.current
+    let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+    let minutes = components.minute ?? 0
+    let roundedMinutes = (minutes / 5) * 5
+    
+    var newComponents = components
+    newComponents.minute = roundedMinutes
+    newComponents.second = 0
+    
+    return calendar.date(from: newComponents) ?? date
 }
