@@ -5,8 +5,8 @@ import Foundation
 
 struct TasksCalendarView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var tasks: [Task]
     @State private var selectedDate = Date()
+    @State private var tasks: [Task] = []
     @State private var currentTime = Date()
     @State private var timer: Timer?
     @State private var speechSynthesizer = AVSpeechSynthesizer()
@@ -43,6 +43,7 @@ struct TasksCalendarView: View {
             }
         }
         .onAppear {
+            updateQuery()
             startTimer()
         }
         .sheet(isPresented: $showEditDialog) {
@@ -67,7 +68,7 @@ struct TasksCalendarView: View {
         }
         .sheet(isPresented: $showTaskActions) {
             if let task = selectedTaskForActions {
-                TaskActionsView(task: task)
+                TaskActionsView(task: task, onTaskDeleted: updateQuery)
                     .presentationDetents([.medium])
             }
         }
@@ -103,6 +104,9 @@ struct TasksCalendarView: View {
                 
                 DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact)
+                    .onChange(of: selectedDate) { _, _ in
+                        updateQuery()
+                    }
             }
         }
         .padding()
@@ -159,70 +163,123 @@ struct TasksCalendarView: View {
         .id("\(slot.hour)-\(slot.minute)")
     }
     
-    private func taskView(task: Task, slot: TimeSlot, containerWidth: CGFloat) -> some View {
-        let startMinutes = timeToMinutes(task.startTime)
-        let endMinutes = timeToMinutes(task.endTime)
-        let slotMinutes = slot.hour * 60 + slot.minute
-        let isStartSlot = slotMinutes == startMinutes
+   private func taskView(
+  task: Task,
+  slot: TimeSlot,
+  containerWidth: CGFloat
+) -> some View {
+  let startMinutes = timeToMinutes(task.startTime)
+  let endMinutes   = timeToMinutes(task.endTime)
+  let slotMinutes  = slot.hour * 60 + slot.minute
+  let isStartSlot  = slotMinutes == startMinutes
+
+  let overlappingTasks   = getOverlappingTasks(for: task)
+  let position           = overlappingTasks.firstIndex { $0.id == task.id } ?? 0
+  let totalOverlapping   = overlappingTasks.count
+  let taskWidth          = totalOverlapping > 1
+    ? 1.0 / Double(totalOverlapping)
+    : 1.0
+  let leftOffset         = totalOverlapping > 1
+    ? Double(position) / Double(totalOverlapping)
+    : 0.0
+
+  // Compute duration in minutes, wrapping past midnight if needed
+  let duration = endMinutes > startMinutes
+    ? endMinutes - startMinutes
+    : (24 * 60 - startMinutes) + endMinutes
+
+  // Compute taskHeight based on duration
+  let taskHeight = max(10.0, Double(duration) / 5.0 * 12.5)
+
+  return VStack(alignment: .leading, spacing: 4) {
+    if isStartSlot {
+VStack(alignment: .leading, spacing: 2) {
+    HStack {
+        Text(task.title)
+          .font(.caption)
+          .fontWeight(.medium)
+          .lineLimit(1)
+
+        Spacer()
+      }
+    
+    HStack {
+Text("\(task.startTime) - \(task.endTime) (\(duration)m)")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            Text("\(Int(task.weight))")
+  .font(.caption2)
+  .fontWeight(.bold)
+  .foregroundStyle(.white)
+  .padding(.horizontal, 6)
+  .padding(.vertical, 2)
+  .background(weightColor(task.weight))
+  .clipShape(Capsule())
         
-        let overlappingTasks = getOverlappingTasks(for: task)
-        let position = overlappingTasks.firstIndex(where: { $0.id == task.id }) ?? 0
-        let totalOverlapping = overlappingTasks.count
-        
-        let taskWidth = totalOverlapping > 1 ? 1.0 / Double(totalOverlapping) : 1.0
-        let leftOffset = totalOverlapping > 1 ? Double(position) / Double(totalOverlapping) : 0.0
-        
-        let duration = endMinutes > startMinutes ? endMinutes - startMinutes : (24 * 60 - startMinutes) + endMinutes
-        let taskHeight = max(10.0, Double(duration) / 5.0 * 10.0)
-        
-        return VStack(alignment: .leading, spacing: 4) {
-            if isStartSlot {
-                HStack {
-                    Text(task.title)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                    
-                    Spacer()
-                    
-                    Text("\(Int(task.weight))")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.white)
-                        .frame(width: 16, height: 16)
-                        .background(weightColor(task.weight), in: Circle())
-                }
-                
-                Text("\(task.startTime) - \(task.endTime)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        if let repeatDays = task.repeatAgain {
+            HStack(spacing: 2) {
+                Image(systemName: "repeat")
+                Text("\(repeatDays)")
             }
+            .font(.caption2)
+            .foregroundStyle(.blue)
         }
-        .padding(isStartSlot ? 8 : 0)
-        .background(taskBackgroundColor(task))
-        .overlay(
-            Rectangle()
-                .stroke(isCurrentTask(task) ? Color.blue : Color.clear, lineWidth: 2)
-        )
-        .frame(width: containerWidth * taskWidth, height: isStartSlot ? max(40, taskHeight) : 10)
-        .offset(x: containerWidth * leftOffset)
-        .draggable(task)
-        .dropDestination(for: Task.self) { droppedTasks, location in
-            guard let droppedTask = droppedTasks.first else { return false }
-            updateTaskTime(droppedTask, to: slot)
-            return true
+        
+        if task.notes != nil && !task.notes!.isEmpty {
+            Image(systemName: "note.text")
+                .font(.caption2)
+                .foregroundStyle(.orange)
         }
-        .onTapGesture {
-              selectedTaskForActions = task
-            showTaskActions = true
-           
-        }
-        .onLongPressGesture {
-            if isCurrentTask(task) {
-                speakTaskAlert(task)
-            }
-        }
+        
+        Spacer()
+        
+       
     }
+HStack {
+        Text(" ")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        
+        Spacer()
+    }
+.frame(height: taskHeight)
+.overlay(
+    Rectangle()
+        .fill(Color.clear)
+        .frame(height: taskHeight)
+)
+}//vstacn end
+    }
+  }
+  .padding(isStartSlot ? 0 : 0)
+  .background(taskBackgroundColor(task))
+  .overlay(
+    Rectangle()
+      .stroke(isCurrentTask(task) ? Color.blue : Color.clear, lineWidth: 2)
+  )
+  // Use taskHeight here
+  .frame(
+    width: containerWidth * taskWidth,
+    // height: taskHeight
+  )
+  .offset(x: containerWidth * leftOffset)
+  .draggable(task)
+  .dropDestination(for: Task.self) { droppedTasks, _ in
+    guard let droppedTask = droppedTasks.first else { return false }
+    updateTaskTime(droppedTask, to: slot)
+    return true
+  }
+  .onTapGesture {
+    selectedTaskForActions = task
+    showTaskActions = true
+  }
+  .onLongPressGesture {
+    if isCurrentTask(task) {
+      speakTaskAlert(task)
+    }
+  }
+}
+
     
     private func taskActionButton(systemName: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -270,31 +327,60 @@ struct TasksCalendarView: View {
     }
     
     // Calculate offset: each hour = 180 units, plus proportional minutes
-    let hourOffset = CGFloat(adjustedHour) * 170
-    let minuteOffset = CGFloat(minute) * (170.0 / 60.0)  // 3 units per minute
+    let hourOffset = CGFloat(adjustedHour) * 150
+    let minuteOffset = CGFloat(minute) * 2.5//(166.0 / 60.0)  // 3 units per minute
     
     return hourOffset + minuteOffset
 }
 
     private func tasksForSlot(_ slot: TimeSlot) -> [Task] {
+        let slotMinutes = slot.hour * 60 + slot.minute
         let filteredTasks = tasks.filter { task in
-            guard let taskDate = task.date else { return false }
-            guard Calendar.current.isDate(taskDate, inSameDayAs: selectedDate) else { return false }
-            
             let startMinutes = timeToMinutes(task.startTime)
-            let endMinutes = timeToMinutes(task.endTime)
-            let slotMinutes = slot.hour * 60 + slot.minute
-            
             return slotMinutes == startMinutes
         }
+        if filteredTasks.count > 0 {
+            print("Slot \(slot.hour):\(slot.minute) has \(filteredTasks.count) tasks")
+        }
+        return filteredTasks
+    }
+    
+    private func updateQuery() {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: selectedDate)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
-        return filteredTasks.sorted { task1, task2 in
-            let start1 = timeToMinutes(task1.startTime)
-            let start2 = timeToMinutes(task2.startTime)
-            if start1 == start2 {
-                return task1.title < task2.title
+        print("Querying tasks between \(startOfDay) and \(endOfDay)")
+        
+        // First, get all tasks to see what's in the database
+        let allTasksDescriptor = FetchDescriptor<Task>()
+        do {
+            let allTasks = try modelContext.fetch(allTasksDescriptor)
+            print("Total tasks in database: \(allTasks.count)")
+            for task in allTasks {
+                print("DB Task: \(task.title) on \(task.date ?? Date())")
             }
-            return start1 < start2
+        } catch {
+            print("Error fetching all tasks: \(error)")
+        }
+        
+        let descriptor = FetchDescriptor<Task>(
+            sortBy: [SortDescriptor(\.startTime)]
+        )
+        
+        do {
+            let allTasks = try modelContext.fetch(descriptor)
+            tasks = allTasks.filter { task in
+                guard let taskDate = task.date else { return false }
+                return Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+            }
+            print("Fetched \(tasks.count) tasks for \(selectedDate)")
+            for task in tasks {
+                print("Task: \(task.title) at \(task.startTime) on \(task.date ?? Date())")
+            }
+        } catch {
+            print("Error fetching tasks: \(error)")
+            tasks = []
         }
     }
     
@@ -303,28 +389,18 @@ struct TasksCalendarView: View {
         let taskEnd = timeToMinutes(task.endTime)
         
         return tasks.filter { t in
-            guard let taskDate = t.date else { return false }
-            guard Calendar.current.isDate(taskDate, inSameDayAs: selectedDate) else { return false }
-            
             let tStart = timeToMinutes(t.startTime)
             let tEnd = timeToMinutes(t.endTime)
-            
             return (tStart < taskEnd && tEnd > taskStart)
-        }.sorted { t1, t2 in
-            let start1 = timeToMinutes(t1.startTime)
-            let start2 = timeToMinutes(t2.startTime)
-            if start1 == start2 {
-                return t1.title < t2.title
-            }
-            return start1 < start2
         }
     }
     
     private func timeToMinutes(_ timeStr: String) -> Int {
-        let components = timeStr.components(separatedBy: ":")
+        let cleanTimeStr = timeStr.trimmingCharacters(in: .whitespaces)
+        let components = cleanTimeStr.components(separatedBy: ":")
         guard components.count >= 2,
-              let hours = Int(components[0]),
-              let minutes = Int(components[1]) else { return 0 }
+              let hours = Int(components[0].trimmingCharacters(in: .whitespaces)),
+              let minutes = Int(components[1].trimmingCharacters(in: .whitespaces)) else { return 0 }
         return hours * 60 + minutes
     }
     
@@ -352,10 +428,11 @@ struct TasksCalendarView: View {
     
     private func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
             currentTime = Date()
             checkTaskAlerts()
         }
+        RunLoop.current.add(timer!, forMode: .common)
     }
     
     private func scrollToCurrentTime(proxy: ScrollViewProxy) {
@@ -418,12 +495,14 @@ struct TasksCalendarView: View {
     private func deleteTask(_ task: Task) {
         modelContext.delete(task)
         try? modelContext.save()
+        updateQuery()
     }
     
     private func createTaskFromInput() {
         guard !taskInput.isEmpty else { return }
         
         let components = taskInput.split(separator: "-").map { $0.trimmingCharacters(in: .whitespaces) }
+        print("Input components: \(components)")
         
         if components.count >= 4 {
             let startTime = String(components[0])
@@ -443,8 +522,20 @@ struct TasksCalendarView: View {
             )
             
             modelContext.insert(task)
+            scheduleTaskNotifications(for: task)
+            print("Created task: \(title) for date: \(selectedDate) at \(startTime)-\(endTime)")
+            
+            do {
+                try modelContext.save()
+                print("Task saved successfully")
+                updateQuery()
+            } catch {
+                print("Error saving task: \(error)")
+            }
+        } else {
+            print("Invalid input format. Need at least 4 components, got \(components.count)")
         }
-        try? modelContext.save()
+        
         taskInput = ""
         repeatDays = 0
     }
@@ -480,17 +571,13 @@ struct TasksCalendarView: View {
         task.endTime = String(format: "%d:%02d", endHour, endMin)
         task.date = selectedDate
         
+        scheduleTaskNotifications(for: task)
         try? modelContext.save()
     }
     
     private var pointsIndicator: some View {
-        let todayTasks = tasks.filter { task in
-            guard let taskDate = task.date else { return false }
-            return Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
-        }
-        
-        let totalPoints = todayTasks.reduce(0) { $0 + $1.weight }
-        let completedPoints = todayTasks.filter { $0.completed }.reduce(0) { $0 + $1.weight }
+        let totalPoints = tasks.reduce(0) { $0 + $1.weight }
+        let completedPoints = tasks.filter { $0.completed }.reduce(0) { $0 + $1.weight }
         let percentage = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0
         
         return VStack(spacing: 4) {
@@ -514,6 +601,31 @@ struct TasksCalendarView: View {
         if percentage >= 80 { return .green }
         if percentage >= 50 { return .orange }
         return .red
+    }
+    
+    private func scheduleTaskNotifications(for task: Task) {
+        guard let taskDate = task.date else { return }
+        
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        
+        if let startTime = formatter.date(from: task.startTime) {
+            let calendar = Calendar.current
+            var components = calendar.dateComponents([.year, .month, .day], from: taskDate)
+            components.hour = calendar.component(.hour, from: startTime)
+            components.minute = calendar.component(.minute, from: startTime)
+            
+            if let taskStartDateTime = calendar.date(from: components), taskStartDateTime > Date() {
+                let timeInterval = taskStartDateTime.timeIntervalSinceNow
+                NotificationManager.shared.scheduleNotification(
+                    title: "Task Starting",
+                    body: "Time to start: \(task.title)",
+                    identifier: "task-start-\(task.title)-\(taskDate.timeIntervalSince1970)",
+                    timeInterval: timeInterval
+                )
+            }
+        }
     }
 }
 
@@ -639,6 +751,7 @@ struct NotesView: View {
 
 struct TaskActionsView: View {
     let task: Task
+    let onTaskDeleted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @State private var showDeleteConfirmation = false
@@ -714,18 +827,43 @@ struct TaskActionsView: View {
     
     private func toggleTaskCompletion() {
         task.completed.toggle()
+        if task.completed {
+            createRepeatTask(from: task)
+        }
         try? modelContext.save()
         dismiss()
     }
     
     private func toggleTaskNonCompletion() {
         task.notCompleted.toggle()
+        if task.notCompleted {
+            createRepeatTask(from: task)
+        }
         try? modelContext.save()
         dismiss()
+    }
+    
+    private func createRepeatTask(from task: Task) {
+        guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
+        
+        let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
+        
+        let newTask = Task(
+            title: task.title,
+            taskDescription: task.taskDescription,
+            startTime: task.startTime,
+            endTime: task.endTime,
+            weight: task.weight,
+            date: nextDate,
+            repeatAgain: task.repeatAgain
+        )
+        
+        modelContext.insert(newTask)
     }
     
     private func deleteTask() {
         modelContext.delete(task)
         try? modelContext.save()
+        onTaskDeleted()
     }
 }

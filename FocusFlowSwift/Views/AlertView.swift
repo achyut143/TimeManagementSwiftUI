@@ -102,6 +102,7 @@ struct AlertView: View {
                         startTimerIfNeeded()
                     } else {
                         timer?.invalidate()
+                        timer = nil
                     }
                     try? modelContext.save()
                 }
@@ -164,6 +165,10 @@ struct AlertView: View {
         updateNextAlertTime()
         
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            guard currentSettings.isPlaying else {
+                timer?.invalidate()
+                return
+            }
             updateNextAlertTime()
             if Date() >= nextAlertDate {
                 playSound()
@@ -205,5 +210,6 @@ struct AlertView: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         currentSettings.nextAlertTime = formatter.string(from: nextAlertDate)
+        try? modelContext.save()
     }
 }

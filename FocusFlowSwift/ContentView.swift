@@ -9,13 +9,13 @@ struct ContentView: View {
         TabView {
             NavigationView {
                 TasksCalendarView()
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Alerts") {
-                                showAlertView = true
-                            }
-                        }
-                    }
+                    // .toolbar {
+                    //     // ToolbarItem(placement: .navigationBarTrailing) {
+                    //     //     Button("Alerts") {
+                    //     //         showAlertView = true
+                    //     //     }
+                    //     // }
+                    // }
             }
             .tabItem {
                 Image(systemName: "calendar")
@@ -38,9 +38,9 @@ struct ContentView: View {
                 Text("Points")
             }
         }
-        .sheet(isPresented: $showAlertView) {
-            AlertView()
-        }
+        // .sheet(isPresented: $showAlertView) {
+        //     AlertView()
+        // }
     }
 }
 

@@ -9,6 +9,8 @@ struct HabitDashboardView: View {
     @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate = Date()
     @State private var filterMode = "all"
+    @State private var showDeleteConfirmation = false
+    @State private var habitToDelete = ""
     
     var body: some View {
         VStack(spacing: 16) {
@@ -27,6 +29,14 @@ struct HabitDashboardView: View {
             if !habitNames.isEmpty && selectedHabit.isEmpty {
                 selectedHabit = habitNames.first ?? ""
             }
+        }
+        .alert("Delete Habit", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteHabit(habitToDelete)
+            }
+        } message: {
+            Text("Are you sure you want to delete this habit and all its tasks?")
         }
     }
     
@@ -85,7 +95,10 @@ struct HabitDashboardView: View {
                     .font(.caption)
                     .lineLimit(1)
                 
-                Button(action: { deleteHabit(habitName) }) {
+                Button(action: { 
+                    habitToDelete = habitName
+                    showDeleteConfirmation = true
+                }) {
                     Image(systemName: "trash")
                         .font(.caption2)
                         .foregroundColor(.red)
