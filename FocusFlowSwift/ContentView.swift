@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -9,13 +10,13 @@ struct ContentView: View {
         TabView {
             NavigationView {
                 TasksCalendarView()
-                    // .toolbar {
-                    //     // ToolbarItem(placement: .navigationBarTrailing) {
-                    //     //     Button("Alerts") {
-                    //     //         showAlertView = true
-                    //     //     }
-                    //     // }
-                    // }
+                  .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Alerts") {
+                                showAlertView = true
+                            }
+                        }
+                    }
             }
             .tabItem {
                 Image(systemName: "calendar")
@@ -38,14 +39,19 @@ struct ContentView: View {
                 Text("Points")
             }
         }
-        // .sheet(isPresented: $showAlertView) {
-        //     AlertView()
-        // }
+        .sheet(isPresented: $showAlertView) {
+            AlertView()
+        }
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 }
 
-
 #Preview {
     ContentView()
-        .modelContainer(for: AlertSettings.self, inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self], inMemory: true)
 }

@@ -1,10 +1,14 @@
 import UserNotifications
 import AVFoundation
 
-class NotificationManager: ObservableObject {
+class NotificationManager: NSObject, ObservableObject {
     static let shared = NotificationManager()
     
-    private init() {}
+    private override init() {}
+    
+    func setupNotificationDelegate() {
+        UNUserNotificationCenter.current().delegate = self
+    }
     
     func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
@@ -26,6 +30,7 @@ class NotificationManager: ObservableObject {
         UNUserNotificationCenter.current().add(request)
     }
     
+    //not being used
     func scheduleTaskStartNotification(task: Task) {
         scheduleNotification(
             title: "Task Starting",
@@ -34,6 +39,7 @@ class NotificationManager: ObservableObject {
         )
     }
     
+    //   //not being used
     func scheduleTaskEndNotification(task: Task) {
         scheduleNotification(
             title: "Task Ending",
@@ -50,6 +56,32 @@ class NotificationManager: ObservableObject {
         )
     }
     
+    func scheduleRepeatingIntervalNotifications(intervalMinutes: Int) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["repeating-interval"])
+        
+        let content = UNMutableNotificationContent()
+        content.title = "Focus Alert"
+        content.body = "Interval \(AlertSettings.shared.counter + 1) - Time for your next interval!"
+        content.sound = UNNotificationSound.default
+        
+        let trigger = UNTimeIntervalNotificationTrigger(
+            timeInterval: TimeInterval(intervalMinutes * 60),
+            repeats: true
+        )
+        
+        let request = UNNotificationRequest(
+            identifier: "repeating-interval",
+            content: content,
+            trigger: trigger
+        )
+        
+        UNUserNotificationCenter.current().add(request)
+    }
+    
+    func stopRepeatingNotifications() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["repeating-interval"])
+    }
+    
     func scheduleTaskCompletedNotification(task: Task) {
         scheduleNotification(
             title: "Task Completed",
@@ -64,5 +96,22 @@ class NotificationManager: ObservableObject {
             body: "Task marked as not completed: \(task.title)",
             identifier: "task-not-completed-\(task.title)"
         )
+    }
+}
+
+extension NotificationManager: UNUserNotificationCenterDelegate {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        
+        if response.notification.request.identifier == "repeating-interval" {
+            AlertSettings.shared.counter += 1
+            
+            if let target = AlertSettings.shared.targetIntervals,
+               AlertSettings.shared.counter >= target {
+                AlertSettings.shared.isPlaying = false
+                stopRepeatingNotifications()
+            }
+        }
+        
+        completionHandler()
     }
 }

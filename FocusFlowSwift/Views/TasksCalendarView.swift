@@ -236,31 +236,41 @@ Button(showTaskCreation ? "Close" : "Add Task") {
 
   // Compute taskHeight based on duration
   let taskHeight = max(10.0, (Double(duration) / 5.0 * 14.2)-20)
+  let now = Calendar.current.dateComponents([.hour, .minute], from: currentTime)
+  let currentMinutes = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+  let isCurrentTaskToday = Calendar.current.isDate(selectedDate, inSameDayAs: Date()) && 
+                          currentMinutes >= startMinutes && currentMinutes < endMinutes
+  let remaining = isCurrentTaskToday ? max(0, endMinutes - currentMinutes) : 0
 
   return VStack(alignment: .leading, spacing: 4) {
     if isStartSlot {
-VStack(alignment: .leading, spacing: 2) {
-    HStack {
-        Text(task.title)
-          .font(.caption)
-          .fontWeight(.medium)
-          .lineLimit(1)
-
-        Spacer()
-      }
-    
-    HStack {
-Text("\(task.startTime) - \(task.endTime) (\(duration)m)")
+      VStack(alignment: .leading, spacing: 2) {
+        HStack {
+          Text(task.title)
+            .font(.caption)
+            .fontWeight(.medium)
+            .lineLimit(1)
+          Spacer()
+        }
+        HStack {
+        Text("\(task.startTime) - \(task.endTime) (\(duration)m)")
             .font(.caption2)
             .foregroundStyle(.secondary)
-            Text("\(Int(task.weight))")
-  .font(.caption2)
-  .fontWeight(.bold)
-  .foregroundStyle(.white)
-  .padding(.horizontal, 6)
-  .padding(.vertical, 2)
-  .background(weightColor(task.weight))
-  .clipShape(Capsule())
+        
+        if isCurrentTaskToday && remaining > 0 {
+            Text("\(remaining)m left")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .fontWeight(.medium)
+        }
+        Text("\(Int(task.weight))")
+            .font(.caption2)
+            .fontWeight(.bold)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(weightColor(task.weight))
+            .clipShape(Capsule())
         
         if let repeatDays = task.repeatAgain {
             HStack(spacing: 2) {
@@ -277,11 +287,25 @@ Text("\(task.startTime) - \(task.endTime) (\(duration)m)")
                 .foregroundStyle(.orange)
         }
         
-        Spacer()
+        if task.repeatAgain != nil {
+            Image(systemName: "repeat")
+                .font(.caption2)
+                .foregroundColor(task.reassign ? .red : .green)
+                .onTapGesture {
+                    // Toggle or clear the reassign flag
+                    task.reassign.toggle()
+                    // Persist the change
+                    do {
+                        try modelContext.save()
+                    } catch {
+                        print("Failed to save reassign flag:", error)
+                    }
+                }
+        }
         
-       
+        Spacer()
     }
-HStack {
+    HStack {
         Text(" ")
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -750,16 +774,19 @@ struct EditTaskView: View {
     
     @State private var title: String
     @State private var description: String
-    @State private var startTime: String
-    @State private var endTime: String
+    @State private var startTime: Date
+    @State private var endTime: Date
     @State private var weight: Double
     
     init(task: Task) {
         self.task = task
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.taskDescription)
-        _startTime = State(initialValue: task.startTime)
-        _endTime = State(initialValue: task.endTime)
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        _startTime = State(initialValue: formatter.date(from: task.startTime) ?? Date())
+        _endTime = State(initialValue: formatter.date(from: task.endTime) ?? Date())
         _weight = State(initialValue: task.weight)
     }
     
@@ -768,8 +795,8 @@ struct EditTaskView: View {
             Form {
                 TextField("Title", text: $title)
                 TextField("Description", text: $description)
-                TextField("Start Time", text: $startTime)
-                TextField("End Time", text: $endTime)
+                DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
+                DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
                 
                 HStack {
                     Text("Weight")
@@ -794,10 +821,13 @@ struct EditTaskView: View {
     }
     
     private func saveTask() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        
         task.title = title
         task.taskDescription = description
-        task.startTime = startTime
-        task.endTime = endTime
+        task.startTime = formatter.string(from: startTime)
+        task.endTime = formatter.string(from: endTime)
         task.weight = weight
         try? modelContext.save()
     }
@@ -927,7 +957,7 @@ struct TaskActionsView: View {
     
     private func toggleTaskCompletion() {
         task.completed.toggle()
-        if task.completed {
+        if task.completed && !task.reassign {
             createRepeatTask(from: task)
         }
         try? modelContext.save()
@@ -936,9 +966,18 @@ struct TaskActionsView: View {
     
     private func toggleTaskNonCompletion() {
         task.notCompleted.toggle()
-        if task.notCompleted {
+        if task.notCompleted && !task.reassign {
+           
             createRepeatTask(from: task)
         }
+         if task.notCompleted,
+       !task.reassign,
+       let repeats = task.repeatAgain,
+       repeats > 1
+    {
+        createIncompleteTask(from: task)
+       
+    }
         try? modelContext.save()
         dismiss()
     }
@@ -956,6 +995,27 @@ struct TaskActionsView: View {
             weight: task.weight,
             date: nextDate,
             repeatAgain: task.repeatAgain
+        )
+        
+        modelContext.insert(newTask)
+    }
+
+        private func createIncompleteTask(from task: Task) {
+        guard let currentDate = task.date else { return }
+        
+        let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        
+        let newTask = Task(
+            title: task.title,
+            taskDescription: task.taskDescription,
+            startTime: task.startTime,
+            endTime: task.endTime,
+             reassign:true,
+            weight: task.weight,
+            date: nextDate,
+            repeatAgain: task.repeatAgain
+           
+            
         )
         
         modelContext.insert(newTask)

@@ -15,6 +15,7 @@ struct FocusFlowSwiftApp: App {
         try? AVAudioSession.sharedInstance().setActive(true)
         
         NotificationManager.shared.requestPermission()
+        NotificationManager.shared.setupNotificationDelegate()
     }
     
     var body: some Scene {
@@ -24,7 +25,7 @@ struct FocusFlowSwiftApp: App {
                     Self.scheduleBackgroundTask()
                 }
         }
-        .modelContainer(for: [AlertSettings.self, Task.self, Habit.self])
+        .modelContainer(for: [Task.self, Habit.self])
     }
     
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {

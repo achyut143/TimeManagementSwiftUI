@@ -1,29 +1,18 @@
 import SwiftUI
-import SwiftData
 import AVFoundation
 
 struct AlertView: View {
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query private var settings: [AlertSettings]
-    @State private var timer: Timer?
-    @State private var speechSynthesizer = AVSpeechSynthesizer()
-    @State private var nextAlertDate = Date()
-    
-    private var currentSettings: AlertSettings {
-        if settings.isEmpty {
-            let newSettings = AlertSettings()
-            modelContext.insert(newSettings)
-            return newSettings
-        }
-        return settings[0]
-    }
-    
+    @StateObject private var settings = AlertSettings.shared
+
+
+
+
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
                 counterView
-                if currentSettings.isPlaying {
+                if settings.isPlaying {
                     alertInfoView
                 }
                 controlsView
@@ -36,52 +25,76 @@ struct AlertView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear { 
-                startTimerIfNeeded() 
-                // Ensure audio session stays active
-                try? AVAudioSession.sharedInstance().setActive(true)
+            .onAppear {
+                if settings.isPlaying {
+                    try? AVAudioSession.sharedInstance().setCategory(.playback, options: [])
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    
+                    if settings.nextAlertDate <= Date() {
+                        settings.nextAlertDate = Date().addingTimeInterval(TimeInterval(settings.intervalMinutes * 60))
+                    }
+                    settings.scheduleIntervalTimer()
+                }
             }
-            .onDisappear { 
-                // Don't invalidate timer when view disappears - keep alerts running
+            .onChange(of: settings.isPlaying) { _, newValue in
+                if newValue {
+                    settings.nextAlertDate = Date().addingTimeInterval(TimeInterval(settings.intervalMinutes * 60))
+                    settings.scheduleIntervalTimer()
+                } else {
+                    settings.stopTimer()
+                }
             }
-            .onChange(of: currentSettings.isPlaying) { _, newValue in
-                if newValue { startTimerIfNeeded() } else { timer?.invalidate() }
-            }
-            .onChange(of: currentSettings.intervalMinutes) { _, _ in
-                if currentSettings.isPlaying { startTimerIfNeeded() }
+            .onChange(of: settings.intervalMinutes) { _, _ in
+                if settings.isPlaying {
+                    settings.nextAlertDate = Date().addingTimeInterval(TimeInterval(settings.intervalMinutes * 60))
+                    settings.scheduleIntervalTimer()
+                }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .intervalAlert)) { _ in
+            handleAlertFire()
+        }
     }
-    
+
     private var counterView: some View {
         VStack(spacing: 12) {
-            Text("\(currentSettings.counter)\(currentSettings.targetIntervals.map { "/\($0)" } ?? "")")
+            Text("\(settings.counter)\(settings.targetIntervals.map { "/\($0)" } ?? "")")
                 .font(.system(size: 48, weight: .bold, design: .rounded))
-            
+
             Text("Intervals Completed")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            
-            if let target = currentSettings.targetIntervals {
-                ProgressView(value: Double(currentSettings.counter), total: Double(target))
-                    .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+
+            if let target = settings.targetIntervals {
+                ProgressView(
+                    value: Double(settings.counter),
+                    total: Double(target)
+                )
+                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
             }
         }
     }
-    
+
     private var alertInfoView: some View {
         VStack(spacing: 8) {
             HStack {
                 Image(systemName: "speaker.wave.2.fill")
                     .foregroundStyle(.blue)
-                Text("Every \(currentSettings.intervalMinutes) minutes")
+                Text("Every \(settings.intervalMinutes) minutes")
+                Spacer()
+            }
+
+            HStack {
+                Image(systemName: "clock.fill")
+                    .foregroundStyle(.green)
+                Text("Started: \(settings.startTime)")
                 Spacer()
             }
             
             HStack {
                 Image(systemName: "bell.fill")
                     .foregroundStyle(.orange)
-                Text("Next: \(currentSettings.nextAlertTime)")
+                Text("Next: \(settings.nextAlertTime)")
                 Spacer()
             }
         }
@@ -89,127 +102,83 @@ struct AlertView: View {
         .padding()
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
     }
-    
+
     private var controlsView: some View {
         VStack(spacing: 16) {
             Toggle(isOn: Binding(
-                get: { currentSettings.isPlaying },
+                get: { settings.isPlaying },
                 set: { newValue in
-                    currentSettings.isPlaying = newValue
-                    currentSettings.isPaused = false
+                    settings.isPlaying = newValue
+                    settings.isPaused = false
+                    settings.startTime = ""
                     if newValue {
-                        currentSettings.intervalsComplete = false
-                        startTimerIfNeeded()
+                        settings.intervalsComplete = false
+                        // schedule timer in onChange
+                        NotificationManager
+                            .shared
+                            .scheduleRepeatingIntervalNotifications(
+                                intervalMinutes: settings.intervalMinutes
+                            )
                     } else {
-                        timer?.invalidate()
-                        timer = nil
+                        settings.stopTimer()
+                        NotificationManager.shared.stopRepeatingNotifications()
                     }
-                    try? modelContext.save()
                 }
             )) {
-                Text(currentSettings.isPlaying ? "Stop Alerts" : "Start Alerts")
+                Text(settings.isPlaying ? "Stop Alerts" : "Start Alerts")
             }
-            
+
             HStack {
                 Text("Interval:")
                 Spacer()
-                TextField("Minutes", value: Binding(
-                    get: { currentSettings.intervalMinutes },
-                    set: { currentSettings.intervalMinutes = max(1, $0); try? modelContext.save() }
-                ), format: .number)
+                TextField(
+                    "Minutes",
+                    value: $settings.intervalMinutes,
+                    format: .number
+                )
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 60)
                 Text("min")
             }
-            
+
             HStack {
                 Text("Target:")
                 Spacer()
-                TextField("Optional", value: Binding(
-                    get: { currentSettings.targetIntervals ?? 0 },
-                    set: { currentSettings.targetIntervals = $0 > 0 ? $0 : nil; try? modelContext.save() }
-                ), format: .number)
+                TextField(
+                    "Optional",
+                    value: Binding(
+                        get: { settings.targetIntervals ?? 0 },
+                        set: {
+                            settings.targetIntervals = $0 > 0 ? $0 : nil
+                        }
+                    ),
+                    format: .number
+                )
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 60)
                 Text("intervals")
             }
-            
+
             HStack {
                 Button("Reset") {
-                    currentSettings.counter = 0
-                    currentSettings.intervalsComplete = false
-                    try? modelContext.save()
+                    settings.counter = 0
+                    settings.intervalsComplete = false
                 }
                 .buttonStyle(.borderedProminent)
-                
+
                 Button("Clear") {
-                    currentSettings.isPlaying = false
-                    timer?.invalidate()
-                    currentSettings.intervalMinutes = 5
-                    currentSettings.targetIntervals = nil
-                    try? modelContext.save()
+                    settings.isPlaying = false
+                    settings.stopTimer()
+                    settings.intervalMinutes = 5
+                    settings.targetIntervals = nil
+                    NotificationManager.shared.stopRepeatingNotifications()
                 }
                 .buttonStyle(.bordered)
             }
         }
     }
-    
-    private func startTimerIfNeeded() {
-        timer?.invalidate()
-        guard currentSettings.isPlaying else { return }
-        
-        // Ensure audio session is active
-        try? AVAudioSession.sharedInstance().setActive(true)
-        
-        nextAlertDate = Date().addingTimeInterval(TimeInterval(currentSettings.intervalMinutes * 60))
-        updateNextAlertTime()
-        
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            guard currentSettings.isPlaying else {
-                timer?.invalidate()
-                return
-            }
-            updateNextAlertTime()
-            if Date() >= nextAlertDate {
-                playSound()
-                nextAlertDate = Date().addingTimeInterval(TimeInterval(currentSettings.intervalMinutes * 60))
-            }
-        }
-        
-        // Keep timer running in background
-        RunLoop.current.add(timer!, forMode: .common)
-    }
-    
-    private func playSound() {
-        currentSettings.counter += 1
-        
-        if let target = currentSettings.targetIntervals, currentSettings.counter >= target {
-            currentSettings.intervalsComplete = true
-            currentSettings.isPlaying = false
-            timer?.invalidate()
-        }
-        
-        // Ensure audio session is active before playing
-        try? AVAudioSession.sharedInstance().setActive(true)
-        
-        let utterance = AVSpeechUtterance(string: "Interval \(currentSettings.counter)")
-        utterance.rate = 0.5
-        utterance.volume = 1.0
-        
-        // Stop any current speech and play new one
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
-        }
-        
-        speechSynthesizer.speak(utterance)
-        NotificationManager.shared.scheduleIntervalNotification(counter: currentSettings.counter)
-        try? modelContext.save()
-    }
-    
-    private func updateNextAlertTime() {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        currentSettings.nextAlertTime = formatter.string(from: nextAlertDate)
-        try? modelContext.save()
+
+    private func handleAlertFire() {
+        // Speech is now handled in AlertSettings
     }
 }
