@@ -10,7 +10,7 @@ struct TagAnalyticsView: View {
     @State private var endDate = Date()
     
     var allTags: [String] {
-        Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } })).sorted()
+        Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } })).sorted()
     }
     
     var chartData: [(Date, Double)] {
@@ -18,7 +18,7 @@ struct TagAnalyticsView: View {
             guard let taskDate = task.date, task.completed else { return false }
             let dateInRange = taskDate >= startDate && taskDate <= endDate
             if selectedTags.isEmpty { return dateInRange }
-            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
             return dateInRange && !taskTags.isDisjoint(with: selectedTags)
         }
         

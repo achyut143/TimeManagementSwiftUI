@@ -20,7 +20,7 @@ struct TaskTableView: View {
     @State private var bulkUpdateText = ""
     
     var allTags: [String] {
-        var tags = Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } })).sorted()
+        var tags = Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } })).sorted()
         tags.insert("No Tag", at: 0)
         return tags
     }
@@ -32,7 +32,7 @@ struct TaskTableView: View {
             let dateInRange = taskDate >= startDate && taskDate <= endDate
             let matchesSearch = searchText.isEmpty || task.title.localizedCaseInsensitiveContains(searchText)
             let hasNotesFilter = !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty)
-            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
             let hasNoTag = task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty
             let matchesTags = selectedTags.isEmpty || 
                              (!taskTags.isDisjoint(with: selectedTags)) ||
