@@ -32,10 +32,16 @@ struct TasksCalendarView: View {
             pointsIndicator
             
             HStack {
-Button(showTaskCreation ? "Close" : "Add Task") {
+                Button(showTaskCreation ? "Close" : "Add Task") {
                     showTaskCreation.toggle()
                 }
                 .buttonStyle(.borderedProminent)
+                
+                DatePicker("", selection: $selectedDate, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .onChange(of: selectedDate) { _, _ in
+                        updateQuery()
+                    }
                 
                 Spacer()
             }
@@ -141,12 +147,6 @@ Button(showTaskCreation ? "Close" : "Add Task") {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 120)
                     }
-                    
-                    DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-                        .onChange(of: selectedDate) { _, _ in
-                            updateQuery()
-                        }
                     
                     Button("Add") {
                         createTaskFromSeparateFields()

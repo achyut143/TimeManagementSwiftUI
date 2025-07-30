@@ -8,10 +8,22 @@ struct TaskTableView: View {
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var endDate = Date()
     @State private var showOnlyWithNotes = false
+    @State private var selectedTags: Set<String> = []
     @State private var selectedTask: Task?
     @State private var showNotes = false
     @State private var taskToDelete: Task?
     @State private var showDeleteConfirmation = false
+    @State private var showTagAnalytics = false
+    @State private var selectedTasks: Set<Task> = []
+    @State private var isSelectionMode = false
+    @State private var showBulkUpdate = false
+    @State private var bulkUpdateText = ""
+    
+    var allTags: [String] {
+        var tags = Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } })).sorted()
+        tags.insert("No Tag", at: 0)
+        return tags
+    }
     
     var filteredTasks: [Task] {
         tasks.filter { task in
@@ -20,8 +32,13 @@ struct TaskTableView: View {
             let dateInRange = taskDate >= startDate && taskDate <= endDate
             let matchesSearch = searchText.isEmpty || task.title.localizedCaseInsensitiveContains(searchText)
             let hasNotesFilter = !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty)
+            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            let hasNoTag = task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty
+            let matchesTags = selectedTags.isEmpty || 
+                             (!taskTags.isDisjoint(with: selectedTags)) ||
+                             (selectedTags.contains("No Tag") && hasNoTag)
             
-            return dateInRange && matchesSearch && hasNotesFilter
+            return dateInRange && matchesSearch && hasNotesFilter && matchesTags
         }.sorted { $0.date ?? Date() > $1.date ?? Date() }
     }
     
@@ -30,9 +47,25 @@ struct TaskTableView: View {
             filterSection
             
             List(filteredTasks) { task in
-                TaskRowView(task: task) {
-                    selectedTask = task
-                    showNotes = true
+                HStack {
+                    if isSelectionMode {
+                        Button {
+                            if selectedTasks.contains(task) {
+                                selectedTasks.remove(task)
+                            } else {
+                                selectedTasks.insert(task)
+                            }
+                        } label: {
+                            Image(systemName: selectedTasks.contains(task) ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(selectedTasks.contains(task) ? .blue : .gray)
+                        }
+                    }
+                    TaskRowView(task: task) {
+                        if !isSelectionMode {
+                            selectedTask = task
+                            showNotes = true
+                        }
+                    }
                 }
                 .swipeActions {
                     Button("Delete", role: .destructive) {
@@ -43,9 +76,78 @@ struct TaskTableView: View {
             }
         }
         .navigationTitle("Task Table")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack {
+                    if isSelectionMode {
+                        if !selectedTasks.isEmpty {
+                            Button("Update") {
+                                showBulkUpdate = true
+                            }
+                        }
+                        Button("Cancel") {
+                            isSelectionMode = false
+                            selectedTasks.removeAll()
+                        }
+                    } else {
+                        Button("Select") {
+                            isSelectionMode = true
+                        }
+                        Button {
+                            showTagAnalytics = true
+                        } label: {
+                            Image(systemName: "chart.bar")
+                        }
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showNotes) {
             if let task = selectedTask {
                 NotesView(task: task)
+            }
+        }
+        .sheet(isPresented: $showTagAnalytics) {
+            NavigationView {
+                TagAnalyticsView()
+            }
+        }
+        .sheet(isPresented: $showBulkUpdate) {
+            NavigationView {
+                VStack {
+                    Text("Update \(selectedTasks.count) tasks")
+                        .font(.headline)
+                        .padding()
+                    
+                    TextField("New tags (comma separated)", text: $bulkUpdateText)
+                        .textFieldStyle(.roundedBorder)
+                        .padding()
+                    
+                    HStack {
+                        Button("Cancel") {
+                            showBulkUpdate = false
+                            bulkUpdateText = ""
+                        }
+                        .buttonStyle(.bordered)
+                        
+                        Button("Update") {
+                            for task in selectedTasks {
+                                task.taskDescription = bulkUpdateText
+                            }
+                            try? modelContext.save()
+                            showBulkUpdate = false
+                            bulkUpdateText = ""
+                            selectedTasks.removeAll()
+                            isSelectionMode = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding()
+                    
+                    Spacer()
+                }
+                .navigationTitle("Bulk Update")
+                .navigationBarTitleDisplayMode(.inline)
             }
         }
         .alert("Delete Task", isPresented: $showDeleteConfirmation) {
@@ -71,6 +173,28 @@ struct TaskTableView: View {
             }
             
             Toggle("Only tasks with notes", isOn: $showOnlyWithNotes)
+            
+            if !allTags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        ForEach(allTags, id: \.self) { tag in
+                            Button(tag) {
+                                if selectedTags.contains(tag) {
+                                    selectedTags.remove(tag)
+                                } else {
+                                    selectedTags.insert(tag)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(selectedTags.contains(tag) ? .blue : .gray.opacity(0.2))
+                            .foregroundColor(selectedTags.contains(tag) ? .white : .primary)
+                            .cornerRadius(16)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
         }
         .padding()
         .background(.ultraThinMaterial)
@@ -118,6 +242,19 @@ struct TaskRowView: View {
                     }
                 }
                 Spacer()
+                let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                if !taskTags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(taskTags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.gray.opacity(0.2))
+                                .cornerRadius(8)
+                        }
+                    }
+                }
                 Text("Weight: \(Int(task.weight))")
                     .font(.caption2)
                     .padding(.horizontal, 8)
