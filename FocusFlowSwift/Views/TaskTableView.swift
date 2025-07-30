@@ -18,6 +18,7 @@ struct TaskTableView: View {
     @State private var isSelectionMode = false
     @State private var showBulkUpdate = false
     @State private var bulkUpdateText = ""
+    @State private var showBulkDeleteConfirmation = false
     
     var allTags: [String] {
         var tags = Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } })).sorted()
@@ -114,23 +115,16 @@ struct TaskTableView: View {
         }
         .sheet(isPresented: $showBulkUpdate) {
             NavigationView {
-                VStack {
-                    Text("Update \(selectedTasks.count) tasks")
+                VStack(spacing: 20) {
+                    Text("\(selectedTasks.count) tasks selected")
                         .font(.headline)
                         .padding()
                     
-                    TextField("New tags (comma separated)", text: $bulkUpdateText)
-                        .textFieldStyle(.roundedBorder)
-                        .padding()
-                    
-                    HStack {
-                        Button("Cancel") {
-                            showBulkUpdate = false
-                            bulkUpdateText = ""
-                        }
-                        .buttonStyle(.bordered)
+                    VStack(spacing: 16) {
+                        TextField("New tags (comma separated)", text: $bulkUpdateText)
+                            .textFieldStyle(.roundedBorder)
                         
-                        Button("Update") {
+                        Button("Update Tags") {
                             for task in selectedTasks {
                                 task.taskDescription = bulkUpdateText
                             }
@@ -141,12 +135,25 @@ struct TaskTableView: View {
                             isSelectionMode = false
                         }
                         .buttonStyle(.borderedProminent)
+                        .frame(maxWidth: .infinity)
+                        
+                        Button("Delete Tasks", role: .destructive) {
+                            showBulkDeleteConfirmation = true
+                        }
+                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity)
                     }
                     .padding()
                     
+                    Button("Cancel") {
+                        showBulkUpdate = false
+                        bulkUpdateText = ""
+                    }
+                    .buttonStyle(.bordered)
+                    
                     Spacer()
                 }
-                .navigationTitle("Bulk Update")
+                .navigationTitle("Bulk Actions")
                 .navigationBarTitleDisplayMode(.inline)
             }
         }
@@ -159,6 +166,20 @@ struct TaskTableView: View {
             }
         } message: {
             Text("Are you sure you want to delete this task?")
+        }
+        .alert("Delete \(selectedTasks.count) Tasks", isPresented: $showBulkDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                for task in selectedTasks {
+                    modelContext.delete(task)
+                }
+                try? modelContext.save()
+                showBulkUpdate = false
+                selectedTasks.removeAll()
+                isSelectionMode = false
+            }
+        } message: {
+            Text("Are you sure you want to delete these tasks? This action cannot be undone.")
         }
     }
     

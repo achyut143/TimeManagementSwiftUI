@@ -866,6 +866,11 @@ struct NotesView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
                     .padding()
+                
+                Text("\(notes.count) characters")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
             }
             .navigationTitle("Notes: \(task.title)")
             .navigationBarTitleDisplayMode(.inline)
