@@ -12,8 +12,10 @@ struct ContentView: View {
                 TasksCalendarView()
                   .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Alerts") {
+                            Button(action: {
                                 showAlertView = true
+                            }) {
+                                Image(systemName: "clock")
                             }
                         }
                     }

@@ -15,7 +15,7 @@ struct TasksCalendarView: View {
     @State private var taskInput = ""
     @State private var taskTitle = ""
     @State private var taskTags = ""
-    @State private var startTime = Date()
+    @State private var startTime = roundToNearestFiveMinutes(Date())
     @State private var endTime = Calendar.current.date(byAdding: .minute, value: 30, to: Date()) ?? Date()
     @State private var repeatDays = 0
     @State private var taskWeight = 1.0
@@ -56,9 +56,9 @@ Button(showTaskCreation ? "Close" : "Add Task") {
                     NavigationLink(destination: TaskTableView()) {
                         Image(systemName: "list.bullet")
                     }
-                    NavigationLink(destination: HabitDashboardView()) {
-                        Image(systemName: "chart.bar")
-                    }
+                    // NavigationLink(destination: HabitDashboardView()) {
+                    //     Image(systemName: "chart.bar")
+                    // }
                 }
             }
         }
@@ -253,7 +253,7 @@ Button(showTaskCreation ? "Close" : "Add Task") {
           Spacer()
         }
         HStack {
-        Text("\(task.startTime) - \(task.endTime) (\(duration)m)")
+        Text("\(formatTimeToAMPM(task.startTime)) - \(formatTimeToAMPM(task.endTime)) (\(duration)m)")
             .font(.caption2)
             .foregroundStyle(.secondary)
         
@@ -795,8 +795,14 @@ struct EditTaskView: View {
             Form {
                 TextField("Title", text: $title)
                 TextField("Description", text: $description)
-                DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
-                DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
+                DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute).onChange(of: startTime) { _, newValue in
+                            startTime = roundToNearestFiveMinutes(newValue)
+                          
+                        }
+                DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute).onChange(of: startTime) { _, newValue in
+                            endTime = roundToNearestFiveMinutes(newValue)
+                          
+                        }
                 
                 HStack {
                     Text("Weight")
@@ -1029,6 +1035,19 @@ struct TaskActionsView: View {
 }
 
 // MARK: - Helper Functions
+func formatTimeToAMPM(_ timeString: String) -> String {
+    let components = timeString.components(separatedBy: ":")
+    guard components.count >= 2,
+          let hour = Int(components[0]),
+          let minute = Int(components[1]) else {
+        return timeString
+    }
+    
+    let displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour)
+    let period = hour >= 12 ? "PM" : "AM"
+    return "\(displayHour):\(String(format: "%02d", minute)) \(period)"
+}
+
 func roundToNearestFiveMinutes(_ date: Date) -> Date {
     let calendar = Calendar.current
     let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
