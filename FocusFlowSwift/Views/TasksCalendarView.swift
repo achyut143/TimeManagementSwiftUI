@@ -982,7 +982,6 @@ struct TaskActionsView: View {
             createRepeatTask(from: task)
         }
          if task.notCompleted,
-       !task.reassign,
        let repeats = task.repeatAgain,
        repeats > 1
     {
