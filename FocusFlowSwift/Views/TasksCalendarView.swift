@@ -651,6 +651,20 @@ struct TasksCalendarView: View {
         
         let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
         
+        // Check if task already exists
+        let descriptor = FetchDescriptor<Task>()
+        do {
+            let existingTasks = try modelContext.fetch(descriptor)
+            let taskExists = existingTasks.contains { existingTask in
+                guard let existingDate = existingTask.date else { return false }
+                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
+                       existingTask.startTime == task.startTime &&
+                       existingTask.endTime == task.endTime &&
+                       existingTask.title == task.title
+            }
+            if taskExists { return }
+        } catch { return }
+        
         let newTask = Task(
             title: task.title,
             taskDescription: task.taskDescription,
@@ -662,6 +676,7 @@ struct TasksCalendarView: View {
         )
         
         modelContext.insert(newTask)
+        try? modelContext.save()
     }
     
     private func updateTaskTime(_ task: Task, to slot: TimeSlot) {
@@ -777,11 +792,13 @@ struct EditTaskView: View {
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var weight: Double
+    @State private var taskDate: Date
     
     init(task: Task) {
         self.task = task
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.taskDescription)
+        _taskDate = State(initialValue: task.date ?? Date())
         
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -795,6 +812,7 @@ struct EditTaskView: View {
             Form {
                 TextField("Title", text: $title)
                 TextField("Description", text: $description)
+                DatePicker("Date", selection: $taskDate, displayedComponents: .date)
                 DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute).onChange(of: startTime) { _, newValue in
                             startTime = roundToNearestFiveMinutes(newValue)
                           
@@ -835,6 +853,7 @@ struct EditTaskView: View {
         task.startTime = formatter.string(from: startTime)
         task.endTime = formatter.string(from: endTime)
         task.weight = weight
+        task.date = taskDate
         try? modelContext.save()
     }
 }
@@ -982,8 +1001,8 @@ struct TaskActionsView: View {
             createRepeatTask(from: task)
         }
          if task.notCompleted,
-       let repeats = task.repeatAgain,
-       repeats > 1
+
+task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
     {
         createIncompleteTask(from: task)
        
@@ -997,6 +1016,20 @@ struct TaskActionsView: View {
         
         let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
         
+        // Check if task already exists
+        let descriptor = FetchDescriptor<Task>()
+        do {
+            let existingTasks = try modelContext.fetch(descriptor)
+            let taskExists = existingTasks.contains { existingTask in
+                guard let existingDate = existingTask.date else { return false }
+                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
+                       existingTask.startTime == task.startTime &&
+                       existingTask.endTime == task.endTime &&
+                       existingTask.title == task.title
+            }
+            if taskExists { return }
+        } catch { return }
+        
         let newTask = Task(
             title: task.title,
             taskDescription: task.taskDescription,
@@ -1008,12 +1041,27 @@ struct TaskActionsView: View {
         )
         
         modelContext.insert(newTask)
+        try? modelContext.save()
     }
 
         private func createIncompleteTask(from task: Task) {
         guard let currentDate = task.date else { return }
         
         let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        
+        // Check if task already exists
+        let descriptor = FetchDescriptor<Task>()
+        do {
+            let existingTasks = try modelContext.fetch(descriptor)
+            let taskExists = existingTasks.contains { existingTask in
+                guard let existingDate = existingTask.date else { return false }
+                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
+                       existingTask.startTime == task.startTime &&
+                       existingTask.endTime == task.endTime &&
+                       existingTask.title == task.title
+            }
+            if taskExists { return }
+        } catch { return }
         
         let newTask = Task(
             title: task.title,
@@ -1024,11 +1072,10 @@ struct TaskActionsView: View {
             weight: task.weight,
             date: nextDate,
             repeatAgain: task.repeatAgain
-           
-            
         )
         
         modelContext.insert(newTask)
+        try? modelContext.save()
     }
     
     private func deleteTask() {
