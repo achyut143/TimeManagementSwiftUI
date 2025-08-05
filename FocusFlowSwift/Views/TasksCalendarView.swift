@@ -20,6 +20,7 @@ struct TasksCalendarView: View {
     @State private var repeatDays = 0
     @State private var taskWeight = 1.0
     @State private var showNotesDialog = false
+    @State private var showPersistentNotesDialog = false
     @State private var notesTask: Task?
     @State private var showDeleteConfirmation = false
     @State private var taskToDelete: Task?
@@ -909,6 +910,54 @@ struct NotesView: View {
     }
 }
 
+struct PersistentNotesView: View {
+    let task: Task
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var persistentNotes: String
+    
+    init(task: Task) {
+        self.task = task
+        _persistentNotes = State(initialValue: task.persistentNotes ?? "")
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                TextEditor(text: $persistentNotes)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                    .padding()
+                
+                Text("\(persistentNotes.count) characters")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                
+                Text("Persistent notes are copied when recreating tasks")
+                    .font(.caption2)
+                    .foregroundStyle(.purple)
+                    .padding(.horizontal)
+            }
+            .navigationTitle("Persistent Notes: \(task.title)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        task.persistentNotes = persistentNotes.isEmpty ? nil : persistentNotes
+                        try? modelContext.save()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct TaskActionsView: View {
     let task: Task
     let onTaskDeleted: () -> Void
@@ -917,6 +966,8 @@ struct TaskActionsView: View {
     @State private var showDeleteConfirmation = false
     @State private var showEditDialog = false
     @State private var showNotesDialog = false
+    @State private var showPersistentNotesDialog = false
+    @State private var copiedTask: Task?
     
     var body: some View {
         VStack(spacing: 20) {
@@ -945,6 +996,20 @@ struct TaskActionsView: View {
                     showNotesDialog = true
                 }
                 
+                actionButton("Persistent Notes", systemImage: "pin.fill", color: .purple) {
+                    showPersistentNotesDialog = true
+                }
+                
+                actionButton("Copy", systemImage: "doc.on.doc", color: .blue) {
+                    copiedTask = task
+                }
+                
+                if copiedTask != nil {
+                    actionButton("Paste", systemImage: "doc.on.clipboard", color: .green) {
+                        pasteTask()
+                    }
+                }
+                
                 actionButton("Delete", systemImage: "trash", color: .red) {
                     showDeleteConfirmation = true
                 }
@@ -968,6 +1033,10 @@ struct TaskActionsView: View {
         .sheet(isPresented: $showNotesDialog) {
             NotesView(task: task)
         }
+        .sheet(isPresented: $showPersistentNotesDialog) {
+            PersistentNotesView(task: task)
+        }
+      
     }
     
     private func actionButton(_ title: String, systemImage: String, color: Color, action: @escaping () -> Void) -> some View {
@@ -1036,6 +1105,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             startTime: task.startTime,
             endTime: task.endTime,
             weight: task.weight,
+            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain
         )
@@ -1070,6 +1140,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             endTime: task.endTime,
              reassign:true,
             weight: task.weight,
+            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain
         )
@@ -1082,6 +1153,26 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         modelContext.delete(task)
         try? modelContext.save()
         onTaskDeleted()
+    }
+    
+    private func pasteTask() {
+        guard let copied = copiedTask else { return }
+        
+        let newTask = Task(
+            title: copied.title,
+            taskDescription: copied.taskDescription,
+            startTime: copied.startTime,
+            endTime: copied.endTime,
+            weight: copied.weight,
+            persistentNotes: copied.persistentNotes,
+            date: copied.date,
+            repeatAgain: copied.repeatAgain
+        )
+        
+        modelContext.insert(newTask)
+        try? modelContext.save()
+        onTaskDeleted()
+        dismiss()
     }
 }
 

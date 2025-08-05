@@ -11,6 +11,7 @@ struct TaskTableView: View {
     @State private var selectedTags: Set<String> = []
     @State private var selectedTask: Task?
     @State private var showNotes = false
+    @State private var showPersistentNotes = false
     @State private var taskToDelete: Task?
     @State private var showDeleteConfirmation = false
     @State private var showTagAnalytics = false
@@ -61,12 +62,17 @@ struct TaskTableView: View {
                                 .foregroundColor(selectedTasks.contains(task) ? .blue : .gray)
                         }
                     }
-                    TaskRowView(task: task) {
+                    TaskRowView(task: task, onNotesAction: {
                         if !isSelectionMode {
                             selectedTask = task
                             showNotes = true
                         }
-                    }
+                    }, onPersistentNotesAction: {
+                        if !isSelectionMode {
+                            selectedTask = task
+                            showPersistentNotes = true
+                        }
+                    })
                 }
                 .swipeActions {
                     Button("Delete", role: .destructive) {
@@ -106,6 +112,11 @@ struct TaskTableView: View {
         .sheet(isPresented: $showNotes) {
             if let task = selectedTask {
                 NotesView(task: task)
+            }
+        }
+        .sheet(isPresented: $showPersistentNotes) {
+            if let task = selectedTask {
+                PersistentNotesView(task: task)
             }
         }
         .sheet(isPresented: $showTagAnalytics) {
@@ -225,6 +236,7 @@ struct TaskTableView: View {
 struct TaskRowView: View {
     let task: Task
     let onNotesAction: () -> Void
+    let onPersistentNotesAction: () -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -260,6 +272,12 @@ struct TaskRowView: View {
                     Button(action: onNotesAction) {
                         Image(systemName: "note.text")
                             .foregroundStyle(.orange)
+                    }
+                }
+                if task.persistentNotes != nil && !task.persistentNotes!.isEmpty {
+                    Button(action: onPersistentNotesAction) {
+                        Image(systemName: "pin.fill")
+                            .foregroundStyle(.purple)
                     }
                 }
                 Spacer()
