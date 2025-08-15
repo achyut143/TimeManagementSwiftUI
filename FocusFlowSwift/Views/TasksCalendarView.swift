@@ -20,6 +20,7 @@ struct TasksCalendarView: View {
     @State private var endTime = Calendar.current.date(byAdding: .minute, value: 30, to: Date()) ?? Date()
     @State private var repeatDays = 0
     @State private var taskWeight = 1.0
+    @State private var taskPriority = "P3"
     @State private var showNotesDialog = false
     @State private var showPersistentNotesDialog = false
     @State private var notesTask: Task?
@@ -121,43 +122,78 @@ struct TasksCalendarView: View {
     }
     
     private var aiTaskCreationHeader: some View {
-        VStack(spacing: 12) {
-            Text("AI Task Creation")
-                .font(.title3)
-                .fontWeight(.medium)
-                .foregroundStyle(.primary)
+        VStack(spacing: 16) {
+            HStack {
+                Image(systemName: "brain.head.profile")
+                    .font(.title2)
+                    .foregroundStyle(.blue)
+                Text("AI Assistant")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
             
-            VStack(spacing: 8) {
+            VStack(spacing: 12) {
                 TextEditor(text: $aiInput)
-                    .frame(minHeight: 80)
-                    .padding(8)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
+                    .frame(minHeight: 90)
+                    .padding(12)
+                    .background(Color(.systemBackground))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(.systemGray4), lineWidth: 1)
+                    )
+                    .cornerRadius(12)
                 
-                HStack {
+                HStack(spacing: 16) {
                     Button(action: toggleRecording) {
-                        Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(isRecording ? .red : .blue)
+                        HStack(spacing: 8) {
+                            Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                                .font(.title3)
+                            Text(isRecording ? "Stop" : "Record")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        .foregroundColor(isRecording ? .red : .blue)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(isRecording ? Color.red.opacity(0.1) : Color.blue.opacity(0.1))
+                        .cornerRadius(20)
                     }
                     
                     Spacer()
                     
                     if isProcessing {
-                        ProgressView()
-                            .scaleEffect(0.8)
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Processing...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     
                     Button("Generate Tasks") {
                         generateAITask()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(aiInput.isEmpty || isProcessing ? Color.gray : Color.blue)
+                    .cornerRadius(20)
                     .disabled(aiInput.isEmpty || isProcessing)
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+        )
+        .padding(.horizontal)
     }
     
     private var taskCreationHeader: some View {
@@ -206,6 +242,20 @@ struct TasksCalendarView: View {
                         TextField("0 = no repeat", value: $repeatDays, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 120)
+                    }
+                    
+                    VStack(alignment: .leading) {
+                        Text("Priority")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Priority", selection: $taskPriority) {
+                            Text("P1").tag("P1")
+                            Text("P2").tag("P2")
+                            Text("P3").tag("P3")
+                            Text("P4").tag("P4")
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 80)
                     }
                     
                     Button("Add") {
@@ -330,6 +380,15 @@ struct TasksCalendarView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(weightColor(task.weight))
+            .clipShape(Capsule())
+        
+        Text(task.priority)
+            .font(.caption2)
+            .fontWeight(.bold)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(priorityColor(task.priority))
             .clipShape(Capsule())
         
         if let repeatDays = task.repeatAgain {
@@ -556,6 +615,16 @@ struct TasksCalendarView: View {
         return .blue
     }
     
+    private func priorityColor(_ priority: String) -> Color {
+        switch priority {
+        case "P1": return .red
+        case "P2": return .orange
+        case "P3": return .blue
+        case "P4": return .gray
+        default: return .blue
+        }
+    }
+    
     private func startTimer() {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
@@ -645,7 +714,8 @@ struct TasksCalendarView: View {
             endTime: endTimeString,
             weight: taskWeight,
             date: selectedDate,
-            repeatAgain: repeatDays > 0 ? repeatDays : nil
+            repeatAgain: repeatDays > 0 ? repeatDays : nil,
+            priority: taskPriority
         )
         
         modelContext.insert(task)
@@ -662,6 +732,7 @@ struct TasksCalendarView: View {
         taskTags = ""
         repeatDays = 0
         taskWeight = 1.0
+        taskPriority = "P3"
     }
     
     private func createTaskFromInput() {
@@ -732,7 +803,8 @@ struct TasksCalendarView: View {
             endTime: task.endTime,
             weight: task.weight,
             date: nextDate,
-            repeatAgain: task.repeatAgain
+            repeatAgain: task.repeatAgain,
+            priority: task.priority
         )
         
         modelContext.insert(newTask)
@@ -867,7 +939,8 @@ struct TasksCalendarView: View {
                             startTime: self.convertTo24Hour(taskData.startTime),
                             endTime: self.convertTo24Hour(taskData.endTime),
                             weight: taskData.weight,
-                            date: taskDate
+                            date: taskDate,
+                            priority: taskData.priority
                         )
                         
                         self.modelContext.insert(newTask)
@@ -997,6 +1070,8 @@ struct EditTaskView: View {
     @State private var endTime: Date
     @State private var weight: Double
     @State private var taskDate: Date
+    @State private var repeatDays: Int
+    @State private var priority: String
     
     init(task: Task) {
         self.task = task
@@ -1009,6 +1084,8 @@ struct EditTaskView: View {
         _startTime = State(initialValue: formatter.date(from: task.startTime) ?? Date())
         _endTime = State(initialValue: formatter.date(from: task.endTime) ?? Date())
         _weight = State(initialValue: task.weight)
+        _repeatDays = State(initialValue: task.repeatAgain ?? 0)
+        _priority = State(initialValue: task.priority)
     }
     
     var body: some View {
@@ -1030,6 +1107,24 @@ struct EditTaskView: View {
                     Text("Weight")
                     Slider(value: $weight, in: 1...10, step: 1)
                     Text("\(Int(weight))")
+                }
+                
+                HStack {
+                    Text("Repeat (days)")
+                    TextField("0 = no repeat", value: $repeatDays, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                }
+                
+                HStack {
+                    Text("Priority")
+                    Picker("Priority", selection: $priority) {
+                        Text("P1").tag("P1")
+                        Text("P2").tag("P2")
+                        Text("P3").tag("P3")
+                        Text("P4").tag("P4")
+                    }
+                    .pickerStyle(.segmented)
                 }
             }
             .navigationTitle("Edit Task")
@@ -1058,6 +1153,8 @@ struct EditTaskView: View {
         task.endTime = formatter.string(from: endTime)
         task.weight = weight
         task.date = taskDate
+        task.repeatAgain = repeatDays > 0 ? repeatDays : nil
+        task.priority = priority
         try? modelContext.save()
     }
 }

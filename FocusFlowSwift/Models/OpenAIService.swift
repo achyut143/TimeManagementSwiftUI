@@ -14,10 +14,11 @@ class OpenAIService {
                 "startTime": "h:mm a format",
                 "endTime": "h:mm a format", 
                 "weight": 1,
-                "date": "today or specific date if mentioned"
+                "date": "today or specific date if mentioned",
+                "priority": "P3"
             }
         ]
-        Use AM/PM format for times. If date is not specified, use today. Always set weight to 1 unless explicitly specified otherwise. If start time is not mentioned, use 12:00 AM as start time and 12:20 AM as end time. If only start time is mentioned, create a 30 minute task ending 30 minutes after start time. Current time is \(Date().formatted(date: .omitted, time: .shortened)).
+        Use AM/PM format for times. If date is not specified, use today. Always set weight to 1 unless explicitly specified otherwise. If start time is not mentioned, use 12:00 AM as start time and 12:20 AM as end time. If only start time is mentioned, create a 30 minute task ending 30 minutes after start time. Current time is \(Date().formatted(date: .omitted, time: .shortened)). Current year is \(Calendar.current.component(.year, from: Date())). If no year is mentioned, use current year.
         """
         
         let messages = [
@@ -73,6 +74,7 @@ struct TaskData: Codable {
     let endTime: String
     let weight: Double
     let date: String
+    let priority: String
 }
 
 struct OpenAIResponse: Codable {

@@ -4,6 +4,16 @@ import SwiftData
 struct TaskTableView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var tasks: [Task]
+    
+    private func priorityColor(_ priority: String) -> Color {
+        switch priority {
+        case "P1": return .red
+        case "P2": return .orange
+        case "P3": return .blue
+        case "P4": return .gray
+        default: return .blue
+        }
+    }
     @State private var searchText = ""
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var endDate = Date()
@@ -238,6 +248,16 @@ struct TaskRowView: View {
     let onNotesAction: () -> Void
     let onPersistentNotesAction: () -> Void
     
+    private func priorityColor(_ priority: String) -> Color {
+        switch priority {
+        case "P1": return .red
+        case "P2": return .orange
+        case "P3": return .blue
+        case "P4": return .gray
+        default: return .blue
+        }
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -300,6 +320,15 @@ struct TaskRowView: View {
                     .padding(.vertical, 2)
                     .background(Color.blue.opacity(0.2))
                     .cornerRadius(4)
+                
+                Text(task.priority)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(priorityColor(task.priority))
+                    .clipShape(Capsule())
             }
         }
         .padding(.vertical, 4)

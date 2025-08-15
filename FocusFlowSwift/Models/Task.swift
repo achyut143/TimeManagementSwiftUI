@@ -17,8 +17,9 @@ class Task: Transferable {
     var persistentNotes: String?
     var date: Date?
     var repeatAgain: Int?
+    var priority: String = "P3"
     
-    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil) {
+    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3") {
         self.title = title
         self.taskDescription = taskDescription
         self.startTime = startTime
@@ -32,6 +33,7 @@ class Task: Transferable {
         self.persistentNotes = persistentNotes
         self.date = date
         self.repeatAgain = repeatAgain
+        self.priority = priority
     }
     
     static var transferRepresentation: some TransferRepresentation {
