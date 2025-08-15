@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
+import Speech
 import Foundation
 
 struct TasksCalendarView: View {
@@ -27,6 +28,12 @@ struct TasksCalendarView: View {
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
     @State private var showTaskCreation = false
+    @State private var showAITaskCreation = false
+    @State private var aiInput = ""
+    @State private var isRecording = false
+    @State private var isProcessing = false
+    @State private var audioEngine = AVAudioEngine()
+    @State private var recognitionTask: SFSpeechRecognitionTask?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +44,10 @@ struct TasksCalendarView: View {
                     showTaskCreation.toggle()
                 }
                 .buttonStyle(.borderedProminent)
+                
+                Toggle("AI", isOn: $showAITaskCreation)
+                    .toggleStyle(.button)
+                    .buttonStyle(.bordered)
                 
                 DatePicker("", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact)
@@ -49,7 +60,11 @@ struct TasksCalendarView: View {
             .padding()
             
             if showTaskCreation {
-                taskCreationHeader
+                if showAITaskCreation {
+                    aiTaskCreationHeader
+                } else {
+                    taskCreationHeader
+                }
             }
             
             dateHeader
@@ -72,6 +87,9 @@ struct TasksCalendarView: View {
         .onAppear {
             updateQuery()
             startTimer()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskCreated"))) { _ in
+            updateQuery()
         }
         .sheet(isPresented: $showEditDialog) {
             if let task = editingTask {
@@ -99,6 +117,47 @@ struct TasksCalendarView: View {
                     .presentationDetents([.medium])
             }
         }
+
+    }
+    
+    private var aiTaskCreationHeader: some View {
+        VStack(spacing: 12) {
+            Text("AI Task Creation")
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundStyle(.primary)
+            
+            VStack(spacing: 8) {
+                TextEditor(text: $aiInput)
+                    .frame(minHeight: 80)
+                    .padding(8)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                
+                HStack {
+                    Button(action: toggleRecording) {
+                        Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(isRecording ? .red : .blue)
+                    }
+                    
+                    Spacer()
+                    
+                    if isProcessing {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    }
+                    
+                    Button("Generate Tasks") {
+                        generateAITask()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(aiInput.isEmpty || isProcessing)
+                }
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial)
     }
     
     private var taskCreationHeader: some View {
@@ -723,6 +782,150 @@ struct TasksCalendarView: View {
         if percentage >= 80 { return .green }
         if percentage >= 50 { return .orange }
         return .red
+    }
+    
+    private func toggleRecording() {
+        if isRecording {
+            stopRecording()
+        } else {
+            startRecording()
+        }
+    }
+    
+    private func startRecording() {
+        SFSpeechRecognizer.requestAuthorization { status in
+            guard status == .authorized else { return }
+        }
+        
+        let recognizer = SFSpeechRecognizer()
+        guard let recognizer = recognizer, recognizer.isAvailable else { return }
+        
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try audioSession.setActive(true)
+        } catch {
+            print("Audio session error: \(error)")
+            return
+        }
+        
+        audioEngine = AVAudioEngine()
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            request.append(buffer)
+        }
+        
+        recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+            if let result = result {
+                DispatchQueue.main.async {
+                    self.aiInput = result.bestTranscription.formattedString
+                    if result.isFinal {
+                        self.stopRecording()
+                    }
+                }
+            }
+            if error != nil {
+                DispatchQueue.main.async {
+                    self.stopRecording()
+                }
+            }
+        }
+        
+        audioEngine.prepare()
+        try? audioEngine.start()
+        isRecording = true
+    }
+    
+    private func stopRecording() {
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        try? AVAudioSession.sharedInstance().setActive(false)
+        isRecording = false
+    }
+    
+    private func generateAITask() {
+        isProcessing = true
+        
+        _Concurrency.Task {
+            do {
+                let openAI = OpenAIService()
+                let tasksData = try await openAI.generateTasks(from: aiInput)
+                
+                DispatchQueue.main.async {
+                    for taskData in tasksData {
+                        let taskDate = self.parseDate(from: taskData.date)
+                        let newTask = Task(
+                            title: taskData.title,
+                            taskDescription: taskData.description,
+                            startTime: self.convertTo24Hour(taskData.startTime),
+                            endTime: self.convertTo24Hour(taskData.endTime),
+                            weight: taskData.weight,
+                            date: taskDate
+                        )
+                        
+                        self.modelContext.insert(newTask)
+                    }
+                    try? self.modelContext.save()
+                    
+                    self.updateQuery()
+                    self.aiInput = ""
+                    self.isProcessing = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isProcessing = false
+                    self.createTaskWithFallback()
+                }
+            }
+        }
+    }
+    
+    private func convertTo24Hour(_ timeString: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        
+        guard let date = formatter.date(from: timeString) else {
+            return timeString
+        }
+        
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+    
+    private func parseDate(from dateString: String) -> Date {
+        if dateString.lowercased() == "today" {
+            return selectedDate
+        }
+        if dateString.lowercased() == "tomorrow" {
+            return Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
+        }
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString) ?? selectedDate
+    }
+    
+    private func createTaskWithFallback() {
+        let newTask = Task(
+            title: aiInput.components(separatedBy: .newlines).first ?? "AI Task",
+            taskDescription: "ai-generated",
+            startTime: "09:00",
+            endTime: "10:00",
+            weight: 1.0,
+            date: selectedDate
+        )
+        
+        modelContext.insert(newTask)
+        try? modelContext.save()
+        updateQuery()
+        aiInput = ""
     }
     
     private func scheduleTaskNotifications(for task: Task) {

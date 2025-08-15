@@ -19,5 +19,7 @@
 	<array>
 		<string>com.focusflow.refresh</string>
 	</array>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>This app uses speech recognition to help you create tasks using voice input for faster task creation.</string>
 </dict>
 </plist>
