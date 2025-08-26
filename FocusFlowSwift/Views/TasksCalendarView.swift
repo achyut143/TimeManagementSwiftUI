@@ -1280,7 +1280,7 @@ struct TaskActionsView: View {
                 .foregroundStyle(.secondary)
             
             VStack(spacing: 16) {
-                actionButton("Complete", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
+                actionButton("Mark as completed", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
                     toggleTaskCompletion()
                 }
                 

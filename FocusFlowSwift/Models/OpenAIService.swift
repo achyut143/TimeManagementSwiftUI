@@ -1,8 +1,12 @@
 import Foundation
 
+
+
 class OpenAIService {
     private let apiKey = "" // Replace with your actual API key
     private let baseURL = "https://api.openai.com/v1/chat/completions"
+
+    
     
     func generateTasks(from prompt: String) async throws -> [TaskData] {
         let systemPrompt = """
