@@ -55,7 +55,7 @@ struct HabitDashboardView: View {
         selectedHabit = first
       }
     }
-    .onChange(of: filteredHabitNames) { newList in
+    .onChange(of: filteredHabitNames) { _, newList in
       // Reset selectedHabit if it was filtered out
       if !newList.contains(selectedHabit) {
         selectedHabit = newList.first ?? ""

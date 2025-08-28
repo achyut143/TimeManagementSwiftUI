@@ -30,11 +30,32 @@ struct TagAnalyticsView: View {
         return dateRange.map { date in
             let tasksForDate = groupedByDate[date] ?? []
             let timeSpent = tasksForDate.reduce(0.0) { total, task in
-                let start = timeToMinutes(task.startTime)
-                let end = timeToMinutes(task.endTime)
-                return total + Double(end - start)
+                return total + task.effectiveTimeInMinutes
             }
             return (date, timeSpent / 60.0)
+        }
+    }
+    
+    var pointsData: [(Date, Double)] {
+        let filteredTasks = tasks.filter { task in
+            guard let taskDate = task.date, task.completed else { return false }
+            let dateInRange = taskDate >= startDate && taskDate <= endDate
+            if selectedTags.isEmpty { return dateInRange }
+            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
+            return dateInRange && !taskTags.isDisjoint(with: selectedTags)
+        }
+        
+        let dateRange = generateDateRange()
+        let groupedByDate = Dictionary(grouping: filteredTasks) { task in
+            Calendar.current.startOfDay(for: task.date ?? Date())
+        }
+        
+        return dateRange.map { date in
+            let tasksForDate = groupedByDate[date] ?? []
+            let points = tasksForDate.reduce(0.0) { total, task in
+                return total + task.effectiveWeight
+            }
+            return (date, points)
         }
     }
     
@@ -52,6 +73,10 @@ struct TagAnalyticsView: View {
     
     var totalHours: Double {
         chartData.reduce(0) { $0 + $1.1 }
+    }
+    
+    var totalPoints: Double {
+        pointsData.reduce(0) { $0 + $1.1 }
     }
     
     private func timeToMinutes(_ time: String) -> Int {
@@ -74,16 +99,31 @@ struct TagAnalyticsView: View {
     }
     
     private var statsCard: some View {
-        VStack(spacing: 8) {
-            Text("Total Hours")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Text(String(format: "%.1f", totalHours))
-                .font(.title)
-                .fontWeight(.bold)
-                .foregroundColor(.primary)
+        HStack(spacing: 16) {
+            VStack(spacing: 8) {
+                Text("Total Hours")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(String(format: "%.1f", totalHours))
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+            }
+            .frame(maxWidth: .infinity)
+            
+            Divider()
+            
+            VStack(spacing: 8) {
+                Text("Total Points")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(String(format: "%.1f", totalPoints))
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundColor(.green)
+            }
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity)
         .padding()
         .background(.regularMaterial)
         .cornerRadius(12)
@@ -136,28 +176,59 @@ struct TagAnalyticsView: View {
     }
     
     private var chartSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 20) {
             Text(selectedTags.isEmpty ? "All Completed Tasks" : "Selected Tags: \(selectedTags.joined(separator: ", "))")
                 .font(.headline)
             
-            Chart(chartData, id: \.0) { item in
-                BarMark(
-                    x: .value("Date", item.0, unit: .day),
-                    y: .value("Hours", item.1)
-                )
-                .foregroundStyle(.blue.gradient)
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading)
-            }
-            .chartXAxis {
-                AxisMarks(values: .stride(by: .day)) { _ in
-                    AxisGridLine()
-                    AxisTick()
-                    AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Hours Spent")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Chart(chartData, id: \.0) { item in
+                    BarMark(
+                        x: .value("Date", item.0, unit: .day),
+                        y: .value("Hours", item.1)
+                    )
+                    .foregroundStyle(.blue.gradient)
                 }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .day)) { _ in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                    }
+                }
+                .frame(height: 200)
             }
-            .frame(height: 250)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Points Earned")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Chart(pointsData, id: \.0) { item in
+                    BarMark(
+                        x: .value("Date", item.0, unit: .day),
+                        y: .value("Points", item.1)
+                    )
+                    .foregroundStyle(.green.gradient)
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .day)) { _ in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                    }
+                }
+                .frame(height: 200)
+            }
         }
         .padding()
         .background(.regularMaterial)

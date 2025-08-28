@@ -3,9 +3,13 @@ import SwiftData
 import BackgroundTasks
 import AVFoundation
 import UserNotifications
+import ActivityKit
+import WidgetKit
 
 @main
 struct FocusFlowSwiftApp: App {
+    @StateObject private var alertManager = AlertManager()
+    
     init() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.focusflow.refresh", using: nil) { task in
             Self.handleBackgroundRefresh(task: task as! BGAppRefreshTask)
@@ -21,11 +25,18 @@ struct FocusFlowSwiftApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(alertManager)
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                    alertManager.handleAppLifecycleChange(isActive: false)
                     Self.scheduleBackgroundTask()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    alertManager.handleAppLifecycleChange(isActive: true)
+                    // Clean up any delivered notifications when app becomes active
+                    UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+                }
         }
-        .modelContainer(for: [Task.self, Habit.self])
+        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self])
     }
     
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {

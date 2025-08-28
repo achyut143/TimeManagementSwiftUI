@@ -21,6 +21,7 @@ struct TasksCalendarView: View {
     @State private var repeatDays = 0
     @State private var taskWeight = 1.0
     @State private var taskPriority = "P3"
+    @State private var isUntimedTask = false
     @State private var showNotesDialog = false
     @State private var showPersistentNotesDialog = false
     @State private var notesTask: Task?
@@ -35,6 +36,7 @@ struct TasksCalendarView: View {
     @State private var isProcessing = false
     @State private var audioEngine = AVAudioEngine()
     @State private var recognitionTask: SFSpeechRecognitionTask?
+    @State private var showUntimedTasks = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -46,9 +48,12 @@ struct TasksCalendarView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 
-                Toggle("AI", isOn: $showAITaskCreation)
+                Toggle(showUntimedTasks ? "Timed" : "Untimed", isOn: $showUntimedTasks)
                     .toggleStyle(.button)
                     .buttonStyle(.bordered)
+                    .onChange(of: showUntimedTasks) { _, _ in
+                        updateQuery()
+                    }
                 
                 DatePicker("", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact)
@@ -69,19 +74,19 @@ struct TasksCalendarView: View {
             }
             
             dateHeader
-            timelineView
+            
+            if showUntimedTasks {
+                untimedTasksList
+            } else {
+                timelineView
+            }
         }
         .navigationTitle("Tasks")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                HStack {
-                    NavigationLink(destination: TaskTableView()) {
-                        Image(systemName: "list.bullet")
-                    }
-                    // NavigationLink(destination: HabitDashboardView()) {
-                    //     Image(systemName: "chart.bar")
-                    // }
+                NavigationLink(destination: TaskTableView()) {
+                    Image(systemName: "list.bullet")
                 }
             }
         }
@@ -90,6 +95,9 @@ struct TasksCalendarView: View {
             startTimer()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskCreated"))) { _ in
+            updateQuery()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskUpdated"))) { _ in
             updateQuery()
         }
         .sheet(isPresented: $showEditDialog) {
@@ -132,6 +140,10 @@ struct TasksCalendarView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.primary)
                 Spacer()
+                
+                Toggle("AI", isOn: $showAITaskCreation)
+                    .toggleStyle(.button)
+                    .buttonStyle(.bordered)
             }
             
             VStack(spacing: 12) {
@@ -198,10 +210,18 @@ struct TasksCalendarView: View {
     
     private var taskCreationHeader: some View {
         VStack(spacing: 12) {
-            Text("Create New Task")
-                .font(.title3)
-                .fontWeight(.medium)
-                .foregroundStyle(.primary)
+            HStack {
+                Text("Create New Task")
+                    .font(.title3)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.primary)
+                
+                Spacer()
+                
+                Toggle("AI", isOn: $showAITaskCreation)
+                    .toggleStyle(.button)
+                    .buttonStyle(.bordered)
+            }
             
             VStack(spacing: 8) {
                 TextField("Task Title", text: $taskTitle)
@@ -210,19 +230,27 @@ struct TasksCalendarView: View {
                 TextField("Tags (comma separated)", text: $taskTags)
                     .textFieldStyle(.roundedBorder)
                 
-                HStack {
-                    DatePicker("Start", selection: $startTime, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.compact)
-                        .onChange(of: startTime) { _, newValue in
-                            startTime = roundToNearestFiveMinutes(newValue)
-                            endTime = Calendar.current.date(byAdding: .minute, value: 30, to: startTime) ?? startTime
-                        }
-                    
-                    DatePicker("End", selection: $endTime, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.compact)
-                        .onChange(of: endTime) { _, newValue in
-                            endTime = roundToNearestFiveMinutes(newValue)
-                        }
+                Toggle("Untimed Task", isOn: $isUntimedTask)
+                    .padding(.horizontal)
+                    .onAppear {
+                        isUntimedTask = showUntimedTasks
+                    }
+                
+                if !isUntimedTask {
+                    HStack {
+                        DatePicker("Start", selection: $startTime, displayedComponents: .hourAndMinute)
+                            .datePickerStyle(.compact)
+                            .onChange(of: startTime) { _, newValue in
+                                startTime = roundToNearestFiveMinutes(newValue)
+                                endTime = Calendar.current.date(byAdding: .minute, value: 30, to: startTime) ?? startTime
+                            }
+                        
+                        DatePicker("End", selection: $endTime, displayedComponents: .hourAndMinute)
+                            .datePickerStyle(.compact)
+                            .onChange(of: endTime) { _, newValue in
+                                endTime = roundToNearestFiveMinutes(newValue)
+                            }
+                    }
                 }
                 
                 HStack {
@@ -230,9 +258,10 @@ struct TasksCalendarView: View {
                         Text("Weight")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        TextField("1-10", value: $taskWeight, format: .number)
+                        TextField("e.g. 5.5", value: $taskWeight, format: .number.precision(.fractionLength(0...2)))
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 60)
+                            .keyboardType(.decimalPad)
+                            .frame(width: 80)
                     }
                     
                     VStack(alignment: .leading) {
@@ -274,9 +303,132 @@ struct TasksCalendarView: View {
             Text(selectedDate.formatted(date: .abbreviated, time: .omitted))
                 .font(.headline)
                 .foregroundStyle(.secondary)
+            Text(showUntimedTasks ? "Untimed Tasks" : "Timed Tasks")
+                .font(.subheadline)
+                .foregroundStyle(.primary)
         }
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
+    }
+    
+    private var untimedTasksList: some View {
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(tasks) { task in
+                    untimedTaskRow(task: task)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    private func untimedTaskRow(task: Task) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(task.title)
+                    .font(.headline)
+                    .fontWeight(.medium)
+                
+                if !task.taskDescription.isEmpty {
+                    Text(task.taskDescription)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                
+                if let taskDate = task.date {
+                    Text(taskDate.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+                
+                HStack(spacing: 8) {
+                    Text(String(format: "%.1f", task.weight))
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(weightColor(task.weight))
+                        .clipShape(Capsule())
+                    
+                    Text(task.priority)
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(priorityColor(task.priority))
+                        .clipShape(Capsule())
+                    
+                    if let timeSpent = task.timeSpent, timeSpent > 0 {
+                        Text("\(Int(timeSpent))m")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.purple)
+                            .clipShape(Capsule())
+                    }
+                    
+                    if let repeatDays = task.repeatAgain {
+                        HStack(spacing: 2) {
+                            Image(systemName: "repeat")
+                            Text("\(repeatDays)")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    }
+                    
+                    if task.notes != nil && !task.notes!.isEmpty {
+                        Image(systemName: "note.text")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    
+                    if task.repeatAgain != nil {
+                        Image(systemName: "repeat")
+                            .font(.caption)
+                            .foregroundColor(task.reassign ? .red : .green)
+                            .onTapGesture {
+                                task.reassign.toggle()
+                                try? modelContext.save()
+                            }
+                    }
+                    
+                    Spacer()
+                }
+            }
+            
+            Spacer()
+            
+            VStack(spacing: 8) {
+                Button(action: {
+                    toggleTaskCompletion(task)
+                }) {
+                    Image(systemName: task.completed ? "checkmark.circle.fill" : "circle")
+                        .font(.title2)
+                        .foregroundStyle(task.completed ? .green : .gray)
+                }
+                
+                Button(action: {
+                    selectedTaskForActions = task
+                    showTaskActions = true
+                }) {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title2)
+                        .foregroundStyle(.blue)
+                }
+            }
+        }
+        .padding()
+        .background(taskBackgroundColor(task))
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
     
     private var timelineView: some View {
@@ -373,7 +525,7 @@ struct TasksCalendarView: View {
                 .foregroundStyle(.orange)
                 .fontWeight(.medium)
         }
-        Text("\(Int(task.weight))")
+        Text(String(format: "%.1f", task.weight))
             .font(.caption2)
             .fontWeight(.bold)
             .foregroundStyle(.white)
@@ -390,6 +542,17 @@ struct TasksCalendarView: View {
             .padding(.vertical, 2)
             .background(priorityColor(task.priority))
             .clipShape(Capsule())
+        
+        if let timeSpent = task.timeSpent, timeSpent > 0 {
+            Text("\(Int(timeSpent))m")
+                .font(.caption2)
+                .fontWeight(.bold)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.purple)
+                .clipShape(Capsule())
+        }
         
         if let repeatDays = task.repeatAgain {
             HStack(spacing: 2) {
@@ -539,19 +702,7 @@ struct TasksCalendarView: View {
         let startOfDay = calendar.startOfDay(for: selectedDate)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
         
-        print("Querying tasks between \(startOfDay) and \(endOfDay)")
-        
-        // First, get all tasks to see what's in the database
-        let allTasksDescriptor = FetchDescriptor<Task>()
-        do {
-            let allTasks = try modelContext.fetch(allTasksDescriptor)
-            print("Total tasks in database: \(allTasks.count)")
-            for task in allTasks {
-                print("DB Task: \(task.title) on \(task.date ?? Date())")
-            }
-        } catch {
-            print("Error fetching all tasks: \(error)")
-        }
+        print("Querying \(showUntimedTasks ? "untimed" : "timed") tasks between \(startOfDay) and \(endOfDay)")
         
         let descriptor = FetchDescriptor<Task>(
             sortBy: [SortDescriptor(\.startTime)]
@@ -561,15 +712,35 @@ struct TasksCalendarView: View {
             let allTasks = try modelContext.fetch(descriptor)
             tasks = allTasks.filter { task in
                 guard let taskDate = task.date else { return false }
-                return Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+                let isDateMatch = Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+                
+                if showUntimedTasks {
+                    // Show untimed tasks (tasks with empty start/end times)
+                    return task.startTime.isEmpty && task.endTime.isEmpty && isDateMatch
+                } else {
+                    // Show timed tasks (tasks with start and end times)
+                    return !task.startTime.isEmpty && !task.endTime.isEmpty && isDateMatch
+                }
             }
-            print("Fetched \(tasks.count) tasks for \(selectedDate)")
-            for task in tasks {
-                print("Task: \(task.title) at \(task.startTime) on \(task.date ?? Date())")
-            }
+            print("Fetched \(tasks.count) \(showUntimedTasks ? "untimed" : "timed") tasks for \(selectedDate)")
         } catch {
             print("Error fetching tasks: \(error)")
             tasks = []
+        }
+    }
+    
+    private func getAllTasksForDate() -> [Task] {
+        let descriptor = FetchDescriptor<Task>()
+        
+        do {
+            let allTasks = try modelContext.fetch(descriptor)
+            return allTasks.filter { task in
+                guard let taskDate = task.date else { return false }
+                return Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+            }
+        } catch {
+            print("Error fetching all tasks for date: \(error)")
+            return []
         }
     }
     
@@ -673,11 +844,21 @@ struct TasksCalendarView: View {
     }
     
     private func toggleTaskCompletion(_ task: Task) {
+        let wasCompleted = task.completed
         task.completed.toggle()
+        print("📋 Task '\(task.title)' completion toggled in TasksCalendarView. Completed: \(task.completed), Weight: \(task.weight), EffectiveWeight: \(task.effectiveWeight)")
+        
         if task.completed {
             speakText("Task completed: \(task.title)")
             NotificationManager.shared.scheduleTaskCompletedNotification(task: task)
             createRepeatTask(from: task)
+            // Add points to Unclaimed Points reward
+            print("➕ Adding \(task.effectiveWeight) points for completed task")
+            Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
+        } else if wasCompleted {
+            // If uncompleting, subtract the points
+            print("➖ Subtracting \(task.effectiveWeight) points for uncompleted task")
+            Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
         }
         try? modelContext.save()
     }
@@ -701,25 +882,41 @@ struct TasksCalendarView: View {
     private func createTaskFromSeparateFields() {
         guard !taskTitle.isEmpty else { return }
         
-        let formatter = DateFormatter()
-        formatter.dateFormat = "H:mm"
+        let task: Task
         
-        let startTimeString = formatter.string(from: startTime)
-        let endTimeString = formatter.string(from: endTime)
-        
-        let task = Task(
-            title: taskTitle,
-            taskDescription: taskTags,
-            startTime: startTimeString,
-            endTime: endTimeString,
-            weight: taskWeight,
-            date: selectedDate,
-            repeatAgain: repeatDays > 0 ? repeatDays : nil,
-            priority: taskPriority
-        )
+        if isUntimedTask {
+            task = Task(
+                title: taskTitle,
+                taskDescription: taskTags,
+                startTime: "", // No start time for untimed tasks
+                endTime: "", // No end time for untimed tasks
+                weight: taskWeight,
+                date: selectedDate, // Keep the date
+                repeatAgain: repeatDays > 0 ? repeatDays : nil, // Allow repeat for untimed tasks
+                priority: taskPriority
+            )
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "H:mm"
+            
+            let startTimeString = formatter.string(from: startTime)
+            let endTimeString = formatter.string(from: endTime)
+            
+            task = Task(
+                title: taskTitle,
+                taskDescription: taskTags,
+                startTime: startTimeString,
+                endTime: endTimeString,
+                weight: taskWeight,
+                date: selectedDate,
+                repeatAgain: repeatDays > 0 ? repeatDays : nil,
+                priority: taskPriority
+            )
+            
+            scheduleTaskNotifications(for: task)
+        }
         
         modelContext.insert(task)
-        scheduleTaskNotifications(for: task)
         
         do {
             try modelContext.save()
@@ -728,11 +925,13 @@ struct TasksCalendarView: View {
             print("Error saving task: \(error)")
         }
         
+        // Reset form
         taskTitle = ""
         taskTags = ""
         repeatDays = 0
         taskWeight = 1.0
         taskPriority = "P3"
+        isUntimedTask = false
     }
     
     private func createTaskFromInput() {
@@ -805,6 +1004,7 @@ struct TasksCalendarView: View {
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority
+            // timeSpent is intentionally not copied for repeat tasks
         )
         
         modelContext.insert(newTask)
@@ -829,13 +1029,15 @@ struct TasksCalendarView: View {
     }
     
     private var pointsIndicator: some View {
-        let totalPoints = tasks.reduce(0) { $0 + $1.weight }
-        let completedPoints = tasks.filter { $0.completed }.reduce(0) { $0 + $1.weight }
+        // Get all tasks for the selected date (both timed and untimed)
+        let allTasksForDate = getAllTasksForDate()
+        let totalPoints = allTasksForDate.reduce(0) { $0 + $1.weight }
+        let completedPoints = allTasksForDate.filter { $0.completed }.reduce(0) { $0 + $1.effectiveWeight }
         let percentage = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0
         
         return VStack(spacing: 4) {
             HStack {
-                Text("Points: \(Int(completedPoints))/\(Int(totalPoints))")
+                Text("Points: \(String(format: "%.1f", completedPoints))/\(Int(totalPoints))")
                     .font(.headline)
                     .fontWeight(.bold)
                 
@@ -1069,15 +1271,19 @@ struct EditTaskView: View {
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var weight: Double
-    @State private var taskDate: Date
+    @State private var taskDate: Date?
     @State private var repeatDays: Int
     @State private var priority: String
+    @State private var isUntimed: Bool
+    @State private var timeSpent: Double
+    @State private var elapsedTime: Double
     
     init(task: Task) {
         self.task = task
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.taskDescription)
-        _taskDate = State(initialValue: task.date ?? Date())
+        _taskDate = State(initialValue: task.date)
+        _isUntimed = State(initialValue: task.startTime.isEmpty && task.endTime.isEmpty)
         
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -1086,6 +1292,8 @@ struct EditTaskView: View {
         _weight = State(initialValue: task.weight)
         _repeatDays = State(initialValue: task.repeatAgain ?? 0)
         _priority = State(initialValue: task.priority)
+        _timeSpent = State(initialValue: task.timeSpent ?? 0.0)
+        _elapsedTime = State(initialValue: task.elapsedTime ?? 0.0)
     }
     
     var body: some View {
@@ -1093,20 +1301,65 @@ struct EditTaskView: View {
             Form {
                 TextField("Title", text: $title)
                 TextField("Description", text: $description)
-                DatePicker("Date", selection: $taskDate, displayedComponents: .date)
-                DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute).onChange(of: startTime) { _, newValue in
+                
+                Toggle("Untimed Task", isOn: $isUntimed)
+                    .onChange(of: isUntimed) { _, newValue in
+                        if !newValue && taskDate == nil {
+                            taskDate = Date()
+                        }
+                    }
+                
+                DatePicker("Date", selection: Binding(
+                    get: { taskDate ?? Date() },
+                    set: { taskDate = $0 }
+                ), displayedComponents: .date)
+                
+                if !isUntimed {
+                    DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
+                        .onChange(of: startTime) { _, newValue in
                             startTime = roundToNearestFiveMinutes(newValue)
-                          
                         }
-                DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute).onChange(of: startTime) { _, newValue in
+                    
+                    DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
+                        .onChange(of: endTime) { _, newValue in
                             endTime = roundToNearestFiveMinutes(newValue)
-                          
                         }
+                }
+                
+                if isUntimed {
+                    HStack {
+                        Text("Elapsed Time (minutes)")
+                        TextField("0", value: $elapsedTime, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+                        Text("(allocated)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                HStack {
+                    Text("Time Spent (minutes)")
+                    TextField("0", value: $timeSpent, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                    if !isUntimed {
+                        Text("(optional)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("(actual)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 
                 HStack {
                     Text("Weight")
-                    Slider(value: $weight, in: 1...10, step: 1)
-                    Text("\(Int(weight))")
+                    TextField("e.g. 5.5", value: $weight, format: .number.precision(.fractionLength(0...2)))
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.decimalPad)
+                        .frame(width: 100)
                 }
                 
                 HStack {
@@ -1149,13 +1402,30 @@ struct EditTaskView: View {
         
         task.title = title
         task.taskDescription = description
-        task.startTime = formatter.string(from: startTime)
-        task.endTime = formatter.string(from: endTime)
+        
+        if isUntimed {
+            task.startTime = ""
+            task.endTime = ""
+            task.date = taskDate // Keep the date for untimed tasks
+            task.repeatAgain = repeatDays > 0 ? repeatDays : nil // Allow repeat for untimed tasks
+            task.elapsedTime = elapsedTime > 0 ? elapsedTime : nil // Set elapsed time for untimed tasks
+        } else {
+            task.startTime = formatter.string(from: startTime)
+            task.endTime = formatter.string(from: endTime)
+            task.date = taskDate
+            task.repeatAgain = repeatDays > 0 ? repeatDays : nil
+            task.elapsedTime = nil // Clear elapsed time for timed tasks
+        }
+        
+        // Set timeSpent for both timed and untimed tasks
+        task.timeSpent = timeSpent > 0 ? timeSpent : nil
+        
         task.weight = weight
-        task.date = taskDate
-        task.repeatAgain = repeatDays > 0 ? repeatDays : nil
         task.priority = priority
         try? modelContext.save()
+        
+        // Notify that a task was updated
+        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
     }
 }
 
@@ -1167,157 +1437,107 @@ struct EditTaskView: View {
     TasksCalendarView()
         .modelContainer(for: [Task.self], inMemory: true)
 }
-struct NotesView: View {
-    let task: Task
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @State private var notes: String
-    
-    init(task: Task) {
-        self.task = task
-        _notes = State(initialValue: task.notes ?? "")
-    }
-    
-    var body: some View {
-        NavigationView {
-            VStack {
-                TextEditor(text: $notes)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
-                    .padding()
-                
-                Text("\(notes.count) characters")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-            }
-            .navigationTitle("Notes: \(task.title)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        task.notes = notes.isEmpty ? nil : notes
-                        try? modelContext.save()
-                        dismiss()
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct PersistentNotesView: View {
-    let task: Task
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @State private var persistentNotes: String
-    
-    init(task: Task) {
-        self.task = task
-        _persistentNotes = State(initialValue: task.persistentNotes ?? "")
-    }
-    
-    var body: some View {
-        NavigationView {
-            VStack {
-                TextEditor(text: $persistentNotes)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
-                    .padding()
-                
-                Text("\(persistentNotes.count) characters")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-                
-                Text("Persistent notes are copied when recreating tasks")
-                    .font(.caption2)
-                    .foregroundStyle(.purple)
-                    .padding(.horizontal)
-            }
-            .navigationTitle("Persistent Notes: \(task.title)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        task.persistentNotes = persistentNotes.isEmpty ? nil : persistentNotes
-                        try? modelContext.save()
-                        dismiss()
-                    }
-                }
-            }
-        }
-    }
-}
 
 struct TaskActionsView: View {
     let task: Task
     let onTaskDeleted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query private var allSubtasks: [Subtask]
     @State private var showDeleteConfirmation = false
     @State private var showEditDialog = false
     @State private var showNotesDialog = false
     @State private var showPersistentNotesDialog = false
+    @State private var showTimeSpentDialog = false
+    @State private var showSubtasksView = false
     @State private var copiedTask: Task?
     
+    private var subtaskCount: Int {
+        let taskIdString = task.persistentModelID.hashValue.description
+        return allSubtasks.filter { $0.parentTaskIdString == taskIdString && $0.parentSubtaskIdString == nil }.count
+    }
+    
     var body: some View {
-        VStack(spacing: 20) {
-            Text(task.title)
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("\(task.startTime) - \(task.endTime)")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            
-            VStack(spacing: 16) {
-                actionButton("Mark as completed", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
-                    toggleTaskCompletion()
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    VStack(spacing: 8) {
+                        Text(task.title)
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .multilineTextAlignment(.center)
+                        
+                        if !task.startTime.isEmpty || !task.endTime.isEmpty {
+                            Text("\(task.startTime) - \(task.endTime)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top)
+                    
+                    VStack(spacing: 12) {
+                        actionButton("show Gratitude & Dedicate it to Krishna", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
+                            toggleTaskCompletion()
+                        }
+                        
+                        actionButton("Mark Not Completed", systemImage: "xmark.circle", color: task.notCompleted ? .red : .gray) {
+                            toggleTaskNonCompletion()
+                        }
+                        
+                        Divider()
+                        
+                        actionButton("Subtasks (\(subtaskCount))", systemImage: "list.bullet", color: .indigo) {
+                            showSubtasksView = true
+                        }
+                        
+                        actionButton("Edit", systemImage: "pencil", color: .blue) {
+                            showEditDialog = true
+                        }
+                        
+                        actionButton("Notes", systemImage: "note.text", color: .orange) {
+                            showNotesDialog = true
+                        }
+                        
+                        actionButton("Persistent Notes", systemImage: "pin.fill", color: .purple) {
+                            showPersistentNotesDialog = true
+                        }
+                        
+                        actionButton("Time Spent", systemImage: "clock.fill", color: .cyan) {
+                            showTimeSpentDialog = true
+                        }
+                        
+                        Divider()
+                        
+                        actionButton("Copy", systemImage: "doc.on.doc", color: .blue) {
+                            copiedTask = task
+                        }
+                        
+                        if copiedTask != nil {
+                            actionButton("Paste", systemImage: "doc.on.clipboard", color: .green) {
+                                pasteTask()
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        actionButton("Delete", systemImage: "trash", color: .red) {
+                            showDeleteConfirmation = true
+                        }
+                    }
+                    .padding(.bottom)
                 }
-                
-                actionButton("Mark Not Completed", systemImage: "xmark.circle", color: task.notCompleted ? .red : .gray) {
-                    toggleTaskNonCompletion()
-                }
-                
-                actionButton("Edit", systemImage: "pencil", color: .blue) {
-                    showEditDialog = true
-                }
-                
-                actionButton("Notes", systemImage: "note.text", color: .orange) {
-                    showNotesDialog = true
-                }
-                
-                actionButton("Persistent Notes", systemImage: "pin.fill", color: .purple) {
-                    showPersistentNotesDialog = true
-                }
-                
-                actionButton("Copy", systemImage: "doc.on.doc", color: .blue) {
-                    copiedTask = task
-                }
-                
-                if copiedTask != nil {
-                    actionButton("Paste", systemImage: "doc.on.clipboard", color: .green) {
-                        pasteTask()
+                .padding(.horizontal)
+            }
+            .navigationTitle("Task Actions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
                     }
                 }
-                
-                actionButton("Delete", systemImage: "trash", color: .red) {
-                    showDeleteConfirmation = true
-                }
             }
-            
-            Spacer()
         }
-        .padding()
         .alert("Delete Task", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -1336,7 +1556,12 @@ struct TaskActionsView: View {
         .sheet(isPresented: $showPersistentNotesDialog) {
             PersistentNotesView(task: task)
         }
-      
+        .sheet(isPresented: $showTimeSpentDialog) {
+            TimeSpentEditorView(task: task)
+        }
+        .sheet(isPresented: $showSubtasksView) {
+            SubtasksView(parentTask: task)
+        }
     }
     
     private func actionButton(_ title: String, systemImage: String, color: Color, action: @escaping () -> Void) -> some View {
@@ -1355,10 +1580,23 @@ struct TaskActionsView: View {
     }
     
     private func toggleTaskCompletion() {
+        let wasCompleted = task.completed
         task.completed.toggle()
-        if task.completed && !task.reassign {
-            createRepeatTask(from: task)
+        print("📋 Task '\(task.title)' completion toggled in TaskActionsView. Completed: \(task.completed), Weight: \(task.weight), EffectiveWeight: \(task.effectiveWeight)")
+        
+        if task.completed {
+            if !task.reassign {
+                createRepeatTask(from: task)
+            }
+            // Add points to Unclaimed Points reward
+            print("➕ Adding \(task.effectiveWeight) points for completed task")
+            Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
+        } else if wasCompleted {
+            // If uncompleting, subtract the points
+            print("➖ Subtracting \(task.effectiveWeight) points for uncompleted task")
+            Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
         }
+        
         try? modelContext.save()
         dismiss()
     }
@@ -1407,7 +1645,9 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             weight: task.weight,
             persistentNotes: task.persistentNotes,
             date: nextDate,
-            repeatAgain: task.repeatAgain
+            repeatAgain: task.repeatAgain,
+            elapsedTime: task.elapsedTime // Copy elapsed time to new task
+            // timeSpent is intentionally not copied for repeat tasks
         )
         
         modelContext.insert(newTask)
@@ -1442,7 +1682,9 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             weight: task.weight,
             persistentNotes: task.persistentNotes,
             date: nextDate,
-            repeatAgain: task.repeatAgain
+            repeatAgain: task.repeatAgain,
+            elapsedTime: task.elapsedTime // Copy elapsed time to new task
+            // timeSpent is intentionally not copied for repeat tasks
         )
         
         modelContext.insert(newTask)
@@ -1467,6 +1709,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             persistentNotes: copied.persistentNotes,
             date: copied.date,
             repeatAgain: copied.repeatAgain
+            // timeSpent is intentionally not copied when pasting tasks
         )
         
         modelContext.insert(newTask)

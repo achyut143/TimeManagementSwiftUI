@@ -244,9 +244,11 @@ struct TaskTableView: View {
 }
 
 struct TaskRowView: View {
+    @Query private var allSubtasks: [Subtask]
     let task: Task
     let onNotesAction: () -> Void
     let onPersistentNotesAction: () -> Void
+    @State private var showTimeSpentEditor = false
     
     private func priorityColor(_ priority: String) -> Color {
         switch priority {
@@ -269,9 +271,33 @@ struct TaskRowView: View {
                     .foregroundStyle(.secondary)
             }
             
-            Text("\(task.startTime) - \(task.endTime)")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("\(task.startTime) - \(task.endTime)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                
+                // Show time spent for timed tasks
+                if !task.startTime.isEmpty && !task.endTime.isEmpty {
+                    Button(action: { showTimeSpentEditor = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.fill")
+                                .font(.caption2)
+                            if let timeSpent = task.timeSpent {
+                                Text("\(Int(timeSpent))m")
+                                    .font(.caption2)
+                            } else {
+                                Text("Set time")
+                                    .font(.caption2)
+                            }
+                        }
+                        .foregroundStyle(.purple)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.purple.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                }
+            }
             
             if !task.taskDescription.isEmpty {
                 Text(task.taskDescription)
@@ -300,6 +326,7 @@ struct TaskRowView: View {
                             .foregroundStyle(.purple)
                     }
                 }
+                SubtaskCountButton(task: task, allSubtasks: allSubtasks)
                 Spacer()
                 let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 if !taskTags.isEmpty {
@@ -314,12 +341,24 @@ struct TaskRowView: View {
                         }
                     }
                 }
-                Text("Weight: \(Int(task.weight))")
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.2))
-                    .cornerRadius(4)
+                
+                // Show effective weight if different from base weight
+                let effectiveWeight = task.effectiveWeight
+                if abs(effectiveWeight - task.weight) > 0.01 {
+                    Text("Weight: \(String(format: "%.1f", effectiveWeight))/\(String(format: "%.1f", task.weight))")
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.2))
+                        .cornerRadius(4)
+                } else {
+                    Text("Weight: \(String(format: "%.1f", task.weight))")
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.2))
+                        .cornerRadius(4)
+                }
                 
                 Text(task.priority)
                     .font(.caption2)
@@ -332,5 +371,319 @@ struct TaskRowView: View {
             }
         }
         .padding(.vertical, 4)
+        .sheet(isPresented: $showTimeSpentEditor) {
+            TimeSpentEditorView(task: task)
+        }
+    }
+}
+
+struct TimeSpentEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    let task: Task
+    @State private var timeSpentMinutes: String = ""
+    @State private var elapsedTimeMinutes: String = ""
+    @State private var previousEffectiveWeight: Double = 0.0
+    
+    var isUntimedTask: Bool {
+        task.startTime.isEmpty && task.endTime.isEmpty
+    }
+    
+    @ViewBuilder
+    private func calculationView(minutes: Double) -> some View {
+        let allocated = getAllocatedTime()
+        
+        if allocated > 0 {
+            let ratio = minutes / allocated
+            let effectivePoints = task.weight * ratio
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Points Calculation:")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text("Base points: \(String(format: "%.1f", task.weight))")
+                    .font(.caption)
+                Text("Time ratio: \(String(format: "%.2f", ratio)) (\(Int(minutes))m / \(Int(allocated))m)")
+                    .font(.caption)
+                Text("Effective points: \(String(format: "%.1f", effectivePoints))")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundStyle(ratio > 1 ? .orange : .green)
+            }
+            .padding()
+            .background(.blue.opacity(0.1))
+            .cornerRadius(8)
+        }
+    }
+    
+    private func getAllocatedTime() -> Double {
+        if isUntimedTask, let elapsed = Double(elapsedTimeMinutes), elapsed > 0 {
+            return elapsed
+        } else {
+            return task.allocatedTimeInMinutes
+        }
+    }
+    
+    private func addTimeSpent(_ minutes: Double) {
+        let currentTimeSpent = task.timeSpent ?? 0.0
+        let newTimeSpent = currentTimeSpent + minutes
+        
+        // Capture the current effective weight BEFORE making any changes
+        let oldEffectiveWeight = task.effectiveWeight
+        
+        task.timeSpent = newTimeSpent
+        timeSpentMinutes = String(Int(newTimeSpent))
+        
+        // Update unclaimed points if task is completed
+        if task.completed {
+            let newEffectiveWeight = task.effectiveWeight
+            let pointsDifference = newEffectiveWeight - oldEffectiveWeight
+            
+            print("⏱️ Time spent updated: \(currentTimeSpent)m → \(newTimeSpent)m")
+            print("📊 Effective weight changed: \(oldEffectiveWeight) → \(newEffectiveWeight)")
+            print("🔄 Updating unclaimed points by: \(pointsDifference)")
+            
+            Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
+            
+            // Update the stored previous weight for next time
+            previousEffectiveWeight = newEffectiveWeight
+        }
+        
+        try? modelContext.save()
+    }
+    
+    private func addElapsedTime(_ minutes: Double) {
+        let currentElapsedTime = task.elapsedTime ?? 0.0
+        let newElapsedTime = currentElapsedTime + minutes
+        
+        // Capture the current effective weight BEFORE making any changes
+        let oldEffectiveWeight = task.effectiveWeight
+        
+        task.elapsedTime = newElapsedTime
+        elapsedTimeMinutes = String(Int(newElapsedTime))
+        
+        // Update unclaimed points if task is completed
+        if task.completed {
+            let newEffectiveWeight = task.effectiveWeight
+            let pointsDifference = newEffectiveWeight - oldEffectiveWeight
+            
+            print("⏱️ Elapsed time updated: \(currentElapsedTime)m → \(newElapsedTime)m")
+            print("📊 Effective weight changed: \(oldEffectiveWeight) → \(newEffectiveWeight)")
+            print("🔄 Updating unclaimed points by: \(pointsDifference)")
+            
+            Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
+            
+            // Update the stored previous weight for next time
+            previousEffectiveWeight = newEffectiveWeight
+        }
+        
+        try? modelContext.save()
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(task.title)
+                        .font(.headline)
+                    
+                    if !isUntimedTask {
+                        Text("\(task.startTime) - \(task.endTime)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Untimed Task")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    let allocated = task.allocatedTimeInMinutes
+                    if allocated > 0 {
+                        Text("Allocated: \(Int(allocated)) minutes (\(String(format: "%.1f", allocated / 60)) hours)")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
+                
+                VStack(alignment: .leading, spacing: 12) {
+                    if isUntimedTask {
+                        Text("Elapsed Time (minutes)")
+                            .font(.headline)
+                        
+                        TextField("Allocated time", text: $elapsedTimeMinutes)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+                        
+                        Text("How much time did you allocate for this task?")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Text("Time Spent (minutes)")
+                        .font(.headline)
+                    
+                    TextField("Actual time", text: $timeSpentMinutes)
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.numberPad)
+                    
+                    if let minutes = Double(timeSpentMinutes), minutes > 0 {
+                        calculationView(minutes: minutes)
+                    }
+                    
+                    if isUntimedTask {
+                        Text("Quick Elapsed Time:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Button("+5m") { addElapsedTime(5) }
+                            Button("+15m") { addElapsedTime(15) }
+                            Button("+30m") { addElapsedTime(30) }
+                            Button("+60m") { addElapsedTime(60) }
+                            Button("+120m") { addElapsedTime(120) }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    
+                    Text("Quick Time Spent:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Button("+5m") { addTimeSpent(5) }
+                        Button("+15m") { addTimeSpent(15) }
+                        Button("+30m") { addTimeSpent(30) }
+                        Button("+45m") { addTimeSpent(45) }
+                        Button("+60m") { addTimeSpent(60) }
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    if task.timeSpent != nil || task.elapsedTime != nil {
+                        Button("Clear All Times") {
+                            task.timeSpent = nil
+                            if isUntimedTask {
+                                task.elapsedTime = nil
+                            }
+                            try? modelContext.save()
+                            dismiss()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                    }
+                }
+                .padding()
+                
+                Spacer()
+            }
+            .onAppear {
+                if let timeSpent = task.timeSpent {
+                    timeSpentMinutes = String(Int(timeSpent))
+                }
+                if let elapsedTime = task.elapsedTime {
+                    elapsedTimeMinutes = String(Int(elapsedTime))
+                }
+                // Store initial effective weight for comparison
+                previousEffectiveWeight = task.effectiveWeight
+            }
+            .navigationTitle("Set Time Spent")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(
+                leading: Button("Cancel") { dismiss() },
+                trailing: Button("Save") {
+                    // Store previous effective weight before updating
+                    let previousWeight = previousEffectiveWeight
+                    
+                    if let minutes = Double(timeSpentMinutes), minutes > 0 {
+                        task.timeSpent = minutes
+                    }
+                    if isUntimedTask, let elapsed = Double(elapsedTimeMinutes), elapsed > 0 {
+                        task.elapsedTime = elapsed
+                    }
+                    
+                    // Update unclaimed points if task is completed and values changed
+                    if task.completed {
+                        let newEffectiveWeight = task.effectiveWeight
+                        let pointsDifference = newEffectiveWeight - previousWeight
+                        
+                        if pointsDifference != 0 {
+                            print("💾 Manual save - Effective weight changed: \(previousWeight) → \(newEffectiveWeight)")
+                            print("🔄 Updating unclaimed points by: \(pointsDifference)")
+                            Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
+                        }
+                    }
+                    
+                    try? modelContext.save()
+                    dismiss()
+                }
+            )
+        }
+    }
+}
+
+struct NotesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    let task: Task
+    @State private var notesText: String = ""
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                TextEditor(text: $notesText)
+                    .padding()
+            }
+            .navigationTitle("Notes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        task.notes = notesText
+                        try? modelContext.save()
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                notesText = task.notes ?? ""
+            }
+        }
+    }
+}
+
+struct PersistentNotesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    let task: Task
+    @State private var notesText: String = ""
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                TextEditor(text: $notesText)
+                    .padding()
+            }
+            .navigationTitle("Persistent Notes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        task.persistentNotes = notesText
+                        try? modelContext.save()
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                notesText = task.persistentNotes ?? ""
+            }
+        }
     }
 }

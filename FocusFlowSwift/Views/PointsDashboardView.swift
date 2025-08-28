@@ -93,7 +93,7 @@ struct PointsDashboardView: View {
         }
         
         let totalPoints = dayTasks.reduce(0) { $0 + $1.weight }
-        let earnedPoints = dayTasks.filter { $0.completed }.reduce(0) { $0 + $1.weight }
+        let earnedPoints = dayTasks.filter { $0.completed }.reduce(0) { $0 + $1.effectiveWeight }
         
         return PointsStats(earned: earnedPoints, total: totalPoints)
     }
