@@ -13,6 +13,8 @@ struct HabitDashboardView: View {
     @State private var habitToDelete = ""
     @State private var searchText = ""
     
+    var initialHabit: String? = nil
+    
     var body: some View {
         VStack(spacing: 16) {
             headerView
@@ -50,8 +52,10 @@ struct HabitDashboardView: View {
     }
     .navigationTitle("Habit Tracker")
     .onAppear {
-      // Ensure we start with a valid selection
-      if selectedHabit.isEmpty, let first = filteredHabitNames.first {
+      // Use initialHabit if provided, otherwise use first available
+      if let initialHabit = initialHabit, filteredHabitNames.contains(initialHabit) {
+        selectedHabit = initialHabit
+      } else if selectedHabit.isEmpty, let first = filteredHabitNames.first {
         selectedHabit = first
       }
     }
@@ -103,7 +107,12 @@ struct HabitDashboardView: View {
     }
     
    private var filteredHabitNames: [String] {
-    habitNames
+    // If initialHabit is set, only show that habit
+    if let initialHabit = initialHabit, habitNames.contains(initialHabit) {
+      return [initialHabit]
+    }
+    
+    return habitNames
       .filter { name in
         switch filterMode {
           case "routines": return name.lowercased().contains("routine")

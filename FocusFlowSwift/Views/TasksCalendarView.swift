@@ -1451,6 +1451,7 @@ struct TaskActionsView: View {
     @State private var showTimeSpentDialog = false
     @State private var showSubtasksView = false
     @State private var copiedTask: Task?
+    @State private var navigateToHabits = false
     
     private var subtaskCount: Int {
         let taskIdString = task.persistentModelID.hashValue.description
@@ -1504,6 +1505,12 @@ struct TaskActionsView: View {
                         
                         actionButton("Time Spent", systemImage: "clock.fill", color: .cyan) {
                             showTimeSpentDialog = true
+                        }
+                        
+                        if task.repeatAgain != nil {
+                            actionButton("View Habit Tracker", systemImage: "chart.bar.fill", color: .purple) {
+                                navigateToHabitTracker()
+                            }
                         }
                         
                         Divider()
@@ -1562,6 +1569,15 @@ struct TaskActionsView: View {
         .sheet(isPresented: $showSubtasksView) {
             SubtasksView(parentTask: task)
         }
+        .sheet(isPresented: $navigateToHabits) {
+            NavigationStack {
+                HabitDashboardView(initialHabit: task.title)
+            }
+        }
+    }
+    
+    private func navigateToHabitTracker() {
+        navigateToHabits = true
     }
     
     private func actionButton(_ title: String, systemImage: String, color: Color, action: @escaping () -> Void) -> some View {
