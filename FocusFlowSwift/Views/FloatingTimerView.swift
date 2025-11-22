@@ -1,20 +1,28 @@
 import SwiftUI
+import SwiftData
 
 struct FloatingTimerView: View {
-    @StateObject private var settings = AlertSettings.shared
+    @Query(filter: #Predicate<FastingSession> { $0.status == "active" }, sort: \FastingSession.startTime, order: .reverse)
+    private var activeSessions: [FastingSession]
+    
     @State private var position: CGPoint = CGPoint(x: UIScreen.main.bounds.width - 80, y: 100)
     @State private var isDragging = false
-    @State private var timeRemaining: TimeInterval = 0
-    @State private var countdownTimer: Timer?
+    @State private var currentTime = Date()
     @State private var isExpanded = false
     
+    let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    
+    var activeSession: FastingSession? {
+        activeSessions.first
+    }
+    
     var body: some View {
-        if settings.isPlaying {
+        if let session = activeSession {
             ZStack {
                 if isExpanded {
-                    expandedView
+                    expandedView(session: session)
                 } else {
-                    compactView
+                    compactView(session: session)
                 }
             }
             .position(position)
@@ -29,55 +37,53 @@ struct FloatingTimerView: View {
                         snapToEdge()
                     }
             )
-            .onAppear {
-                startCountdownTimer()
-            }
-            .onDisappear {
-                stopCountdownTimer()
-            }
-            .onChange(of: settings.isPlaying) { _, newValue in
-                if newValue {
-                    startCountdownTimer()
-                } else {
-                    stopCountdownTimer()
-                }
-            }
-            .onChange(of: settings.isPaused) { _, newValue in
-                if newValue {
-                    stopCountdownTimer()
-                } else if settings.isPlaying {
-                    startCountdownTimer()
-                }
+            .onReceive(timer) { _ in
+                currentTime = Date()
             }
         }
     }
     
-    private var compactView: some View {
-        Button(action: {
+    private func compactView(session: FastingSession) -> some View {
+        let remainingTime = max(0, session.endTime.timeIntervalSince(currentTime))
+        let progressPercentage = min(1.0, max(0.0, currentTime.timeIntervalSince(session.startTime) / session.duration))
+        
+        return Button(action: {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 isExpanded.toggle()
             }
         }) {
-            VStack(spacing: 4) {
-                Image(systemName: settings.isPaused ? "pause.circle.fill" : "timer")
-                    .font(.system(size: 20))
-                    .foregroundStyle(.white)
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.3), lineWidth: 4)
+                    .frame(width: 60, height: 60)
                 
-                if !settings.isPaused {
-                    Text(formatTimeCompact(timeRemaining))
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                Circle()
+                    .trim(from: 0, to: progressPercentage)
+                    .stroke(Color.white, lineWidth: 4)
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(-90))
+                
+                VStack(spacing: 2) {
+                    Image(systemName: "fork.knife")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white)
+                    
+                    Text(formatTimeCompact(remainingTime))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .monospacedDigit()
-                } else {
-                    Text("Paused")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white)
                 }
             }
             .frame(width: 60, height: 60)
             .background(
                 Circle()
-                    .fill(settings.isPaused ? Color.orange : (timeRemaining <= 30 ? Color.red : Color.blue))
+                    .fill(
+                        LinearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
             )
             .scaleEffect(isDragging ? 1.1 : 1.0)
@@ -86,8 +92,11 @@ struct FloatingTimerView: View {
         .buttonStyle(PlainButtonStyle())
     }
     
-    private var expandedView: some View {
-        VStack(spacing: 8) {
+    private func expandedView(session: FastingSession) -> some View {
+        let remainingTime = max(0, session.endTime.timeIntervalSince(currentTime))
+        let progressPercentage = min(1.0, max(0.0, currentTime.timeIntervalSince(session.startTime) / session.duration))
+        
+        return VStack(spacing: 8) {
             HStack {
                 Button(action: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -101,108 +110,98 @@ struct FloatingTimerView: View {
                 
                 Spacer()
                 
-                Image(systemName: settings.isPaused ? "pause.circle.fill" : "timer")
+                Image(systemName: "fork.knife")
                     .font(.system(size: 16))
                     .foregroundStyle(.white)
             }
             
-            if settings.useCycles {
-                let cycleProgress = settings.getCurrentCycleProgress()
+            VStack(spacing: 4) {
+                Text("Fasting")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.8))
                 
-                VStack(spacing: 4) {
-                    Text("\(cycleProgress.current)/\(cycleProgress.total)")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                Text(formatTimeRemaining(remainingTime))
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                
+                Text("remaining")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            
+            Divider()
+                .background(.white.opacity(0.3))
+            
+            HStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Started")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(session.startTime, style: .time)
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
-                    
-                    Text("Cycle Progress")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
                 }
-            } else {
-                VStack(spacing: 4) {
-                    Text("\(settings.counter)\(settings.targetIntervals.map { "/\($0)" } ?? "")")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Target")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text(session.endTime, style: .time)
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
-                    
-                    Text("Intervals")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
                 }
             }
             
-            if !settings.isPaused {
-                Divider()
-                    .background(.white.opacity(0.3))
-                
-                VStack(spacing: 4) {
-                    Text(formatTimeRemaining(timeRemaining))
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .monospacedDigit()
+            // Progress bar
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(.white.opacity(0.3))
+                        .frame(height: 6)
                     
-                    Text("Until Next Alert")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(.white)
+                        .frame(width: geometry.size.width * progressPercentage, height: 6)
                 }
-            } else {
-                Text("Paused")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
             }
-            
-            if settings.useCycles && !settings.cyclePhases.isEmpty && settings.currentCycleIndex < settings.cyclePhases.count {
-                Divider()
-                    .background(.white.opacity(0.3))
-                
-                Text(settings.cyclePhases[settings.currentCycleIndex].name)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(1)
-            }
+            .frame(height: 6)
         }
         .padding(12)
-        .frame(width: 140)
+        .frame(width: 160)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(settings.isPaused ? Color.orange : (timeRemaining <= 30 ? Color.red : Color.blue))
+                .fill(
+                    LinearGradient(
+                        colors: [.blue, .purple],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
         )
         .scaleEffect(isDragging ? 1.05 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isDragging)
     }
     
-    private func startCountdownTimer() {
-        stopCountdownTimer()
-        updateTimeRemaining()
-        
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            updateTimeRemaining()
-        }
-    }
-    
-    private func stopCountdownTimer() {
-        countdownTimer?.invalidate()
-        countdownTimer = nil
-    }
-    
-    private func updateTimeRemaining() {
-        if settings.isPlaying && !settings.isPaused {
-            timeRemaining = max(0, settings.nextAlertDate.timeIntervalSinceNow)
-        } else {
-            timeRemaining = 0
-        }
-    }
-    
     private func formatTimeCompact(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
+        let hours = Int(time) / 3600
+        let minutes = (Int(time) % 3600) / 60
+        
+        if hours > 0 {
+            return String(format: "%dh%dm", hours, minutes)
+        } else {
+            return String(format: "%dm", minutes)
+        }
     }
     
     private func formatTimeRemaining(_ time: TimeInterval) -> String {
-        let minutes = Int(time) / 60
+        let hours = Int(time) / 3600
+        let minutes = (Int(time) % 3600) / 60
         let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
+        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
     }
     
     private func snapToEdge() {
@@ -233,4 +232,5 @@ struct FloatingTimerView: View {
         
         FloatingTimerView()
     }
+    .modelContainer(for: [FastingSession.self], inMemory: true)
 }

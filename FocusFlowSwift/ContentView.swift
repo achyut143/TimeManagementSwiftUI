@@ -58,6 +58,14 @@ struct ContentView: View {
                     Image(systemName: "bell.badge")
                     Text("Alerts")
                 }
+                
+                NavigationStack {
+                    FastingView()
+                }
+                .tabItem {
+                    Image(systemName: "fork.knife")
+                    Text("Fasting")
+                }
             }
             .sheet(isPresented: $showAlertView) {
                 AlertView()
@@ -86,5 +94,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, Reward.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, Reward.self, FastingSession.self], inMemory: true)
 }

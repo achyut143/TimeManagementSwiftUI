@@ -36,7 +36,7 @@ struct FocusFlowSwiftApp: App {
                     UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                 }
         }
-        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self])
+        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self, FastingSession.self])
     }
     
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {
