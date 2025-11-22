@@ -74,7 +74,7 @@ struct ContentView: View {
                 AlertManagerView()
             }
             
-            QuickPointsButton()
+            QuickAlertButton()
             
             FloatingTimerView()
         }
