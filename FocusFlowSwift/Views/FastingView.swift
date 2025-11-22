@@ -239,8 +239,8 @@ struct NewFastingView: View {
                 }
                 
                 Section("Notes (Optional)") {
-                    TextEditor(text: $notes)
-                        .frame(height: 100)
+                    RichTextEditor(text: $notes)
+                        .frame(height: 200)
                 }
                 
                 Section {

@@ -630,9 +630,23 @@ struct NotesView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
-                TextEditor(text: $notesText)
-                    .padding()
+            Form {
+                Section("Task") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(task.title)
+                            .font(.headline)
+                        if !task.taskDescription.isEmpty {
+                            Text(task.taskDescription)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                Section("Notes") {
+                    RichTextEditor(text: $notesText)
+                        .frame(height: 300)
+                }
             }
             .navigationTitle("Notes")
             .navigationBarTitleDisplayMode(.inline)
@@ -642,7 +656,7 @@ struct NotesView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        task.notes = notesText
+                        task.notes = notesText.isEmpty ? nil : notesText
                         try? modelContext.save()
                         dismiss()
                     }
@@ -663,9 +677,23 @@ struct PersistentNotesView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
-                TextEditor(text: $notesText)
-                    .padding()
+            Form {
+                Section("Task") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(task.title)
+                            .font(.headline)
+                        if !task.taskDescription.isEmpty {
+                            Text(task.taskDescription)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                Section("Persistent Notes") {
+                    RichTextEditor(text: $notesText)
+                        .frame(height: 300)
+                }
             }
             .navigationTitle("Persistent Notes")
             .navigationBarTitleDisplayMode(.inline)
@@ -675,7 +703,7 @@ struct PersistentNotesView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        task.persistentNotes = notesText
+                        task.persistentNotes = notesText.isEmpty ? nil : notesText
                         try? modelContext.save()
                         dismiss()
                     }

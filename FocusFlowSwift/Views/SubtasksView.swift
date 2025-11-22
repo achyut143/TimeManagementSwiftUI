@@ -84,6 +84,7 @@ struct SubtaskRow: View {
     @Bindable var subtask: Subtask
     let allSubtasks: [Subtask]
     @State private var showingSubtasks = false
+    @State private var showingEditNotes = false
     
     private var subtaskCount: Int {
         let subtaskIdString = subtask.persistentModelID.hashValue.description
@@ -100,16 +101,25 @@ struct SubtaskRow: View {
             }
             .buttonStyle(.plain)
             
-            VStack(alignment: .leading, spacing: 4) {
-                Text(subtask.name)
-                    .strikethrough(subtask.completed)
-                
-                if let notes = subtask.notes, !notes.isEmpty {
-                    Text(notes)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            Button {
+                showingEditNotes = true
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(subtask.name)
+                        .strikethrough(subtask.completed)
+                        .foregroundColor(.primary)
+                    
+                    if let notes = subtask.notes, !notes.isEmpty {
+                        MarkdownText(text: notes)
+                            .lineLimit(2)
+                    } else {
+                        Text("Add notes...")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
                 }
             }
+            .buttonStyle(.plain)
             
             Spacer()
             
@@ -132,6 +142,9 @@ struct SubtaskRow: View {
         .sheet(isPresented: $showingSubtasks) {
             SubtasksView(parentSubtask: subtask)
         }
+        .sheet(isPresented: $showingEditNotes) {
+            EditSubtaskNotesView(subtask: subtask)
+        }
     }
 }
 
@@ -150,8 +163,11 @@ struct AddSubtaskView: View {
             Form {
                 Section("Subtask Details") {
                     TextField("Name", text: $name)
-                    TextField("Notes (optional)", text: $notes, axis: .vertical)
-                        .lineLimit(3...6)
+                }
+                
+                Section("Notes (Optional)") {
+                    RichTextEditor(text: $notes)
+                        .frame(height: 200)
                 }
             }
             .navigationTitle("New Subtask")
@@ -180,6 +196,55 @@ struct AddSubtaskView: View {
             parentSubtask: parentSubtask
         )
         modelContext.insert(subtask)
+        dismiss()
+    }
+}
+
+struct EditSubtaskNotesView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    
+    @Bindable var subtask: Subtask
+    @State private var notes: String = ""
+    @State private var name: String = ""
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Subtask Name") {
+                    TextField("Name", text: $name)
+                }
+                
+                Section("Notes") {
+                    RichTextEditor(text: $notes)
+                        .frame(height: 250)
+                }
+            }
+            .navigationTitle("Edit Subtask")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveChanges()
+                    }
+                }
+            }
+            .onAppear {
+                notes = subtask.notes ?? ""
+                name = subtask.name
+            }
+        }
+    }
+    
+    private func saveChanges() {
+        subtask.name = name
+        subtask.notes = notes.isEmpty ? nil : notes
+        try? modelContext.save()
         dismiss()
     }
 }
