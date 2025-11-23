@@ -6,7 +6,6 @@ import Foundation
 
 struct UntimedTasksView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var allSubtasks: [Subtask]
     @State private var selectedDate = Date()
     @State private var tasks: [Task] = []
     @State private var speechSynthesizer = AVSpeechSynthesizer()
@@ -218,7 +217,7 @@ struct UntimedTasksView: View {
                             }
                     }
                     
-                    SubtaskCountButton(task: task, allSubtasks: allSubtasks)
+                    SubtaskCountButton(task: task)
                     
                     Spacer()
                 }

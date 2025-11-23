@@ -244,7 +244,6 @@ struct TaskTableView: View {
 }
 
 struct TaskRowView: View {
-    @Query private var allSubtasks: [Subtask]
     let task: Task
     let onNotesAction: () -> Void
     let onPersistentNotesAction: () -> Void
@@ -326,7 +325,7 @@ struct TaskRowView: View {
                             .foregroundStyle(.purple)
                     }
                 }
-                SubtaskCountButton(task: task, allSubtasks: allSubtasks)
+                SubtaskCountButton(task: task)
                 Spacer()
                 let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 if !taskTags.isEmpty {

@@ -1439,11 +1439,11 @@ struct EditTaskView: View {
 }
 
 struct TaskActionsView: View {
+    @Query private var allSubtasks: [Subtask]
     let task: Task
     let onTaskDeleted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query private var allSubtasks: [Subtask]
     @State private var showDeleteConfirmation = false
     @State private var showEditDialog = false
     @State private var showNotesDialog = false
@@ -1454,8 +1454,10 @@ struct TaskActionsView: View {
     @State private var navigateToHabits = false
     
     private var subtaskCount: Int {
-        let taskIdString = task.persistentModelID.hashValue.description
-        return allSubtasks.filter { $0.parentTaskIdString == taskIdString && $0.parentSubtaskIdString == nil }.count
+        return allSubtasks.filter { 
+            $0.parentTask?.persistentModelID == task.persistentModelID && 
+            $0.parentSubtask == nil 
+        }.count
     }
     
     var body: some View {

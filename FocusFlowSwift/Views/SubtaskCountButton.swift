@@ -2,13 +2,15 @@ import SwiftUI
 import SwiftData
 
 struct SubtaskCountButton: View {
+    @Query private var allSubtasks: [Subtask]
     let task: Task
-    let allSubtasks: [Subtask]
     @State private var showingSubtasks = false
     
     private var subtaskCount: Int {
-        let taskIdString = task.persistentModelID.hashValue.description
-        return allSubtasks.filter { $0.parentTaskIdString == taskIdString && $0.parentSubtaskIdString == nil }.count
+        return allSubtasks.filter { 
+            $0.parentTask?.persistentModelID == task.persistentModelID && 
+            $0.parentSubtask == nil 
+        }.count
     }
     
     var body: some View {

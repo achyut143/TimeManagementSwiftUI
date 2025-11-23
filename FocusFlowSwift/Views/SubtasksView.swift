@@ -4,7 +4,7 @@ import SwiftData
 struct SubtasksView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query private var allSubtasks: [Subtask]
+    @Query(sort: \Subtask.createdAt) private var allSubtasks: [Subtask]
     
     let parentTask: Task?
     let parentSubtask: Subtask?
@@ -20,11 +20,16 @@ struct SubtasksView: View {
     
     private var filteredSubtasks: [Subtask] {
         if let parentTask = parentTask {
-            let taskIdString = parentTask.persistentModelID.hashValue.description
-            return allSubtasks.filter { $0.parentTaskIdString == taskIdString && $0.parentSubtaskIdString == nil }
+            // Filter subtasks that belong to this task
+            return allSubtasks.filter { 
+                $0.parentTask?.persistentModelID == parentTask.persistentModelID && 
+                $0.parentSubtask == nil 
+            }
         } else if let parentSubtask = parentSubtask {
-            let subtaskIdString = parentSubtask.persistentModelID.hashValue.description
-            return allSubtasks.filter { $0.parentSubtaskIdString == subtaskIdString }
+            // Filter subtasks that belong to this subtask
+            return allSubtasks.filter { 
+                $0.parentSubtask?.persistentModelID == parentSubtask.persistentModelID 
+            }
         }
         return []
     }
@@ -33,7 +38,7 @@ struct SubtasksView: View {
         NavigationStack {
             List {
                 ForEach(filteredSubtasks) { subtask in
-                    SubtaskRow(subtask: subtask, allSubtasks: allSubtasks)
+                    SubtaskRow(subtask: subtask)
                 }
                 .onDelete(perform: deleteSubtasks)
             }
@@ -70,25 +75,18 @@ struct SubtasksView: View {
     }
     
     private func deleteSubtaskAndChildren(_ subtask: Subtask) {
-        // Delete all child subtasks recursively
-        let subtaskIdString = subtask.persistentModelID.hashValue.description
-        let children = allSubtasks.filter { $0.parentSubtaskIdString == subtaskIdString }
-        for child in children {
-            deleteSubtaskAndChildren(child)
-        }
+        // Delete all child subtasks recursively (cascade will handle this automatically)
         modelContext.delete(subtask)
     }
 }
 
 struct SubtaskRow: View {
     @Bindable var subtask: Subtask
-    let allSubtasks: [Subtask]
     @State private var showingSubtasks = false
     @State private var showingEditNotes = false
     
     private var subtaskCount: Int {
-        let subtaskIdString = subtask.persistentModelID.hashValue.description
-        return allSubtasks.filter { $0.parentSubtaskIdString == subtaskIdString }.count
+        return subtask.childSubtasks?.count ?? 0
     }
     
     var body: some View {
@@ -196,6 +194,14 @@ struct AddSubtaskView: View {
             parentSubtask: parentSubtask
         )
         modelContext.insert(subtask)
+        
+        // Explicitly save the context
+        do {
+            try modelContext.save()
+        } catch {
+            print("Error saving subtask: \(error)")
+        }
+        
         dismiss()
     }
 }

@@ -21,6 +21,9 @@ class Task: Transferable {
     var timeSpent: Double? // Actual time spent in minutes
     var elapsedTime: Double? // Allocated/elapsed time in minutes for untimed tasks
     
+    @Relationship(deleteRule: .cascade, inverse: \Subtask.parentTask)
+    var subtasks: [Subtask]? = []
+    
     init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil) {
         self.title = title
         self.taskDescription = taskDescription
