@@ -7,6 +7,11 @@ struct EditAlertInstanceView: View {
     
     @State private var tempName: String = ""
     @State private var tempIntervalMinutes: Int = 5
+    @State private var tempIntervalSeconds: Int = 0
+    @State private var tempRestMinutes: Int = 0
+    @State private var tempRestSeconds: Int = 0
+    @State private var tempWorkIntervalText: String = ""
+    @State private var tempRestIntervalText: String = ""
     @State private var tempUseCycles: Bool = false
     @State private var tempTargetIntervals: Int? = nil
     @State private var showingCycleConfiguration = false
@@ -17,17 +22,60 @@ struct EditAlertInstanceView: View {
                 Section("Basic Settings") {
                     TextField("Alert Name", text: $tempName)
                     
-                    HStack {
-                        Text("Interval")
-                        Spacer()
-                        TextField("Minutes", value: $tempIntervalMinutes, format: .number)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Interval Duration")
+                            .font(.subheadline)
+                        HStack {
+                            TextField("0", text: Binding(
+                                get: { String(tempIntervalMinutes) },
+                                set: { if let value = Int($0) { tempIntervalMinutes = max(0, value) } else if $0.isEmpty { tempIntervalMinutes = 0 } }
+                            ))
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 60)
                             .keyboardType(.numberPad)
-                        Text("min")
+                            Text("min")
+                            
+                            TextField("0", text: Binding(
+                                get: { String(tempIntervalSeconds) },
+                                set: { if let value = Int($0) { tempIntervalSeconds = max(0, min(59, value)) } else if $0.isEmpty { tempIntervalSeconds = 0 } }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                            .keyboardType(.numberPad)
+                            Text("sec")
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Rest Period (Optional)")
+                            .font(.subheadline)
+                        HStack {
+                            TextField("0", text: Binding(
+                                get: { String(tempRestMinutes) },
+                                set: { if let value = Int($0) { tempRestMinutes = max(0, value) } else if $0.isEmpty { tempRestMinutes = 0 } }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                            .keyboardType(.numberPad)
+                            Text("min")
+                            
+                            TextField("0", text: Binding(
+                                get: { String(tempRestSeconds) },
+                                set: { if let value = Int($0) { tempRestSeconds = max(0, min(59, value)) } else if $0.isEmpty { tempRestSeconds = 0 } }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                            .keyboardType(.numberPad)
+                            Text("sec")
+                        }
                     }
                     
                     Toggle("Use Cycles", isOn: $tempUseCycles)
+                }
+                
+                Section("Speech Announcements (Optional)") {
+                    TextField("Work interval text", text: $tempWorkIntervalText)
+                    TextField("Rest period text", text: $tempRestIntervalText)
                 }
                 
                 if !tempUseCycles {
@@ -109,6 +157,11 @@ struct EditAlertInstanceView: View {
     private func loadCurrentValues() {
         tempName = instance.name
         tempIntervalMinutes = instance.intervalMinutes
+        tempIntervalSeconds = instance.intervalSeconds
+        tempRestMinutes = instance.restMinutes
+        tempRestSeconds = instance.restSeconds
+        tempWorkIntervalText = instance.workIntervalText
+        tempRestIntervalText = instance.restIntervalText
         tempUseCycles = instance.useCycles
         tempTargetIntervals = instance.targetIntervals
     }
@@ -116,6 +169,11 @@ struct EditAlertInstanceView: View {
     private func saveChanges() {
         instance.name = tempName
         instance.intervalMinutes = tempIntervalMinutes
+        instance.intervalSeconds = tempIntervalSeconds
+        instance.restMinutes = tempRestMinutes
+        instance.restSeconds = tempRestSeconds
+        instance.workIntervalText = tempWorkIntervalText
+        instance.restIntervalText = tempRestIntervalText
         instance.useCycles = tempUseCycles
         instance.targetIntervals = tempTargetIntervals
         

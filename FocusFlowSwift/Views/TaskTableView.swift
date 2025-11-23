@@ -30,6 +30,8 @@ struct TaskTableView: View {
     @State private var showBulkUpdate = false
     @State private var bulkUpdateText = ""
     @State private var showBulkDeleteConfirmation = false
+    @State private var showTaskActions = false
+    @State private var selectedTaskForActions: Task?
     
     var allTags: [String] {
         var tags = Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } })).sorted()
@@ -81,6 +83,11 @@ struct TaskTableView: View {
                         if !isSelectionMode {
                             selectedTask = task
                             showPersistentNotes = true
+                        }
+                    }, onTaskTap: {
+                        if !isSelectionMode {
+                            selectedTaskForActions = task
+                            showTaskActions = true
                         }
                     })
                 }
@@ -202,6 +209,14 @@ struct TaskTableView: View {
         } message: {
             Text("Are you sure you want to delete these tasks? This action cannot be undone.")
         }
+        .sheet(isPresented: $showTaskActions) {
+            if let task = selectedTaskForActions {
+                TaskActionsView(task: task, onTaskDeleted: {
+                    selectedTaskForActions = nil
+                })
+                    .presentationDetents([.medium, .large])
+            }
+        }
     }
     
     private var filterSection: some View {
@@ -247,6 +262,7 @@ struct TaskRowView: View {
     let task: Task
     let onNotesAction: () -> Void
     let onPersistentNotesAction: () -> Void
+    var onTaskTap: (() -> Void)? = nil
     @State private var showTimeSpentEditor = false
     
     private func priorityColor(_ priority: String) -> Color {
@@ -370,6 +386,10 @@ struct TaskRowView: View {
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTaskTap?()
+        }
         .sheet(isPresented: $showTimeSpentEditor) {
             TimeSpentEditorView(task: task)
         }
