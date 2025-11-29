@@ -8,6 +8,7 @@ struct AlertManagerView: View {
     @State private var editingAlert: AlertInstance? = nil
     @State private var selectedAlert: AlertInstance? = nil
     @State private var showHiddenAlerts = false
+    @State private var showingMultitaskingTimer = false
     
     var body: some View {
         NavigationView {
@@ -20,6 +21,11 @@ struct AlertManagerView: View {
                     // Active alerts section
                     if !currentAlerts.isEmpty {
                         activeAlertsSection(currentAlerts)
+                    }
+                    
+                    // Multitasking Timer button
+                    if !showHiddenAlerts {
+                        multitaskingTimerSection
                     }
                     
                     // Add new alert button
@@ -41,6 +47,9 @@ struct AlertManagerView: View {
             }
             .sheet(item: $selectedAlert) { instance in
                 DetailedAlertView(instance: instance)
+            }
+            .fullScreenCover(isPresented: $showingMultitaskingTimer) {
+                MultitaskingTimerView()
             }
             .onAppear {
                 // Initialize AlertManager with modelContext
@@ -157,6 +166,25 @@ struct AlertManagerView: View {
                     )
                 }
             }
+        }
+    }
+    
+    private var multitaskingTimerSection: some View {
+        Button(action: { showingMultitaskingTimer = true }) {
+            HStack {
+                Image(systemName: "timer.square")
+                    .font(.title3)
+                Text("Multitasking Timer")
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            .foregroundStyle(.purple)
         }
     }
     

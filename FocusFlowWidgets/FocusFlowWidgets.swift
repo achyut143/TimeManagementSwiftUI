@@ -9,9 +9,10 @@ struct FocusFlowWidgetsBundle: WidgetBundle {
         // Control Widget (existing)
         FocusFlowWidgetsControl()
         
-        // Live Activity Widget (new)
+        // Live Activity Widgets
         if #available(iOS 16.1, *) {
             FocusActivityWidget()
+            BackgroundCounterActivityWidget()
         }
     }
 }
@@ -51,15 +52,27 @@ struct FocusActivityWidget: Widget {
                         
                         // Countdown timer
                         if !context.state.isPaused {
-                            HStack(spacing: 2) {
-                                Image(systemName: "clock")
-                                    .foregroundColor(.orange)
-                                    .font(.caption2)
-                                Text(context.state.nextAlertTime, style: .timer)
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.orange)
-                                    .monospacedDigit()
+                            let timeRemaining = context.state.nextAlertTime.timeIntervalSinceNow
+                            if timeRemaining > 0 {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "clock")
+                                        .foregroundColor(.orange)
+                                        .font(.caption2)
+                                    Text(context.state.nextAlertTime, style: .timer)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.orange)
+                                        .monospacedDigit()
+                                }
+                            } else {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .foregroundColor(.orange)
+                                        .font(.caption2)
+                                    Text("Updating...")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                }
                             }
                         }
                     }
@@ -126,35 +139,167 @@ struct FocusActivityWidget: Widget {
                         .foregroundColor(.orange)
                         .font(.caption)
                 } else {
-                    // Show countdown timer
-                    Text(context.state.nextAlertTime, style: .timer)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.orange)
-                        .monospacedDigit()
-                        .id("timer-\(context.state.updateCounter)")
+                    // Show countdown timer - check if time is valid
+                    let timeRemaining = context.state.nextAlertTime.timeIntervalSinceNow
+                    if timeRemaining > 0 {
+                        Text(context.state.nextAlertTime, style: .timer)
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.orange)
+                            .monospacedDigit()
+                            .id("timer-\(context.state.updateCounter)")
+                    } else {
+                        // Fallback when timer is in the past (update pending)
+                        HStack(spacing: 2) {
+                            Text("\(context.state.currentInterval)")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 8))
+                                .foregroundColor(.orange)
+                        }
+                        .id("pending-\(context.state.updateCounter)")
+                    }
                 }
             } minimal: {
-                // Show interval count and countdown in minimal view
+                // Show interval count in minimal view
                 if context.state.isPaused {
                     Image(systemName: "pause.circle.fill")
                         .foregroundColor(.orange)
                         .font(.caption2)
                 } else {
-                    VStack(spacing: 0) {
-                        Text("\(context.state.currentInterval)")
-                            .font(.system(size: 8))
+                    // Always show interval number prominently
+                    Text("\(context.state.currentInterval)")
+                        .font(.system(size: 12))
+                        .fontWeight(.bold)
+                        .foregroundColor(.blue)
+                        .id("minimal-\(context.state.updateCounter)")
+                }
+            }
+        }
+    }
+}
+
+
+@available(iOS 16.1, *)
+struct BackgroundCounterActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: BackgroundCounterAttributes.self) { context in
+            // Lock screen/banner UI
+            BackgroundCounterLiveActivityView(context: context)
+        } dynamicIsland: { (context: ActivityViewContext<BackgroundCounterAttributes>) in
+            DynamicIsland {
+                // Expanded UI
+                DynamicIslandExpandedRegion(.leading) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundColor(.blue)
+                                .font(.caption)
+                            Text("Session")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Live counting timer
+                        if let startTime = context.state.backgroundStartTime {
+                            Text(startTime, style: .timer)
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                                .monospacedDigit()
+                        } else {
+                            Text(formattedTime(context.state.currentSessionTime))
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                
+                DynamicIslandExpandedRegion(.trailing) {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                            Text("Total")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        Text(formattedTime(context.state.totalBackgroundTime))
+                            .font(.caption)
                             .fontWeight(.bold)
-                            .foregroundColor(.blue)
-                        Text(context.state.nextAlertTime, style: .timer)
-                            .font(.system(size: 7))
-                            .fontWeight(.semibold)
                             .foregroundColor(.orange)
                             .monospacedDigit()
                     }
-                    .id("minimal-timer-\(context.state.updateCounter)")
                 }
+                
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack {
+                        if context.state.isCountingInBackground {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 6, height: 6)
+                                Text("Counting in background")
+                                    .font(.caption2)
+                                    .foregroundColor(.green)
+                            }
+                        } else {
+                            Text("Background time tracker")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        if let startTime = context.state.backgroundStartTime {
+                            Text("Started: \(startTime, style: .time)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                }
+            } compactLeading: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundColor(.blue)
+                    .font(.caption)
+            } compactTrailing: {
+                // Live counting timer in compact view
+                if let startTime = context.state.backgroundStartTime {
+                    Text(startTime, style: .timer)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.blue)
+                        .monospacedDigit()
+                } else {
+                    Text(formattedTime(context.state.currentSessionTime))
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.blue)
+                        .monospacedDigit()
+                }
+            } minimal: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundColor(.blue)
+                    .font(.caption2)
             }
+        }
+    }
+    
+    private func formattedTime(_ interval: TimeInterval) -> String {
+        let hours = Int(interval) / 3600
+        let minutes = Int(interval) / 60 % 60
+        let seconds = Int(interval) % 60
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%d:%02d", minutes, seconds)
         }
     }
 }

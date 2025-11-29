@@ -6,21 +6,42 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showAlertView = false
     @State private var showAlertManager = false
+    @State private var showBackgroundCounter = false
     
     var body: some View {
         ZStack {
             TabView {
                 NavigationStack {
-                    TasksCalendarView()
-                      .toolbar {
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                Button {
-                                    showAlertView = true
-                                } label: {
-                                    Image(systemName: "clock")
+                    VStack(spacing: 0) {
+                        // Background Counter at the top
+                        if showBackgroundCounter {
+                            BackgroundCounterView()
+                                .padding(.horizontal)
+                                .padding(.top, 8)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                        
+                        TasksCalendarView()
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button {
+                                withAnimation {
+                                    showBackgroundCounter.toggle()
                                 }
+                            } label: {
+                                Image(systemName: showBackgroundCounter ? "clock.arrow.circlepath.fill" : "clock.arrow.circlepath")
+                                    .foregroundColor(.blue)
                             }
                         }
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button {
+                                showAlertView = true
+                            } label: {
+                                Image(systemName: "clock")
+                            }
+                        }
+                    }
                 }
                 .tabItem {
                     Image(systemName: "calendar")

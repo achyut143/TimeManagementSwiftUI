@@ -9,6 +9,7 @@ import WidgetKit
 @main
 struct FocusFlowSwiftApp: App {
     @StateObject private var alertManager = AlertManager()
+    @StateObject private var backgroundCounter = BackgroundCounterManager.shared
     
     init() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.focusflow.refresh", using: nil) { task in
@@ -28,10 +29,12 @@ struct FocusFlowSwiftApp: App {
                 .environmentObject(alertManager)
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                     alertManager.handleAppLifecycleChange(isActive: false)
+                    backgroundCounter.handleAppDidEnterBackground()
                     Self.scheduleBackgroundTask()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     alertManager.handleAppLifecycleChange(isActive: true)
+                    backgroundCounter.handleAppDidBecomeActive()
                     // Clean up any delivered notifications when app becomes active
                     UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                 }

@@ -13,7 +13,6 @@ struct AlertView: View {
     @Query private var savedConfigurations: [CycleConfiguration]
     @State private var countdownTimer: Timer?
     @State private var timeRemaining: TimeInterval = 0
-    @State private var childLockEnabled = false
     @State private var showingChildLockAlert = false
     @State private var pendingAction: (() -> Void)?
 
@@ -52,10 +51,10 @@ struct AlertView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: {
-                        childLockEnabled.toggle()
+                        settings.childLockEnabled.toggle()
                     }) {
-                        Image(systemName: childLockEnabled ? "lock.fill" : "lock.open.fill")
-                            .foregroundStyle(childLockEnabled ? .orange : .secondary)
+                        Image(systemName: settings.childLockEnabled ? "lock.fill" : "lock.open.fill")
+                            .foregroundStyle(settings.childLockEnabled ? .orange : .secondary)
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -132,7 +131,7 @@ struct AlertView: View {
                 pendingAction = nil
             }
             Button("Unlock & Continue", role: .destructive) {
-                childLockEnabled = false
+                settings.childLockEnabled = false
                 pendingAction?()
                 pendingAction = nil
             }
@@ -142,7 +141,7 @@ struct AlertView: View {
     }
     
     private func executeWithChildLockCheck(action: @escaping () -> Void) {
-        if childLockEnabled {
+        if settings.childLockEnabled {
             pendingAction = action
             showingChildLockAlert = true
         } else {
@@ -326,14 +325,14 @@ struct AlertView: View {
                 HStack {
                     Text("Use Cycles")
                         .font(.headline)
-                    if childLockEnabled {
+                    if settings.childLockEnabled {
                         Image(systemName: "lock.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
                 }
             }
-            .disabled(childLockEnabled)
+            .disabled(settings.childLockEnabled)
             
             if settings.useCycles {
                 Text("Configure custom interval cycles with different durations")
@@ -377,14 +376,14 @@ struct AlertView: View {
                         }) {
                             HStack {
                                 Text("Load Config")
-                                if childLockEnabled {
+                                if settings.childLockEnabled {
                                     Image(systemName: "lock.fill")
                                         .font(.caption2)
                                 }
                             }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                         
                         Button(action: {
                             executeWithChildLockCheck {
@@ -393,14 +392,14 @@ struct AlertView: View {
                         }) {
                             HStack {
                                 Text("Save Config")
-                                if childLockEnabled {
+                                if settings.childLockEnabled {
                                     Image(systemName: "lock.fill")
                                         .font(.caption2)
                                 }
                             }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                         
                         if settings.currentCycleConfiguration != nil {
                             Button(action: {
@@ -411,7 +410,7 @@ struct AlertView: View {
                             }) {
                                 HStack {
                                     Text("Clear Config")
-                                    if childLockEnabled {
+                                    if settings.childLockEnabled {
                                         Image(systemName: "lock.fill")
                                             .font(.caption2)
                                     }
@@ -419,7 +418,7 @@ struct AlertView: View {
                             }
                             .buttonStyle(.bordered)
                             .foregroundStyle(.red)
-                            .disabled(childLockEnabled)
+                            .disabled(settings.childLockEnabled)
                         }
                     }
                     .padding(.horizontal, 1)
@@ -444,7 +443,7 @@ struct AlertView: View {
                 VStack(spacing: 12) {
                     HStack {
                         Text("Interval Duration:")
-                        if childLockEnabled {
+                        if settings.childLockEnabled {
                             Image(systemName: "lock.fill")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -458,7 +457,7 @@ struct AlertView: View {
                             text: Binding(
                                 get: { String(settings.intervalMinutes) },
                                 set: { newValue in
-                                    if !childLockEnabled {
+                                    if !settings.childLockEnabled {
                                         if let value = Int(newValue) {
                                             settings.intervalMinutes = max(0, value)
                                         } else if newValue.isEmpty {
@@ -471,7 +470,7 @@ struct AlertView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 60)
                         .keyboardType(.numberPad)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                         Text("min")
                         
                         TextField(
@@ -479,7 +478,7 @@ struct AlertView: View {
                             text: Binding(
                                 get: { String(settings.intervalSeconds) },
                                 set: { newValue in
-                                    if !childLockEnabled {
+                                    if !settings.childLockEnabled {
                                         if let value = Int(newValue) {
                                             settings.intervalSeconds = max(0, min(59, value))
                                         } else if newValue.isEmpty {
@@ -492,7 +491,7 @@ struct AlertView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 60)
                         .keyboardType(.numberPad)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                         Text("sec")
                     }
                 }
@@ -500,7 +499,7 @@ struct AlertView: View {
                 VStack(spacing: 12) {
                     HStack {
                         Text("Rest Period:")
-                        if childLockEnabled {
+                        if settings.childLockEnabled {
                             Image(systemName: "lock.fill")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -514,7 +513,7 @@ struct AlertView: View {
                             text: Binding(
                                 get: { String(settings.restMinutes) },
                                 set: { newValue in
-                                    if !childLockEnabled {
+                                    if !settings.childLockEnabled {
                                         if let value = Int(newValue) {
                                             settings.restMinutes = max(0, value)
                                         } else if newValue.isEmpty {
@@ -527,7 +526,7 @@ struct AlertView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 60)
                         .keyboardType(.numberPad)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                         Text("min")
                         
                         TextField(
@@ -535,7 +534,7 @@ struct AlertView: View {
                             text: Binding(
                                 get: { String(settings.restSeconds) },
                                 set: { newValue in
-                                    if !childLockEnabled {
+                                    if !settings.childLockEnabled {
                                         if let value = Int(newValue) {
                                             settings.restSeconds = max(0, min(59, value))
                                         } else if newValue.isEmpty {
@@ -548,7 +547,7 @@ struct AlertView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 60)
                         .keyboardType(.numberPad)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                         Text("sec")
                     }
                     
@@ -575,14 +574,14 @@ struct AlertView: View {
                                 text: Binding(
                                     get: { settings.workIntervalText },
                                     set: { newValue in
-                                        if !childLockEnabled {
+                                        if !settings.childLockEnabled {
                                             settings.workIntervalText = newValue
                                         }
                                     }
                                 )
                             )
                             .textFieldStyle(.roundedBorder)
-                            .disabled(childLockEnabled)
+                            .disabled(settings.childLockEnabled)
                         }
                         
                         HStack {
@@ -593,14 +592,14 @@ struct AlertView: View {
                                 text: Binding(
                                     get: { settings.restIntervalText },
                                     set: { newValue in
-                                        if !childLockEnabled {
+                                        if !settings.childLockEnabled {
                                             settings.restIntervalText = newValue
                                         }
                                     }
                                 )
                             )
                             .textFieldStyle(.roundedBorder)
-                            .disabled(childLockEnabled)
+                            .disabled(settings.childLockEnabled)
                         }
                     }
                     
@@ -616,7 +615,7 @@ struct AlertView: View {
                 }) {
                     HStack {
                         Text("Configure Cycles")
-                        if childLockEnabled {
+                        if settings.childLockEnabled {
                             Image(systemName: "lock.fill")
                                 .font(.caption)
                         }
@@ -624,7 +623,7 @@ struct AlertView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(childLockEnabled)
+                .disabled(settings.childLockEnabled)
             }
             
             // Cycle navigation controls
@@ -819,7 +818,7 @@ struct AlertView: View {
             VStack(spacing: 12) {
                 HStack {
                     Text("Interval:")
-                    if childLockEnabled {
+                    if settings.childLockEnabled {
                         Image(systemName: "lock.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -833,7 +832,7 @@ struct AlertView: View {
                         text: Binding(
                             get: { String(settings.intervalMinutes) },
                             set: { newValue in
-                                if !childLockEnabled {
+                                if !settings.childLockEnabled {
                                     if let value = Int(newValue) {
                                         settings.intervalMinutes = max(0, value)
                                     } else if newValue.isEmpty {
@@ -846,7 +845,7 @@ struct AlertView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 60)
                     .keyboardType(.numberPad)
-                    .disabled(childLockEnabled)
+                    .disabled(settings.childLockEnabled)
                     Text("min")
                     
                     TextField(
@@ -854,7 +853,7 @@ struct AlertView: View {
                         text: Binding(
                             get: { String(settings.intervalSeconds) },
                             set: { newValue in
-                                if !childLockEnabled {
+                                if !settings.childLockEnabled {
                                     if let value = Int(newValue) {
                                         settings.intervalSeconds = max(0, min(59, value))
                                     } else if newValue.isEmpty {
@@ -867,7 +866,7 @@ struct AlertView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 60)
                     .keyboardType(.numberPad)
-                    .disabled(childLockEnabled)
+                    .disabled(settings.childLockEnabled)
                     Text("sec")
                 }
             }
@@ -875,7 +874,7 @@ struct AlertView: View {
             VStack(spacing: 12) {
                 HStack {
                     Text("Rest Period:")
-                    if childLockEnabled {
+                    if settings.childLockEnabled {
                         Image(systemName: "lock.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -889,7 +888,7 @@ struct AlertView: View {
                         text: Binding(
                             get: { String(settings.restMinutes) },
                             set: { newValue in
-                                if !childLockEnabled {
+                                if !settings.childLockEnabled {
                                     if let value = Int(newValue) {
                                         settings.restMinutes = max(0, value)
                                     } else if newValue.isEmpty {
@@ -902,7 +901,7 @@ struct AlertView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 60)
                     .keyboardType(.numberPad)
-                    .disabled(childLockEnabled)
+                    .disabled(settings.childLockEnabled)
                     Text("min")
                     
                     TextField(
@@ -910,7 +909,7 @@ struct AlertView: View {
                         text: Binding(
                             get: { String(settings.restSeconds) },
                             set: { newValue in
-                                if !childLockEnabled {
+                                if !settings.childLockEnabled {
                                     if let value = Int(newValue) {
                                         settings.restSeconds = max(0, min(59, value))
                                     } else if newValue.isEmpty {
@@ -923,7 +922,7 @@ struct AlertView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 60)
                     .keyboardType(.numberPad)
-                    .disabled(childLockEnabled)
+                    .disabled(settings.childLockEnabled)
                     Text("sec")
                 }
                 
@@ -936,7 +935,7 @@ struct AlertView: View {
                 HStack {
                     Text("Speech Announcements")
                         .font(.headline)
-                    if childLockEnabled {
+                    if settings.childLockEnabled {
                         Image(systemName: "lock.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -953,14 +952,14 @@ struct AlertView: View {
                             text: Binding(
                                 get: { settings.workIntervalText },
                                 set: { newValue in
-                                    if !childLockEnabled {
+                                    if !settings.childLockEnabled {
                                         settings.workIntervalText = newValue
                                     }
                                 }
                             )
                         )
                         .textFieldStyle(.roundedBorder)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                     }
                     
                     HStack {
@@ -971,14 +970,14 @@ struct AlertView: View {
                             text: Binding(
                                 get: { settings.restIntervalText },
                                 set: { newValue in
-                                    if !childLockEnabled {
+                                    if !settings.childLockEnabled {
                                         settings.restIntervalText = newValue
                                     }
                                 }
                             )
                         )
                         .textFieldStyle(.roundedBorder)
-                        .disabled(childLockEnabled)
+                        .disabled(settings.childLockEnabled)
                     }
                 }
                 
@@ -989,7 +988,7 @@ struct AlertView: View {
 
             HStack {
                 Text("Target:")
-                if childLockEnabled {
+                if settings.childLockEnabled {
                     Image(systemName: "lock.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -1000,7 +999,7 @@ struct AlertView: View {
                     value: Binding(
                         get: { settings.targetIntervals ?? 0 },
                         set: {
-                            if !childLockEnabled {
+                            if !settings.childLockEnabled {
                                 settings.targetIntervals = $0 > 0 ? $0 : nil
                             }
                         }
@@ -1010,7 +1009,7 @@ struct AlertView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 60)
                 .keyboardType(.numberPad)
-                .disabled(childLockEnabled)
+                .disabled(settings.childLockEnabled)
                 Text("intervals")
             }
         }
@@ -1064,7 +1063,7 @@ struct AlertView: View {
                     Text(settings.isPlaying ? (settings.useCycles ? "Pause Alerts" : "Stop Alerts") : 
                          (settings.isPaused && settings.useCycles ? "Resume Alerts" : "Start Alerts"))
                         .font(.headline)
-                    if childLockEnabled {
+                    if settings.childLockEnabled {
                         Image(systemName: "lock.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -1072,7 +1071,7 @@ struct AlertView: View {
                 }
             }
             .toggleStyle(SwitchToggleStyle(tint: .blue))
-            .disabled(childLockEnabled)
+            .disabled(settings.childLockEnabled)
 
             HStack(spacing: 16) {
                 Button(action: {
@@ -1094,7 +1093,7 @@ struct AlertView: View {
                 }) {
                     HStack {
                         Text("Reset")
-                        if childLockEnabled {
+                        if settings.childLockEnabled {
                             Image(systemName: "lock.fill")
                                 .font(.caption)
                         }
@@ -1102,7 +1101,7 @@ struct AlertView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
-                .disabled(childLockEnabled)
+                .disabled(settings.childLockEnabled)
 
                 Button(action: {
                     executeWithChildLockCheck {
@@ -1133,7 +1132,7 @@ struct AlertView: View {
                 }) {
                     HStack {
                         Text("Clear All")
-                        if childLockEnabled {
+                        if settings.childLockEnabled {
                             Image(systemName: "lock.fill")
                                 .font(.caption)
                         }
@@ -1141,7 +1140,7 @@ struct AlertView: View {
                 }
                 .buttonStyle(.bordered)
                 .frame(maxWidth: .infinity)
-                .disabled(childLockEnabled)
+                .disabled(settings.childLockEnabled)
             }
         }
         .padding()

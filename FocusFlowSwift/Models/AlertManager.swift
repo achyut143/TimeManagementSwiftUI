@@ -354,13 +354,20 @@ class AlertInstance: Identifiable {
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         
-        var message = "Interval \(counter)"
+        var message = ""
         
-        if useCycles && !cyclePhases.isEmpty {
-            let orderedPhases = orderedCyclePhases
-            if currentCycleIndex < orderedPhases.count {
-                let currentPhase = orderedPhases[currentCycleIndex]
-                message = "\(currentPhase.name) - Interval \(currentPhase.currentIntervals)"
+        // Use custom work interval text if provided, otherwise use default
+        if !workIntervalText.trimmingCharacters(in: .whitespaces).isEmpty {
+            message = workIntervalText
+        } else {
+            message = "Interval \(counter)"
+            
+            if useCycles && !cyclePhases.isEmpty {
+                let orderedPhases = orderedCyclePhases
+                if currentCycleIndex < orderedPhases.count {
+                    let currentPhase = orderedPhases[currentCycleIndex]
+                    message = "\(currentPhase.name) - Interval \(currentPhase.currentIntervals)"
+                }
             }
         }
         

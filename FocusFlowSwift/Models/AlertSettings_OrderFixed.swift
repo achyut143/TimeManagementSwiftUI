@@ -113,6 +113,9 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published var shouldResetCyclesOnStart: Bool = true {
         didSet { logger.info("shouldResetCyclesOnStart changed: \(oldValue) -> \(self.shouldResetCyclesOnStart)") }
     }
+    @Published var childLockEnabled: Bool = false {
+        didSet { logger.info("childLockEnabled changed: \(oldValue) -> \(self.childLockEnabled)") }
+    }
     
     private var timer: Timer?
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -359,20 +362,30 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
         
-        var message = "Interval \(counter)"
+        var message = ""
         
-        if useCycles && !cyclePhases.isEmpty {
-            let orderedPhases = orderedCyclePhases
-            if currentCycleIndex < orderedPhases.count {
-                let currentPhase = orderedPhases[currentCycleIndex]
-                message = "\(currentPhase.name) - Interval \(currentPhase.currentIntervals)"
-            }
-        }
-        
-        // Add rest period notification if configured and custom text is provided
+        // Check if we're about to start a rest period and have custom rest text
         let hasRestPeriod = restMinutes > 0 || restSeconds > 0
-        if hasRestPeriod && !restIntervalText.trimmingCharacters(in: .whitespaces).isEmpty {
-            message += ". \(restIntervalText)"
+        let hasCustomRestText = !restIntervalText.trimmingCharacters(in: .whitespaces).isEmpty
+        let hasCustomWorkText = !workIntervalText.trimmingCharacters(in: .whitespaces).isEmpty
+        
+        if hasRestPeriod && hasCustomRestText {
+            // Use custom rest text instead of default message
+            message = restIntervalText
+        } else if hasCustomWorkText {
+            // Use custom work text for regular intervals
+            message = workIntervalText
+        } else {
+            // Use default interval message
+            message = "Interval \(counter)"
+            
+            if useCycles && !cyclePhases.isEmpty {
+                let orderedPhases = orderedCyclePhases
+                if currentCycleIndex < orderedPhases.count {
+                    let currentPhase = orderedPhases[currentCycleIndex]
+                    message = "\(currentPhase.name) - Interval \(currentPhase.currentIntervals)"
+                }
+            }
         }
         
         let utterance = AVSpeechUtterance(string: message)

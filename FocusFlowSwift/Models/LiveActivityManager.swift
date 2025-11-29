@@ -101,8 +101,15 @@ class LiveActivityManager: ObservableObject {
             
         } catch {
             logger.error("❌ Failed to start Live Activity: \(error.localizedDescription)")
-            print("🔴 Live Activity failed: \(error.localizedDescription)")
-            print("📱 This is expected with free developer accounts on physical devices")
+            
+            // Check if it's the foreground error
+            if error.localizedDescription.contains("foreground") {
+                print("⚠️ Live Activity requires app to be in foreground")
+                print("💡 Keep the app open when starting alerts, then you can minimize")
+            } else {
+                print("🔴 Live Activity failed: \(error.localizedDescription)")
+                print("📱 This is expected with free developer accounts on physical devices")
+            }
             print("💡 The app will use notifications instead for interval tracking")
         }
     }
@@ -133,6 +140,13 @@ class LiveActivityManager: ObservableObject {
             return
         }
         
+        // Check if interval changed - if so, use more aggressive update strategy
+        let intervalChanged = activity.content.state.currentInterval != currentInterval
+        if intervalChanged {
+            logger.info("🔄 Interval changed: \(activity.content.state.currentInterval) → \(currentInterval)")
+            print("🔄 Interval changed! Old: \(activity.content.state.currentInterval), New: \(currentInterval)")
+        }
+        
         // Create unique state to force Dynamic Island refresh - enhanced for free accounts
         let uniqueTimestamp = Date().timeIntervalSince1970
         let randomComponent = Int.random(in: 1...999)
@@ -158,62 +172,55 @@ class LiveActivityManager: ObservableObject {
         // Enhanced update strategy for free developer accounts
         ConcurrencyTask {
             var updateSuccessful = false
+            var attemptCount = 0
+            let maxAttempts = 5
             
-            // Strategy 1: Standard update
-            do {
-                await activity.update(.init(state: contentState, staleDate: nil))
-                self.logger.info("✅ Live Activity updated successfully - Interval: \(currentInterval)")
-                print("✅ Dynamic Island updated: Interval \(currentInterval)")
-                updateSuccessful = true
+            // For interval changes, try multiple rapid updates with different counters
+            if intervalChanged {
+                self.logger.info("🔄 Interval changed - using multi-attempt strategy")
+                print("🔄 Interval changed: \(activity.content.state.currentInterval) → \(currentInterval)")
+            }
+            
+            // Strategy 1: Multiple rapid update attempts with increasing uniqueness
+            while !updateSuccessful && attemptCount < maxAttempts {
+                attemptCount += 1
                 
-            } catch {
-                self.logger.error("❌ Primary update failed: \(error.localizedDescription)")
-                print("❌ Primary update failed: \(error.localizedDescription)")
+                let attemptTimestamp = Date().timeIntervalSince1970 + Double(attemptCount) * 0.1
+                let attemptCounter = uniqueCounter + (attemptCount * 10000)
                 
-                // Strategy 2: Retry with different timestamp
+                let attemptState = FocusActivityAttributes.ContentState(
+                    currentInterval: currentInterval,
+                    totalIntervals: totalIntervals,
+                    intervalName: intervalName,
+                    nextAlertTime: nextAlertTime,
+                    isInCycleMode: isInCycleMode,
+                    currentCycleName: currentCycleName,
+                    cycleProgress: cycleProgress,
+                    timeRemaining: isPaused ? 0 : nextAlertTime.timeIntervalSinceNow,
+                    isPaused: isPaused,
+                    updateTimestamp: attemptTimestamp,
+                    updateCounter: attemptCounter
+                )
+                
                 do {
-                    let retryState = FocusActivityAttributes.ContentState(
-                        currentInterval: currentInterval,
-                        totalIntervals: totalIntervals,
-                        intervalName: intervalName,
-                        nextAlertTime: nextAlertTime,
-                        isInCycleMode: isInCycleMode,
-                        currentCycleName: currentCycleName,
-                        cycleProgress: cycleProgress,
-                        timeRemaining: isPaused ? 0 : nextAlertTime.timeIntervalSinceNow,
-                        isPaused: isPaused,
-                        updateTimestamp: Date().timeIntervalSince1970 + 0.5,
-                        updateCounter: uniqueCounter + 1000
-                    )
-                    
-                    await activity.update(.init(state: retryState, staleDate: nil))
-                    self.logger.info("✅ Live Activity updated on retry - Interval: \(currentInterval)")
-                    print("✅ Dynamic Island updated on retry: Interval \(currentInterval)")
+                    await activity.update(.init(state: attemptState, staleDate: nil))
+                    self.logger.info("✅ Live Activity updated (attempt \(attemptCount)) - Interval: \(currentInterval)")
+                    print("✅ Dynamic Island updated: Interval \(currentInterval) (attempt \(attemptCount))")
                     updateSuccessful = true
                     
                 } catch {
-                    self.logger.error("❌ Retry failed: \(error.localizedDescription)")
-                    print("❌ Retry failed: \(error.localizedDescription)")
+                    self.logger.error("❌ Update attempt \(attemptCount) failed: \(error.localizedDescription)")
+                    if attemptCount < maxAttempts {
+                        // Brief delay before retry
+                        try? await ConcurrencyTask.sleep(for: .milliseconds(50))
+                    }
                 }
             }
             
-            // Strategy 3: Force restart if updates keep failing (for free accounts)
             if !updateSuccessful {
-                self.logger.info("🔄 All updates failed, forcing restart for free account compatibility")
-                print("🔄 Forcing restart for free developer account")
-                
-                await MainActor.run {
-                    self.restartActivityWithNewState(
-                        currentInterval: currentInterval,
-                        totalIntervals: totalIntervals,
-                        intervalName: intervalName,
-                        nextAlertTime: nextAlertTime,
-                        isInCycleMode: isInCycleMode,
-                        currentCycleName: currentCycleName,
-                        cycleProgress: cycleProgress,
-                        isPaused: isPaused
-                    )
-                }
+                self.logger.warning("⚠️ All \(maxAttempts) update attempts failed - Live Activity may be stale")
+                print("⚠️ Live Activity updates failed - this is common with free accounts")
+                print("💡 The widget will show refresh indicator until next successful update")
             }
             
             // Force multiple widget refreshes for better reliability
@@ -223,7 +230,7 @@ class LiveActivityManager: ObservableObject {
             }
             
             // Staggered refreshes for free accounts
-            for delay in [100, 300, 500] {
+            for delay in [100, 300, 500, 1000] {
                 try? await ConcurrencyTask.sleep(for: .milliseconds(delay))
                 await MainActor.run {
                     WidgetCenter.shared.reloadAllTimelines()
@@ -232,39 +239,7 @@ class LiveActivityManager: ObservableObject {
         }
     }
     
-    // Helper method to restart activity when updates fail
-    private func restartActivityWithNewState(
-        currentInterval: Int,
-        totalIntervals: Int?,
-        intervalName: String,
-        nextAlertTime: Date,
-        isInCycleMode: Bool,
-        currentCycleName: String?,
-        cycleProgress: String?,
-        isPaused: Bool
-    ) {
-        logger.info("🔄 Restarting Live Activity due to update failure - Interval: \(currentInterval)")
-        print("🔄 Restarting Dynamic Island for free account compatibility")
-        
-        // End current activity
-        endCurrentActivity()
-        
-        // Longer delay for free accounts to ensure clean restart
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            self.startFocusActivity(
-                intervalDuration: 5, // Default, will be overridden
-                currentInterval: currentInterval,
-                totalIntervals: totalIntervals,
-                intervalName: intervalName,
-                nextAlertTime: nextAlertTime,
-                isInCycleMode: isInCycleMode,
-                currentCycleName: currentCycleName,
-                cycleProgress: cycleProgress
-            )
-            
-            print("✅ Live Activity restarted with interval \(currentInterval)")
-        }
-    }
+
     
     func pauseFocusActivity() {
         guard let activity = currentActivity else { return }
