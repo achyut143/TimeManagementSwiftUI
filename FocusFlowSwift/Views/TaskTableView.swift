@@ -211,7 +211,7 @@ struct TaskTableView: View {
         }
         .sheet(isPresented: $showTaskActions) {
             if let task = selectedTaskForActions {
-                TaskActionsView(task: task, onTaskDeleted: {
+                TaskRewardActionsView(task: task, onTaskDeleted: {
                     selectedTaskForActions = nil
                 })
                     .presentationDetents([.medium, .large])

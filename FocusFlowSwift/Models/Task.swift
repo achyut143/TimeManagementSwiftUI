@@ -20,11 +20,15 @@ class Task: Transferable {
     var priority: String = "P3"
     var timeSpent: Double? // Actual time spent in minutes
     var elapsedTime: Double? // Allocated/elapsed time in minutes for untimed tasks
+    var copySubtasks: Bool = false // Toggle to copy subtasks when repeat task is created
     
     @Relationship(deleteRule: .cascade, inverse: \Subtask.parentTask)
     var subtasks: [Subtask]? = []
     
-    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil) {
+    @Relationship(deleteRule: .cascade, inverse: \TaskRewardLink.task)
+    var rewardLinks: [TaskRewardLink]? = []
+    
+    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false) {
         self.title = title
         self.taskDescription = taskDescription
         self.startTime = startTime
@@ -41,6 +45,7 @@ class Task: Transferable {
         self.priority = priority
         self.timeSpent = timeSpent
         self.elapsedTime = elapsedTime
+        self.copySubtasks = copySubtasks
     }
     
     // Helper method to get calculated time for timed tasks or timeSpent for untimed tasks

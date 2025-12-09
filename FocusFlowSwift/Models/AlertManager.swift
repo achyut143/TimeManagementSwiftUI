@@ -356,10 +356,19 @@ class AlertInstance: Identifiable {
         
         var message = ""
         
-        // Use custom work interval text if provided, otherwise use default
-        if !workIntervalText.trimmingCharacters(in: .whitespaces).isEmpty {
+        // Check if we're about to start a rest period and have custom rest text
+        let hasRestPeriod = restMinutes > 0 || restSeconds > 0
+        let hasCustomRestText = !restIntervalText.trimmingCharacters(in: .whitespaces).isEmpty
+        let hasCustomWorkText = !workIntervalText.trimmingCharacters(in: .whitespaces).isEmpty
+        
+        if hasRestPeriod && hasCustomRestText {
+            // Use custom rest text instead of default message
+            message = restIntervalText
+        } else if hasCustomWorkText {
+            // Use custom work text for regular intervals
             message = workIntervalText
         } else {
+            // Use default interval message
             message = "Interval \(counter)"
             
             if useCycles && !cyclePhases.isEmpty {
@@ -369,12 +378,6 @@ class AlertInstance: Identifiable {
                     message = "\(currentPhase.name) - Interval \(currentPhase.currentIntervals)"
                 }
             }
-        }
-        
-        // Add rest period notification if configured and custom text is provided
-        let hasRestPeriod = restMinutes > 0 || restSeconds > 0
-        if hasRestPeriod && !restIntervalText.trimmingCharacters(in: .whitespaces).isEmpty {
-            message += ". \(restIntervalText)"
         }
         
         let utterance = AVSpeechUtterance(string: message)

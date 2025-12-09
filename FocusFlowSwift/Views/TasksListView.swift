@@ -11,6 +11,8 @@ struct TasksListView: View {
     @State private var taskWeight = 1.0
     @State private var taskPriority = "P3"
     @State private var selectedParentTask: Task?
+    @State private var showRewardActions = false
+    @State private var selectedTaskForRewards: Task?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +43,15 @@ struct TasksListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             updateQuery()
+        }
+        .sheet(isPresented: $showRewardActions) {
+            if let task = selectedTaskForRewards {
+                TaskRewardActionsView(task: task, onTaskDeleted: {
+                    selectedTaskForRewards = nil
+                    updateQuery()
+                })
+                .presentationDetents([.medium, .large])
+            }
         }
     }
     
@@ -194,6 +205,24 @@ struct TasksListView: View {
             .padding()
             .background(taskBackgroundColor(parentTask))
             .cornerRadius(12)
+            .onLongPressGesture {
+                selectedTaskForRewards = parentTask
+                showRewardActions = true
+            }
+            .contextMenu {
+                Button {
+                    selectedTaskForRewards = parentTask
+                    showRewardActions = true
+                } label: {
+                    Label("Reward Workflows", systemImage: "gift")
+                }
+                
+                Button {
+                    toggleTaskCompletion(parentTask)
+                } label: {
+                    Label(parentTask.completed ? "Mark Incomplete" : "Mark Complete", systemImage: parentTask.completed ? "xmark.circle" : "checkmark.circle")
+                }
+            }
             
             // Child tasks (when expanded)
             if isExpanded && !childTasks.isEmpty {
@@ -264,6 +293,24 @@ struct TasksListView: View {
         .cornerRadius(isChild ? 8 : 12)
         .onTapGesture {
             toggleTaskCompletion(task)
+        }
+        .onLongPressGesture {
+            selectedTaskForRewards = task
+            showRewardActions = true
+        }
+        .contextMenu {
+            Button {
+                selectedTaskForRewards = task
+                showRewardActions = true
+            } label: {
+                Label("Reward Workflows", systemImage: "gift")
+            }
+            
+            Button {
+                toggleTaskCompletion(task)
+            } label: {
+                Label(task.completed ? "Mark Incomplete" : "Mark Complete", systemImage: task.completed ? "xmark.circle" : "checkmark.circle")
+            }
         }
     }
     
@@ -355,13 +402,42 @@ struct TasksListView: View {
         
         if task.completed {
             task.notCompleted = false
-            // Add points to Unclaimed Points reward
-            print("➕ Adding \(task.effectiveWeight) points for completed task")
-            Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
+            
+            // Check if task has reward links
+            let activeLinks = task.rewardLinks?.filter { $0.isActive } ?? []
+            
+            if !activeLinks.isEmpty {
+                // Task has reward links - add points to linked rewards
+                print("🎁 Task has \(activeLinks.count) reward link(s)")
+                for link in activeLinks {
+                    if let reward = link.reward {
+                        print("➕ Adding \(link.pointsToAdd) points to '\(reward.name)'")
+                        reward.addAmount(link.pointsToAdd, context: modelContext, taskTitle: task.title)
+                    }
+                }
+            } else {
+                // No reward links - add to Unclaimed Points
+                print("➕ No reward links, adding \(task.effectiveWeight) points to Unclaimed Points")
+                Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
+            }
         } else if wasCompleted {
             // If uncompleting, subtract the points
-            print("➖ Subtracting \(task.effectiveWeight) points for uncompleted task")
-            Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
+            let activeLinks = task.rewardLinks?.filter { $0.isActive } ?? []
+            
+            if !activeLinks.isEmpty {
+                // Subtract from linked rewards
+                print("🎁 Removing points from \(activeLinks.count) reward link(s)")
+                for link in activeLinks {
+                    if let reward = link.reward {
+                        print("➖ Subtracting \(link.pointsToAdd) points from '\(reward.name)'")
+                        reward.addAmount(-link.pointsToAdd, context: modelContext, taskTitle: task.title)
+                    }
+                }
+            } else {
+                // Subtract from Unclaimed Points
+                print("➖ Subtracting \(task.effectiveWeight) points from Unclaimed Points")
+                Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
+            }
         }
         
         do {

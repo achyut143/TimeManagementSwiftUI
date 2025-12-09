@@ -668,6 +668,17 @@ struct UntimedTasksView: View {
         )
         
         modelContext.insert(newTask)
+        
+        // Copy reward workflows from original task
+        if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
+            for link in rewardLinks {
+                if let reward = link.reward {
+                    let newLink = TaskRewardLink(task: newTask, reward: reward)
+                    modelContext.insert(newLink)
+                }
+            }
+        }
+        
         try? modelContext.save()
     }
     

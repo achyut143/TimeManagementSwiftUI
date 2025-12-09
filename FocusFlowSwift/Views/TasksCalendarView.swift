@@ -22,6 +22,7 @@ struct TasksCalendarView: View {
     @State private var taskWeight = 1.0
     @State private var taskPriority = "P3"
     @State private var isUntimedTask = false
+    @State private var copySubtasks = false
     @State private var showNotesDialog = false
     @State private var showPersistentNotesDialog = false
     @State private var notesTask: Task?
@@ -291,6 +292,12 @@ struct TasksCalendarView: View {
                         createTaskFromSeparateFields()
                     }
                     .buttonStyle(.borderedProminent)
+                }
+                
+                if repeatDays > 0 {
+                    Toggle("Copy Subtasks on Repeat", isOn: $copySubtasks)
+                        .padding(.horizontal)
+                        .font(.caption)
                 }
             }
         }
@@ -893,7 +900,8 @@ struct TasksCalendarView: View {
                 weight: taskWeight,
                 date: selectedDate, // Keep the date
                 repeatAgain: repeatDays > 0 ? repeatDays : nil, // Allow repeat for untimed tasks
-                priority: taskPriority
+                priority: taskPriority,
+                copySubtasks: copySubtasks
             )
         } else {
             let formatter = DateFormatter()
@@ -910,7 +918,8 @@ struct TasksCalendarView: View {
                 weight: taskWeight,
                 date: selectedDate,
                 repeatAgain: repeatDays > 0 ? repeatDays : nil,
-                priority: taskPriority
+                priority: taskPriority,
+                copySubtasks: copySubtasks
             )
             
             scheduleTaskNotifications(for: task)
@@ -932,6 +941,7 @@ struct TasksCalendarView: View {
         taskWeight = 1.0
         taskPriority = "P3"
         isUntimedTask = false
+        copySubtasks = false
     }
     
     private func createTaskFromInput() {
@@ -1001,14 +1011,54 @@ struct TasksCalendarView: View {
             startTime: task.startTime,
             endTime: task.endTime,
             weight: task.weight,
+            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
-            priority: task.priority
+            priority: task.priority,
+            elapsedTime: task.elapsedTime,
+            copySubtasks: task.copySubtasks
             // timeSpent is intentionally not copied for repeat tasks
         )
         
         modelContext.insert(newTask)
+        
+        // Copy reward workflows from original task
+        if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
+            for link in rewardLinks {
+                if let reward = link.reward {
+                    let newLink = TaskRewardLink(task: newTask, reward: reward)
+                    modelContext.insert(newLink)
+                }
+            }
+        }
+        
+        // Copy subtasks if the toggle is enabled
+        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
+            for subtask in subtasks {
+                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
+            }
+        }
+        
         try? modelContext.save()
+    }
+    
+    private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
+        let newSubtask = Subtask(
+            name: subtask.name,
+            notes: subtask.notes,
+            parentTask: task,
+            parentSubtask: parentSubtask,
+            completed: false // Reset completion status for new task
+        )
+        
+        modelContext.insert(newSubtask)
+        
+        // Recursively copy child subtasks
+        if let childSubtasks = subtask.childSubtasks {
+            for childSubtask in childSubtasks {
+                copySubtaskRecursively(childSubtask, to: task, parentSubtask: newSubtask)
+            }
+        }
     }
     
     private func updateTaskTime(_ task: Task, to slot: TimeSlot) {
@@ -1277,6 +1327,7 @@ struct EditTaskView: View {
     @State private var isUntimed: Bool
     @State private var timeSpent: Double
     @State private var elapsedTime: Double
+    @State private var copySubtasks: Bool
     
     init(task: Task) {
         self.task = task
@@ -1294,6 +1345,7 @@ struct EditTaskView: View {
         _priority = State(initialValue: task.priority)
         _timeSpent = State(initialValue: task.timeSpent ?? 0.0)
         _elapsedTime = State(initialValue: task.elapsedTime ?? 0.0)
+        _copySubtasks = State(initialValue: task.copySubtasks)
     }
     
     var body: some View {
@@ -1369,6 +1421,10 @@ struct EditTaskView: View {
                         .frame(width: 120)
                 }
                 
+                if repeatDays > 0 {
+                    Toggle("Copy Subtasks on Repeat", isOn: $copySubtasks)
+                }
+                
                 HStack {
                     Text("Priority")
                     Picker("Priority", selection: $priority) {
@@ -1422,6 +1478,7 @@ struct EditTaskView: View {
         
         task.weight = weight
         task.priority = priority
+        task.copySubtasks = copySubtasks
         try? modelContext.save()
         
         // Notify that a task was updated
@@ -1452,6 +1509,7 @@ struct TaskActionsView: View {
     @State private var showSubtasksView = false
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
+    @State private var showRewardWorkflows = false
     
     private var subtaskCount: Int {
         return allSubtasks.filter { 
@@ -1479,7 +1537,7 @@ struct TaskActionsView: View {
                     .padding(.top)
                     
                     VStack(spacing: 12) {
-                        actionButton("show Gratitude & Dedicate it to Krishna", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
+                        actionButton("Enjoyed it? Dedicated to God.", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
                             toggleTaskCompletion()
                         }
                         
@@ -1507,6 +1565,10 @@ struct TaskActionsView: View {
                         
                         actionButton("Time Spent", systemImage: "clock.fill", color: .cyan) {
                             showTimeSpentDialog = true
+                        }
+                        
+                        actionButton("Reward Workflows", systemImage: "gift.fill", color: .pink) {
+                            showRewardWorkflows = true
                         }
                         
                         if task.repeatAgain != nil {
@@ -1576,6 +1638,13 @@ struct TaskActionsView: View {
                 HabitDashboardView(initialHabit: task.title)
             }
         }
+        .sheet(isPresented: $showRewardWorkflows) {
+            TaskRewardActionsView(task: task, onTaskDeleted: {
+                dismiss()
+                onTaskDeleted()
+            })
+            .presentationDetents([.medium, .large])
+        }
     }
     
     private func navigateToHabitTracker() {
@@ -1606,13 +1675,42 @@ struct TaskActionsView: View {
             if !task.reassign {
                 createRepeatTask(from: task)
             }
-            // Add points to Unclaimed Points reward
-            print("➕ Adding \(task.effectiveWeight) points for completed task")
-            Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
+            
+            // Check if task has reward links
+            let activeLinks = task.rewardLinks?.filter { $0.isActive } ?? []
+            
+            if !activeLinks.isEmpty {
+                // Task has reward links - add points to linked rewards
+                print("🎁 Task has \(activeLinks.count) reward link(s)")
+                for link in activeLinks {
+                    if let reward = link.reward {
+                        print("➕ Adding \(link.pointsToAdd) points to '\(reward.name)'")
+                        reward.addAmount(link.pointsToAdd, context: modelContext, taskTitle: task.title)
+                    }
+                }
+            } else {
+                // No reward links - add to Unclaimed Points
+                print("➕ No reward links, adding \(task.effectiveWeight) points to Unclaimed Points")
+                Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
+            }
         } else if wasCompleted {
             // If uncompleting, subtract the points
-            print("➖ Subtracting \(task.effectiveWeight) points for uncompleted task")
-            Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
+            let activeLinks = task.rewardLinks?.filter { $0.isActive } ?? []
+            
+            if !activeLinks.isEmpty {
+                // Subtract from linked rewards
+                print("🎁 Removing points from \(activeLinks.count) reward link(s)")
+                for link in activeLinks {
+                    if let reward = link.reward {
+                        print("➖ Subtracting \(link.pointsToAdd) points from '\(reward.name)'")
+                        reward.addAmount(-link.pointsToAdd, context: modelContext, taskTitle: task.title)
+                    }
+                }
+            } else {
+                // Subtract from Unclaimed Points
+                print("➖ Subtracting \(task.effectiveWeight) points from Unclaimed Points")
+                Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
+            }
         }
         
         try? modelContext.save()
@@ -1664,12 +1762,50 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
-            elapsedTime: task.elapsedTime // Copy elapsed time to new task
+            elapsedTime: task.elapsedTime, // Copy elapsed time to new task
+            copySubtasks: task.copySubtasks
             // timeSpent is intentionally not copied for repeat tasks
         )
         
         modelContext.insert(newTask)
+        
+        // Copy reward workflows from original task
+        if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
+            for link in rewardLinks {
+                if let reward = link.reward {
+                    let newLink = TaskRewardLink(task: newTask, reward: reward)
+                    modelContext.insert(newLink)
+                }
+            }
+        }
+        
+        // Copy subtasks if the toggle is enabled
+        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
+            for subtask in subtasks {
+                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
+            }
+        }
+        
         try? modelContext.save()
+    }
+    
+    private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
+        let newSubtask = Subtask(
+            name: subtask.name,
+            notes: subtask.notes,
+            parentTask: task,
+            parentSubtask: parentSubtask,
+            completed: false // Reset completion status for new task
+        )
+        
+        modelContext.insert(newSubtask)
+        
+        // Recursively copy child subtasks
+        if let childSubtasks = subtask.childSubtasks {
+            for childSubtask in childSubtasks {
+                copySubtaskRecursively(childSubtask, to: task, parentSubtask: newSubtask)
+            }
+        }
     }
 
         private func createIncompleteTask(from task: Task) {
@@ -1696,16 +1832,25 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             taskDescription: task.taskDescription,
             startTime: task.startTime,
             endTime: task.endTime,
-             reassign:true,
+            reassign: true,
             weight: task.weight,
             persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
-            elapsedTime: task.elapsedTime // Copy elapsed time to new task
+            elapsedTime: task.elapsedTime,
+            copySubtasks: task.copySubtasks
             // timeSpent is intentionally not copied for repeat tasks
         )
         
         modelContext.insert(newTask)
+        
+        // Copy subtasks if the toggle is enabled
+        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
+            for subtask in subtasks {
+                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
+            }
+        }
+        
         try? modelContext.save()
     }
     
@@ -1726,7 +1871,8 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             weight: copied.weight,
             persistentNotes: copied.persistentNotes,
             date: copied.date,
-            repeatAgain: copied.repeatAgain
+            repeatAgain: copied.repeatAgain,
+            copySubtasks: copied.copySubtasks
             // timeSpent is intentionally not copied when pasting tasks
         )
         
