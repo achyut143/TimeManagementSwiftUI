@@ -1456,6 +1456,9 @@ struct EditTaskView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         
+        // Capture the old effective weight before making changes
+        let oldEffectiveWeight = task.effectiveWeight
+        
         task.title = title
         task.taskDescription = description
         
@@ -1479,6 +1482,36 @@ struct EditTaskView: View {
         task.weight = weight
         task.priority = priority
         task.copySubtasks = copySubtasks
+        
+        // Update reward points if task is completed and effective weight changed
+        if task.completed {
+            let newEffectiveWeight = task.effectiveWeight
+            let pointsDifference = newEffectiveWeight - oldEffectiveWeight
+            
+            if pointsDifference != 0 {
+                print("💾 Task edit - Effective weight changed: \(oldEffectiveWeight) → \(newEffectiveWeight)")
+                print("🔄 Points difference: \(pointsDifference)")
+                
+                // Check if task has linked rewards
+                let activeRewardLinks = task.rewardLinks?.filter { $0.isActive } ?? []
+                
+                if !activeRewardLinks.isEmpty {
+                    // Add points difference to all linked rewards
+                    print("🎁 Updating \(activeRewardLinks.count) linked reward(s)")
+                    for link in activeRewardLinks {
+                        if let reward = link.reward {
+                            print("➕ Adding \(pointsDifference) points to '\(reward.name)'")
+                            reward.addAmount(pointsDifference, context: modelContext, taskTitle: task.title, comment: "Task edit adjustment")
+                        }
+                    }
+                } else {
+                    // No reward links - add to Unclaimed Points
+                    print("➕ No reward links, adding \(pointsDifference) points to Unclaimed Points")
+                    Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
+                }
+            }
+        }
+        
         try? modelContext.save()
         
         // Notify that a task was updated

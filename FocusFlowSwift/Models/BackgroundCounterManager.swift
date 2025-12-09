@@ -24,9 +24,12 @@ class BackgroundCounterManager: ObservableObject {
     @Published var totalBackgroundTime: TimeInterval = 0
     @Published var currentSessionTime: TimeInterval = 0
     @Published var isCountingInBackground: Bool = false
+    @Published var isDeviceLocked: Bool = false
     
     private var backgroundStartTime: Date?
+    private var lockStartTime: Date?
     private var timer: Timer?
+    private var isAppInBackground: Bool = false
     
     @available(iOS 16.1, *)
     private var currentActivity: Activity<BackgroundCounterAttributes>?
@@ -35,34 +38,66 @@ class BackgroundCounterManager: ObservableObject {
         self.isEnabled = UserDefaults.standard.bool(forKey: "backgroundCounterEnabled")
         self.totalBackgroundTime = UserDefaults.standard.double(forKey: "totalBackgroundTime")
         self.currentSessionTime = UserDefaults.standard.double(forKey: "currentSessionTime")
+        
+        // Register for device lock/unlock notifications
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDeviceLocked),
+            name: UIApplication.protectedDataWillBecomeUnavailableNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDeviceUnlocked),
+            name: UIApplication.protectedDataDidBecomeAvailableNotification,
+            object: nil
+        )
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
     
     func handleAppDidEnterBackground() {
         guard isEnabled else { return }
-        backgroundStartTime = Date()
-        isCountingInBackground = true
-        saveState()
         
-        // Start Live Activity
-        if #available(iOS 16.1, *) {
-            startLiveActivity()
+        isAppInBackground = true
+        
+        // Only start counting if device is not locked
+        if !isDeviceLocked {
+            backgroundStartTime = Date()
+            isCountingInBackground = true
+            saveState()
+            
+            // Start Live Activity
+            if #available(iOS 16.1, *) {
+                startLiveActivity()
+            }
         }
     }
     
     func handleAppDidBecomeActive() {
-        guard isEnabled, let startTime = backgroundStartTime else {
+        guard isEnabled else {
             isCountingInBackground = false
+            isAppInBackground = false
             if #available(iOS 16.1, *) {
                 endLiveActivity()
             }
             return
         }
         
-        let elapsed = Date().timeIntervalSince(startTime)
-        currentSessionTime += elapsed
-        totalBackgroundTime += elapsed
+        isAppInBackground = false
         
-        backgroundStartTime = nil
+        // If we were counting background time, add it
+        if let startTime = backgroundStartTime {
+            let elapsed = Date().timeIntervalSince(startTime)
+            currentSessionTime += elapsed
+            totalBackgroundTime += elapsed
+            
+            backgroundStartTime = nil
+        }
+        
         isCountingInBackground = false
         
         saveState()
@@ -70,6 +105,50 @@ class BackgroundCounterManager: ObservableObject {
         // End Live Activity
         if #available(iOS 16.1, *) {
             endLiveActivity()
+        }
+    }
+    
+    @objc private func handleDeviceLocked() {
+        guard isEnabled else { return }
+        
+        logger.info("🔒 Device locked")
+        isDeviceLocked = true
+        
+        // If we're currently counting background time, pause it
+        if let startTime = backgroundStartTime {
+            let elapsed = Date().timeIntervalSince(startTime)
+            currentSessionTime += elapsed
+            totalBackgroundTime += elapsed
+            
+            // Store when we paused due to lock
+            lockStartTime = Date()
+            backgroundStartTime = nil
+            
+            saveState()
+            
+            if #available(iOS 16.1, *) {
+                updateLiveActivity()
+            }
+        }
+    }
+    
+    @objc private func handleDeviceUnlocked() {
+        guard isEnabled else { return }
+        
+        logger.info("🔓 Device unlocked")
+        isDeviceLocked = false
+        lockStartTime = nil
+        
+        // Resume counting if app is still in background
+        if isAppInBackground {
+            logger.info("📱 App still in background, resuming counter")
+            backgroundStartTime = Date()
+            isCountingInBackground = true
+            
+            // Update existing Live Activity (can't start new one from background)
+            if #available(iOS 16.1, *) {
+                updateLiveActivity()
+            }
         }
     }
     
