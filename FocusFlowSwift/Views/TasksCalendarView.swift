@@ -6,7 +6,7 @@ import Foundation
 
 struct TasksCalendarView: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var selectedDate = Date()
+    @Binding var selectedDate: Date
     @State private var tasks: [Task] = []
     @State private var currentTime = Date()
     @State private var timer: Timer?
@@ -1524,7 +1524,7 @@ struct EditTaskView: View {
 
 
 #Preview {
-    TasksCalendarView()
+    TasksCalendarView(selectedDate: .constant(Date()))
         .modelContainer(for: [Task.self], inMemory: true)
 }
 

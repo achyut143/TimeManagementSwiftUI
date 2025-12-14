@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var showAlertView = false
     @State private var showAlertManager = false
     @State private var showBackgroundCounter = false
+    @State private var showDailyNotes = false
+    @State private var selectedDate = Date()
     
     var body: some View {
         ZStack {
@@ -21,17 +23,26 @@ struct ContentView: View {
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         }
                         
-                        TasksCalendarView()
+                        TasksCalendarView(selectedDate: $selectedDate)
                     }
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {
-                            Button {
-                                withAnimation {
-                                    showBackgroundCounter.toggle()
+                            HStack {
+                                Button {
+                                    withAnimation {
+                                        showBackgroundCounter.toggle()
+                                    }
+                                } label: {
+                                    Image(systemName: showBackgroundCounter ? "clock.arrow.circlepath.fill" : "clock.arrow.circlepath")
+                                        .foregroundColor(.blue)
                                 }
-                            } label: {
-                                Image(systemName: showBackgroundCounter ? "clock.arrow.circlepath.fill" : "clock.arrow.circlepath")
-                                    .foregroundColor(.blue)
+                                
+                                Button {
+                                    showDailyNotes = true
+                                } label: {
+                                    Image(systemName: "note.text")
+                                        .foregroundColor(.green)
+                                }
                             }
                         }
                         ToolbarItem(placement: .navigationBarTrailing) {
@@ -94,6 +105,9 @@ struct ContentView: View {
             .sheet(isPresented: $showAlertManager) {
                 AlertManagerView()
             }
+            .sheet(isPresented: $showDailyNotes) {
+                DailyNotesView(selectedDate: selectedDate)
+            }
             
             QuickAlertButton()
             
@@ -115,5 +129,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, Reward.self, FastingSession.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, Reward.self, FastingSession.self, DailyNote.self], inMemory: true)
 }

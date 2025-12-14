@@ -211,7 +211,7 @@ struct TaskTableView: View {
         }
         .sheet(isPresented: $showTaskActions) {
             if let task = selectedTaskForActions {
-                TaskRewardActionsView(task: task, onTaskDeleted: {
+                TaskActionsView(task: task, onTaskDeleted: {
                     selectedTaskForActions = nil
                 })
                     .presentationDetents([.medium, .large])
@@ -291,26 +291,24 @@ struct TaskRowView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 
-                // Show time spent for timed tasks
-                if !task.startTime.isEmpty && !task.endTime.isEmpty {
-                    Button(action: { showTimeSpentEditor = true }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "clock.fill")
+                // Show time spent for all tasks
+                Button(action: { showTimeSpentEditor = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock.fill")
+                            .font(.caption2)
+                        if let timeSpent = task.timeSpent {
+                            Text("\(Int(timeSpent))m")
                                 .font(.caption2)
-                            if let timeSpent = task.timeSpent {
-                                Text("\(Int(timeSpent))m")
-                                    .font(.caption2)
-                            } else {
-                                Text("Set time")
-                                    .font(.caption2)
-                            }
+                        } else {
+                            Text("Set time")
+                                .font(.caption2)
                         }
-                        .foregroundStyle(.purple)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.purple.opacity(0.1))
-                        .cornerRadius(4)
                     }
+                    .foregroundStyle(.purple)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.purple.opacity(0.1))
+                    .cornerRadius(4)
                 }
             }
             
