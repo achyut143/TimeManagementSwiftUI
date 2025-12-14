@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BackgroundCounterView: View {
     @ObservedObject var counterManager = BackgroundCounterManager.shared
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -12,6 +13,15 @@ struct BackgroundCounterView: View {
                     .font(.headline)
                 
                 Spacer()
+                
+                Button(action: {
+                    dismiss()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.gray)
+                        .font(.title2)
+                }
+                .buttonStyle(PlainButtonStyle())
                 
                 Toggle("", isOn: $counterManager.isEnabled)
                     .labelsHidden()

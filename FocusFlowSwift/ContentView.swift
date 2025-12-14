@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var showBackgroundCounter = false
     @State private var showDailyNotes = false
     @State private var selectedDate = Date()
+    @ObservedObject private var counterManager = BackgroundCounterManager.shared
     
     var body: some View {
         ZStack {
@@ -33,8 +34,13 @@ struct ContentView: View {
                                         showBackgroundCounter.toggle()
                                     }
                                 } label: {
-                                    Image(systemName: showBackgroundCounter ? "clock.arrow.circlepath.fill" : "clock.arrow.circlepath")
+                                    Text(counterManager.formattedTime(counterManager.totalBackgroundTime))
+                                        .font(.system(.caption, design: .monospaced))
                                         .foregroundColor(.blue)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(6)
                                 }
                                 
                                 Button {
