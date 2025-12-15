@@ -18,6 +18,12 @@ struct HabitDashboardView: View {
     var body: some View {
         VStack(spacing: 16) {
             headerView
+            
+            // Overall streak summary
+            if !filteredHabitNames.isEmpty {
+                overallStreakSummary
+            }
+            
             dateFilters
                 HStack {
         Image(systemName: "magnifyingglass")
@@ -168,6 +174,18 @@ struct HabitDashboardView: View {
                 .padding(.vertical, 2)
                 .background(.green.opacity(0.2))
                 .cornerRadius(8)
+            
+            // Add streak info
+            if stats.currentStreak > 0 {
+                HStack(spacing: 2) {
+                    Image(systemName: "flame.fill")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    Text("\(stats.currentStreak)")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                }
+            }
         }
         .padding(8)
         .background(isSelected ? .blue.opacity(0.2) : .gray.opacity(0.1))
@@ -210,12 +228,20 @@ struct HabitDashboardView: View {
         let stats = calculateStatsForHabit(selectedHabit)
         let percentage = stats.total > 0 ? Int((Double(stats.completed) / Double(stats.total)) * 100) : 0
         
-        return VStack(spacing: 10) {
+        return VStack(spacing: 16) {
+            // First row: Completed and Missed
             HStack(spacing: 20) {
                 statItem(title: "Completed", value: stats.completed, color: .green)
                 statItem(title: "Missed", value: stats.missed, color: .red)
             }
             
+            // Second row: Streaks
+            HStack(spacing: 20) {
+                statItem(title: "Current Streak", value: stats.currentStreak, color: .blue)
+                statItem(title: "Max Streak", value: stats.maxStreak, color: .purple)
+            }
+            
+            // Completion rate
             Text("\(percentage)% Completion Rate")
                 .font(.title2)
                 .fontWeight(.semibold)
@@ -225,15 +251,72 @@ struct HabitDashboardView: View {
     }
     
     private func statItem(title: String, value: Int, color: Color) -> some View {
-        HStack {
-            Rectangle()
-                .fill(color)
-                .frame(width: 15, height: 15)
-                .cornerRadius(2)
+        VStack(spacing: 4) {
+            HStack {
+                if title.contains("Streak") {
+                    Image(systemName: title.contains("Current") ? "flame.fill" : "trophy.fill")
+                        .foregroundColor(color)
+                        .font(.caption)
+                } else {
+                    Rectangle()
+                        .fill(color)
+                        .frame(width: 15, height: 15)
+                        .cornerRadius(2)
+                }
+                
+                Text("\(value)")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundColor(color)
+            }
             
-            Text("\(title): \(value)")
+            Text(title)
                 .font(.caption)
+                .foregroundColor(.secondary)
         }
+    }
+    
+    private var overallStreakSummary: some View {
+        let allStats = filteredHabitNames.map { calculateStatsForHabit($0) }
+        let totalCurrentStreak = allStats.reduce(0) { $0 + $1.currentStreak }
+        let maxStreakOverall = allStats.map { $0.maxStreak }.max() ?? 0
+        let activeStreaks = allStats.filter { $0.currentStreak > 0 }.count
+        
+        return HStack(spacing: 20) {
+            VStack {
+                Text("\(activeStreaks)")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.blue)
+                Text("Active Streaks")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            VStack {
+                Text("\(totalCurrentStreak)")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.orange)
+                Text("Total Current")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            VStack {
+                Text("\(maxStreakOverall)")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.purple)
+                Text("Best Streak")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(.gray.opacity(0.1))
+        .cornerRadius(12)
+        .padding(.horizontal)
     }
     
     private var emptyStateView: some View {
@@ -345,6 +428,9 @@ struct HabitDashboardView: View {
             }
         }
         
+        // Create array to track daily completion status for streak calculation
+        var dailyCompletions: [(Date, Bool)] = []
+        
         // Calculate stats for each date in range
         for date in dateRange {
             let dayTasks = habitSpecificTasks.filter { task in
@@ -352,18 +438,68 @@ struct HabitDashboardView: View {
             }
             
             if !dayTasks.isEmpty {
-                if dayTasks.contains(where: { $0.completed }) {
+                let isCompleted = dayTasks.contains(where: { $0.completed })
+                let isMissed = dayTasks.contains(where: { $0.notCompleted })
+                
+                if isCompleted {
                     completed += 1
-                } else if dayTasks.contains(where: { $0.notCompleted }) {
+                    dailyCompletions.append((date, true))
+                } else if isMissed {
                     missed += 1
+                    dailyCompletions.append((date, false))
                 }
             }
         }
         
+        // Calculate streaks
+        let streaks = calculateStreaks(from: dailyCompletions)
+        
         let total = completed + missed
         let percentage = total > 0 ? Double(completed) / Double(total) * 100 : 0
         
-        return HabitStats(completed: completed, missed: missed, noData: 0, total: total, percentage: percentage)
+        return HabitStats(
+            completed: completed,
+            missed: missed,
+            noData: 0,
+            total: total,
+            percentage: percentage,
+            currentStreak: streaks.current,
+            maxStreak: streaks.max
+        )
+    }
+    
+    // Helper method to calculate current and max streaks
+    private func calculateStreaks(from dailyCompletions: [(Date, Bool)]) -> (current: Int, max: Int) {
+        guard !dailyCompletions.isEmpty else { return (0, 0) }
+        
+        // Sort by date to ensure proper order
+        let sortedCompletions = dailyCompletions.sorted { $0.0 < $1.0 }
+        
+        var currentStreak = 0
+        var maxStreak = 0
+        var tempStreak = 0
+        
+        // Calculate streaks by going through sorted completions
+        for (_, isCompleted) in sortedCompletions {
+            if isCompleted {
+                tempStreak += 1
+                maxStreak = max(maxStreak, tempStreak)
+            } else {
+                tempStreak = 0
+            }
+        }
+        
+        // Calculate current streak by going backwards from the most recent date
+        let reversedCompletions = sortedCompletions.reversed()
+        for (_, isCompleted) in reversedCompletions {
+            if isCompleted {
+                currentStreak += 1
+            } else {
+                break
+            }
+        }
+        
+        return (currentStreak, maxStreak)
     }
     
     private func deleteHabit(_ habitName: String) {
@@ -389,6 +525,8 @@ struct HabitStats {
     let noData: Int
     let total: Int
     let percentage: Double
+    let currentStreak: Int
+    let maxStreak: Int
 }
 
 extension DateFormatter {
