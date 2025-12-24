@@ -29,6 +29,8 @@ struct TaskTableView: View {
     @State private var isSelectionMode = false
     @State private var showBulkUpdate = false
     @State private var bulkUpdateText = ""
+    @State private var bulkUpdateDate = Date()
+    @State private var shouldUpdateDate = false
     @State private var showBulkDeleteConfirmation = false
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
@@ -89,7 +91,7 @@ struct TaskTableView: View {
                             selectedTaskForActions = task
                             showTaskActions = true
                         }
-                    })
+                    }, isSelectionMode: isSelectionMode)
                 }
                 .swipeActions {
                     Button("Delete", role: .destructive) {
@@ -152,13 +154,35 @@ struct TaskTableView: View {
                         TextField("New tags (comma separated)", text: $bulkUpdateText)
                             .textFieldStyle(.roundedBorder)
                         
-                        Button("Update Tags") {
+                        Text("Leave empty to use default tags: work, personal, health, learning")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Toggle("Update Date", isOn: $shouldUpdateDate)
+                        
+                        if shouldUpdateDate {
+                            DatePicker("New Date", selection: $bulkUpdateDate, displayedComponents: .date)
+                        }
+                        
+                        Button("Update Tasks") {
                             for task in selectedTasks {
-                                task.taskDescription = bulkUpdateText
+                                // Update tags
+                                if bulkUpdateText.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    // Use default tags if empty
+                                    task.taskDescription = "work, personal, health, learning"
+                                } else {
+                                    task.taskDescription = bulkUpdateText
+                                }
+                                
+                                // Update date if requested
+                                if shouldUpdateDate {
+                                    task.date = bulkUpdateDate
+                                }
                             }
                             try? modelContext.save()
                             showBulkUpdate = false
                             bulkUpdateText = ""
+                            shouldUpdateDate = false
                             selectedTasks.removeAll()
                             isSelectionMode = false
                         }
@@ -176,6 +200,7 @@ struct TaskTableView: View {
                     Button("Cancel") {
                         showBulkUpdate = false
                         bulkUpdateText = ""
+                        shouldUpdateDate = false
                     }
                     .buttonStyle(.bordered)
                     
@@ -203,6 +228,8 @@ struct TaskTableView: View {
                 }
                 try? modelContext.save()
                 showBulkUpdate = false
+                bulkUpdateText = ""
+                shouldUpdateDate = false
                 selectedTasks.removeAll()
                 isSelectionMode = false
             }
@@ -263,6 +290,7 @@ struct TaskRowView: View {
     let onNotesAction: () -> Void
     let onPersistentNotesAction: () -> Void
     var onTaskTap: (() -> Void)? = nil
+    var isSelectionMode: Bool = false
     @State private var showTimeSpentEditor = false
     
     private func priorityColor(_ priority: String) -> Color {
@@ -292,7 +320,11 @@ struct TaskRowView: View {
                     .foregroundStyle(.secondary)
                 
                 // Show time spent for all tasks
-                Button(action: { showTimeSpentEditor = true }) {
+                Button(action: { 
+                    if !isSelectionMode {
+                        showTimeSpentEditor = true
+                    }
+                }) {
                     HStack(spacing: 4) {
                         Image(systemName: "clock.fill")
                             .font(.caption2)

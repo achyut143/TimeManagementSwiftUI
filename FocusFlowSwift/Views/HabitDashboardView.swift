@@ -16,7 +16,8 @@ struct HabitDashboardView: View {
     var initialHabit: String? = nil
     
     var body: some View {
-        VStack(spacing: 16) {
+        ScrollView {
+            VStack(spacing: 16) {
             headerView
             
             // Overall streak summary
@@ -55,8 +56,10 @@ struct HabitDashboardView: View {
 } else {
     emptyStateView
 }
-    }
-    .navigationTitle("Habit Tracker")
+            }
+            .padding(.bottom, 20) // Add bottom padding for better scrolling
+        }
+        .navigationTitle("Habit Tracker")
     .onAppear {
       // Use initialHabit if provided, otherwise use first available
       if let initialHabit = initialHabit, filteredHabitNames.contains(initialHabit) {

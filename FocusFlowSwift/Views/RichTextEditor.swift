@@ -300,27 +300,58 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
                 let attributes = attributed.attributes(at: index, effectiveRange: &range)
                 
                 let substring = (string as NSString).substring(with: range)
-                var formattedText = substring
                 
-                if let font = attributes[.font] as? UIFont {
-                    let traits = font.fontDescriptor.symbolicTraits
-                    if traits.contains(.traitBold) {
-                        formattedText = "**\(formattedText)**"
-                    }
-                    if traits.contains(.traitItalic) {
-                        formattedText = "*\(formattedText)*"
-                    }
-                }
-                
-                if attributes[.underlineStyle] != nil {
-                    formattedText = "__\(formattedText)__"
-                }
-                
+                // Handle strikethrough specially for multi-line content
                 if attributes[.strikethroughStyle] != nil {
-                    formattedText = "~~\(formattedText)~~"
+                    // Split by lines and apply strikethrough to each non-empty line
+                    let lines = substring.components(separatedBy: .newlines)
+                    let formattedLines = lines.map { line in
+                        if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                            return line // Keep empty lines as-is
+                        } else {
+                            var formattedLine = line
+                            
+                            // Apply other formatting first
+                            if let font = attributes[.font] as? UIFont {
+                                let traits = font.fontDescriptor.symbolicTraits
+                                if traits.contains(.traitBold) {
+                                    formattedLine = "**\(formattedLine)**"
+                                }
+                                if traits.contains(.traitItalic) {
+                                    formattedLine = "*\(formattedLine)*"
+                                }
+                            }
+                            
+                            if attributes[.underlineStyle] != nil {
+                                formattedLine = "__\(formattedLine)__"
+                            }
+                            
+                            // Apply strikethrough last
+                            return "~~\(formattedLine)~~"
+                        }
+                    }
+                    markdown += formattedLines.joined(separator: "\n")
+                } else {
+                    // Handle non-strikethrough text normally
+                    var formattedText = substring
+                    
+                    if let font = attributes[.font] as? UIFont {
+                        let traits = font.fontDescriptor.symbolicTraits
+                        if traits.contains(.traitBold) {
+                            formattedText = "**\(formattedText)**"
+                        }
+                        if traits.contains(.traitItalic) {
+                            formattedText = "*\(formattedText)*"
+                        }
+                    }
+                    
+                    if attributes[.underlineStyle] != nil {
+                        formattedText = "__\(formattedText)__"
+                    }
+                    
+                    markdown += formattedText
                 }
                 
-                markdown += formattedText
                 index = range.location + range.length
             }
             

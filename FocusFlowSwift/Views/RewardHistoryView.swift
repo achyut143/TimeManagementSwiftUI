@@ -297,21 +297,34 @@ struct RewardHistoryView: View {
     private func formatSpentAmount(_ amount: Double) -> String {
         switch reward.type {
         case .timeReward, .time:
-            let hours = Int(amount) / 60
-            let minutes = Int(amount) % 60
-            if hours > 0 {
-                return "\(hours)h \(minutes)m"
+            // Convert points to minutes using conversion rate
+            if let rate = reward.conversionRate {
+                let totalMinutes = amount * rate
+                let hours = Int(totalMinutes) / 60
+                let minutes = Int(totalMinutes) % 60
+                if hours > 0 {
+                    return "\(hours)h \(minutes)m"
+                } else {
+                    return "\(Int(totalMinutes)) min"
+                }
             } else {
-                return "\(Int(amount)) min"
+                // Fallback to points if no conversion rate
+                return String(format: "%.1f pts", amount)
             }
         case .moneyReward:
-            return String(format: "$%.2f", amount)
+            // Convert points to money using conversion rate
+            if let rate = reward.conversionRate {
+                return String(format: "$%.2f", amount * rate)
+            } else {
+                // Fallback to points if no conversion rate
+                return String(format: "%.1f pts", amount)
+            }
         case .eventReward:
             return "1 event"
         case .guiltReward:
             return String(format: "$%.2f", amount)
         default:
-            return String(format: "%.1f", amount)
+            return String(format: "%.1f pts", amount)
         }
     }
 }

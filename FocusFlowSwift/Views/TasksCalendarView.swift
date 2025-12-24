@@ -1795,6 +1795,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
+            priority: task.priority,
             elapsedTime: task.elapsedTime, // Copy elapsed time to new task
             copySubtasks: task.copySubtasks
             // timeSpent is intentionally not copied for repeat tasks
@@ -1870,6 +1871,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
+            priority: task.priority,
             elapsedTime: task.elapsedTime,
             copySubtasks: task.copySubtasks
             // timeSpent is intentionally not copied for repeat tasks

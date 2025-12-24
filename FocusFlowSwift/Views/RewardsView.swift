@@ -283,6 +283,51 @@ struct EnhancedRewardRowView: View {
                                 }
                             }
                             
+                            // Show available minutes/money to burn for time/money rewards
+                            if reward.type == .timeReward, let rate = reward.conversionRate {
+                                Text("•")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                let availableMinutes = reward.availableBalance * rate
+                                if availableMinutes >= 0 {
+                                    Text("+\(Int(availableMinutes)) min")
+                                        .font(.caption2)
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Text("\(Int(availableMinutes)) min")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
+                            } else if reward.type == .moneyReward, let rate = reward.conversionRate {
+                                Text("•")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                let availableMoney = reward.availableBalance * rate
+                                if availableMoney >= 0 {
+                                    Text("+$\(String(format: "%.2f", availableMoney))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Text("-$\(String(format: "%.2f", abs(availableMoney)))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
+                            } else if reward.type == .goalReward {
+                                Text("•")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                let availablePoints = reward.availableBalance
+                                if availablePoints >= 0 {
+                                    Text("+\(String(format: "%.1f", availablePoints)) pts")
+                                        .font(.caption2)
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Text("\(String(format: "%.1f", availablePoints)) pts")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            
                             // Show days remaining for goal-based rewards
                             if reward.type == .goalReward, let days = reward.daysRemaining {
                                 Text("•")
