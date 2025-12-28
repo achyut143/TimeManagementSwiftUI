@@ -180,6 +180,13 @@ struct DailyNotesView: View {
     private func adjustTimeRangeInLine(_ line: String, byMinutes minutes: Int) -> String {
         let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
         
+        // Check if the line contains strikethrough text (~~text~~)
+        // If it does, skip processing this line
+        if trimmedLine.contains("~~") {
+            print("Skipping strikethrough line: '\(trimmedLine)'")
+            return line
+        }
+        
         // Pattern to match time ranges with flexible format:
         // "12:30 - 1:00 - work" or "12:30 - 1:00 work" or "12:30- 1:00 work"
         let pattern = #"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*-?\s*(.+)"#
