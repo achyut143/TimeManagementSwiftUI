@@ -24,16 +24,57 @@ struct DailyNotesView: View {
         NavigationView {
             Form {
                 Section("Time Adjustment") {
-                    HStack {
-                        Text("Adjust times by (minutes):")
-                        TextField("30", text: $adjustmentMinutes)
-                            .keyboardType(.numberPad)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .frame(width: 80)
-                        Button("Apply") {
-                            adjustTimesInNotes()
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Adjust times by (minutes):")
+                            TextField("+30 or -15", text: $adjustmentMinutes)
+                                .keyboardType(.numbersAndPunctuation)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .frame(width: 100)
+                            Button("Apply") {
+                                adjustTimesInNotes()
+                            }
+                            .disabled(adjustmentMinutes.isEmpty)
                         }
-                        .disabled(adjustmentMinutes.isEmpty)
+                        
+                        // Quick adjustment buttons
+                        HStack(spacing: 8) {
+                            Text("Quick:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Button("-30") {
+                                adjustmentMinutes = "-30"
+                                adjustTimesInNotes()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            
+                            Button("-15") {
+                                adjustmentMinutes = "-15"
+                                adjustTimesInNotes()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            
+                            Button("+15") {
+                                adjustmentMinutes = "15"
+                                adjustTimesInNotes()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            
+                            Button("+30") {
+                                adjustmentMinutes = "30"
+                                adjustTimesInNotes()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        
+                        Text("Use positive numbers to push times forward (+30) or negative to pull back (-15)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 

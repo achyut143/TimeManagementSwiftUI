@@ -66,7 +66,7 @@ struct ContentView: View {
                 }
                 
                 NavigationStack {
-                    HabitDashboardView()
+                    HabitOverviewView()
                 }
                 .tabItem {
                     Image(systemName: "repeat")

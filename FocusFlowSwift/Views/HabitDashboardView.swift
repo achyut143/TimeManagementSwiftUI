@@ -15,6 +15,10 @@ struct HabitDashboardView: View {
     
     var initialHabit: String? = nil
     
+    init(initialHabit: String? = nil) {
+        self.initialHabit = initialHabit
+    }
+    
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
