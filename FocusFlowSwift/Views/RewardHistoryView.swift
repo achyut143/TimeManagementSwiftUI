@@ -116,7 +116,7 @@ struct RewardHistoryView: View {
                         Text("Adds")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(reward.formattedAmount(weekMetrics.totalAdded))
+                        Text(formatSpentAmount(weekMetrics.totalAdded))
                             .font(.caption2)
                             .foregroundStyle(.green)
                     }
@@ -142,113 +142,114 @@ struct RewardHistoryView: View {
                 .padding()
                 .background(.ultraThinMaterial)
                 
+                // Scrollable Content
                 List {
                     // Summary Section (only for current week)
                     if currentWeekOffset == 0 {
                         Section("Reward Summary") {
-                    HStack {
-                        Text("Base Value")
-                        Spacer()
-                        Text(reward.formattedRewardValue())
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    if let extraPoints = reward.additionalPointsEarned, extraPoints > 0 {
-                        HStack {
-                            Text("Bonus Value")
-                            Spacer()
-                            Text(reward.formattedAdditionalValue())
-                                .foregroundColor(.green)
-                        }
-                        
-                        HStack {
-                            Text("Total Value")
-                            Spacer()
-                            Text(reward.formattedTotalValue())
-                                .font(.headline)
-                                .foregroundColor(.purple)
-                        }
-                    }
-                    
-                    HStack {
-                        Text("Total Spent")
-                        Spacer()
-                        Text(formatSpentAmount(reward.spentAmount))
-                            .foregroundColor(.orange)
-                    }
-                    
-                    HStack {
-                        Text("Remaining")
-                        Spacer()
-                        Text(formatSpentAmount(reward.remainingValue))
-                            .foregroundColor(.green)
-                    }
-                    
-                    if reward.canReset {
-                        Button(action: {
-                            reward.resetReward(context: modelContext)
-                        }) {
                             HStack {
-                                Image(systemName: "arrow.counterclockwise")
-                                Text("Reset Reward")
+                                Text("Base Value")
+                                Spacer()
+                                Text(reward.formattedRewardValue())
+                                    .foregroundColor(.secondary)
                             }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-                
-                    }
-                }
-                
-                // All Transactions for Selected Week
-                Section(currentWeekOffset == 0 ? "This Week's Activity" : "Week Activity") {
-                    if weekTransactions.isEmpty {
-                        Text("No activity this week")
-                            .foregroundColor(.secondary)
-                            .italic()
-                    } else {
-                        ForEach(weekTransactions.sorted(by: { $0.date > $1.date })) { transaction in
-                            VStack(alignment: .leading, spacing: 8) {
+                            
+                            if let extraPoints = reward.additionalPointsEarned, extraPoints > 0 {
                                 HStack {
-                                    Image(systemName: transaction.type == .add ? "plus.circle.fill" : "flame.fill")
-                                        .foregroundColor(transaction.type == .add ? .green : .orange)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack {
-                                            Text(transaction.type == .add ? "Added" : "Burned")
-                                                .font(.headline)
-                                            
-                                            if let taskTitle = transaction.taskTitle {
-                                                Text("• \(taskTitle)")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                        }
-                                        
-                                        Text(transaction.date, style: .date)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    
+                                    Text("Bonus Value")
                                     Spacer()
-                                    
-                                    Text("\(transaction.type == .add ? "+" : "-")\(formatSpentAmount(transaction.amount))")
-                                        .font(.headline)
-                                        .foregroundColor(transaction.type == .add ? .green : .orange)
+                                    Text(reward.formattedAdditionalValue())
+                                        .foregroundColor(.green)
                                 }
                                 
-                                if let comment = transaction.comment, !comment.isEmpty {
-                                    Text(comment)
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                        .padding(.leading, 24)
+                                HStack {
+                                    Text("Total Value")
+                                    Spacer()
+                                    Text(reward.formattedTotalValue())
+                                        .font(.headline)
+                                        .foregroundColor(.purple)
                                 }
                             }
-                            .padding(.vertical, 4)
+                            
+                            HStack {
+                                Text("Total Spent")
+                                Spacer()
+                                Text(formatSpentAmount(reward.spentAmount))
+                                    .foregroundColor(.orange)
+                            }
+                            
+                            HStack {
+                                Text("Remaining")
+                                Spacer()
+                                Text(formatSpentAmount(reward.remainingValue))
+                                    .foregroundColor(.green)
+                            }
+                            
+                            if reward.canReset {
+                                Button(action: {
+                                    reward.resetReward(context: modelContext)
+                                }) {
+                                    HStack {
+                                        Image(systemName: "arrow.counterclockwise")
+                                        Text("Reset Reward")
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                    }
+                    
+                    // All Transactions for Selected Week
+                    Section(currentWeekOffset == 0 ? "This Week's Activity" : "Week Activity") {
+                        if weekTransactions.isEmpty {
+                            Text("No activity this week")
+                                .foregroundColor(.secondary)
+                                .italic()
+                        } else {
+                            ForEach(weekTransactions.sorted(by: { $0.date > $1.date })) { transaction in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: transaction.type == .add ? "plus.circle.fill" : "flame.fill")
+                                            .foregroundColor(transaction.type == .add ? .green : .orange)
+                                        
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack {
+                                                Text(transaction.type == .add ? "Added" : "Burned")
+                                                    .font(.headline)
+                                                
+                                                if let taskTitle = transaction.taskTitle {
+                                                    Text("• \(taskTitle)")
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                            
+                                            Text(transaction.date, style: .date)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        
+                                        Spacer()
+                                        
+                                        Text("\(transaction.type == .add ? "+" : "-")\(formatSpentAmount(transaction.amount))")
+                                            .font(.headline)
+                                            .foregroundColor(transaction.type == .add ? .green : .orange)
+                                    }
+                                    
+                                    if let comment = transaction.comment, !comment.isEmpty {
+                                        Text(comment)
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                            .padding(.leading, 24)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
                         }
                     }
                 }
+                .listStyle(.insetGrouped)
             }
             .navigationTitle("Reward History")
             .navigationBarTitleDisplayMode(.inline)

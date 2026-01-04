@@ -1292,6 +1292,14 @@ struct ManageRewardView: View {
         guard let amount = Double(amountToAdd), amount > 0 else { return }
         let commentToAdd = addComment.isEmpty ? nil : addComment
         reward.addAmount(amount, context: modelContext, comment: commentToAdd)
+        
+        // Save the context to persist the changes
+        do {
+            try modelContext.save()
+        } catch {
+            print("Failed to save add transaction: \(error)")
+        }
+        
         amountToAdd = ""
         addComment = ""
         alertMessage = "Added \(amount) \(reward.type.unit) to \(reward.name)"
@@ -1317,6 +1325,14 @@ struct ManageRewardView: View {
         }
         
         reward.burnAmount(pointsToBurn, context: modelContext, comment: burnComment)
+        
+        // Save the context to persist the changes
+        do {
+            try modelContext.save()
+        } catch {
+            print("Failed to save burn transaction: \(error)")
+        }
+        
         amountToBurn = ""
         burnComment = ""
         

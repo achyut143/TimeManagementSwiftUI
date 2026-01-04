@@ -135,5 +135,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, Reward.self, FastingSession.self, DailyNote.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, Reward.self, FastingSession.self, DailyNote.self, HabitSettings.self], inMemory: true)
 }

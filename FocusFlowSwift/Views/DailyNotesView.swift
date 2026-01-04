@@ -1,6 +1,31 @@
 import SwiftUI
 import SwiftData
 
+struct TimeEntry {
+    let startMinutes: Int
+    let endMinutes: Int
+    let description: String
+    let isFixed: Bool
+    let originalLine: String
+    
+    var duration: Int {
+        return endMinutes - startMinutes
+    }
+    
+    func toLine() -> String {
+        let startTime = minutesToTime(startMinutes)
+        let endTime = minutesToTime(endMinutes)
+        return "\(startTime) - \(endTime) - \(description)"
+    }
+    
+    private func minutesToTime(_ minutes: Int) -> String {
+        let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
+        let hours = (adjustedMinutes / 60) % 24
+        let mins = adjustedMinutes % 60
+        return String(format: "%d:%02d", hours, mins)
+    }
+}
+
 struct DailyNotesView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -72,7 +97,7 @@ struct DailyNotesView: View {
                             .controlSize(.small)
                         }
                         
-                        Text("Use positive numbers to push times forward (+30) or negative to pull back (-15)")
+                        Text("Use positive numbers to push times forward (+30) or negative to pull back (-15). Fixed tasks marked with **text** remain unchanged.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -167,89 +192,215 @@ struct DailyNotesView: View {
     
     private func adjustTimeRanges(in content: String, byMinutes minutes: Int) -> String {
         let lines = content.components(separatedBy: .newlines)
-        var adjustedLines: [String] = []
         
+        // Process each line individually while maintaining order
+        var result: [String] = []
+        var timeEntries: [TimeEntry] = []
+        
+        // First pass: collect all time entries and identify their positions
         for line in lines {
-            let adjustedLine = adjustTimeRangeInLine(line, byMinutes: minutes)
-            adjustedLines.append(adjustedLine)
+            if let entry = parseTimeEntry(line) {
+                timeEntries.append(entry)
+            }
         }
         
-        return adjustedLines.joined(separator: "\n")
+        // Apply smart time adjustment
+        let adjustedEntries = smartAdjustTimeEntries(timeEntries, byMinutes: minutes)
+        
+        // Create a mapping of original entries to adjusted entries
+        var adjustedMap: [String: [TimeEntry]] = [:]
+        var adjustedIndex = 0
+        
+        for originalEntry in timeEntries {
+            var entriesForOriginal: [TimeEntry] = []
+            
+            // Find all adjusted entries that came from this original entry
+            while adjustedIndex < adjustedEntries.count {
+                let adjustedEntry = adjustedEntries[adjustedIndex]
+                if adjustedEntry.originalLine == originalEntry.originalLine {
+                    entriesForOriginal.append(adjustedEntry)
+                    adjustedIndex += 1
+                } else {
+                    break
+                }
+            }
+            
+            adjustedMap[originalEntry.originalLine] = entriesForOriginal
+        }
+        
+        // Second pass: reconstruct with proper replacements
+        for line in lines {
+            if let originalEntry = parseTimeEntry(line) {
+                // Replace with adjusted entries
+                if let adjustedEntries = adjustedMap[originalEntry.originalLine] {
+                    for adjustedEntry in adjustedEntries {
+                        result.append(adjustedEntry.toLine())
+                    }
+                }
+            } else {
+                // Keep non-time lines as-is (including strikethrough)
+                result.append(line)
+            }
+        }
+        
+        return result.joined(separator: "\n")
     }
     
-    private func adjustTimeRangeInLine(_ line: String, byMinutes minutes: Int) -> String {
+    private func smartAdjustTimeEntries(_ entries: [TimeEntry], byMinutes minutes: Int) -> [TimeEntry] {
+        guard !entries.isEmpty else { return entries }
+        
+        var result: [TimeEntry] = []
+        
+        for entry in entries {
+            if entry.isFixed {
+                // Fixed entries remain unchanged
+                result.append(entry)
+            } else {
+                // Variable entries get adjusted
+                let adjustedStartMinutes = entry.startMinutes + minutes
+                let adjustedEndMinutes = entry.endMinutes + minutes
+                
+                // Check if this conflicts with any fixed task
+                var conflictsWithFixed = false
+                var conflictingFixedEntry: TimeEntry?
+                
+                for otherEntry in entries {
+                    if otherEntry.isFixed && 
+                       adjustedStartMinutes < otherEntry.endMinutes && 
+                       adjustedEndMinutes > otherEntry.startMinutes {
+                        conflictsWithFixed = true
+                        conflictingFixedEntry = otherEntry
+                        break
+                    }
+                }
+                
+                if conflictsWithFixed, let fixedEntry = conflictingFixedEntry {
+                    // Handle conflict by adjusting the variable task to not overlap
+                    
+                    if adjustedStartMinutes < fixedEntry.startMinutes {
+                        // Variable task starts before fixed task
+                        // Truncate it to end when fixed task starts
+                        let truncatedEntry = TimeEntry(
+                            startMinutes: adjustedStartMinutes,
+                            endMinutes: fixedEntry.startMinutes,
+                            description: entry.description,
+                            isFixed: false,
+                            originalLine: entry.originalLine
+                        )
+                        result.append(truncatedEntry)
+                        
+                        // Calculate remaining duration and add it after the fixed task
+                        let usedDuration = fixedEntry.startMinutes - adjustedStartMinutes
+                        let remainingDuration = entry.duration - usedDuration
+                        
+                        if remainingDuration > 0 {
+                            let continuedEntry = TimeEntry(
+                                startMinutes: fixedEntry.endMinutes,
+                                endMinutes: fixedEntry.endMinutes + remainingDuration,
+                                description: "\(entry.description) (continued)",
+                                isFixed: false,
+                                originalLine: entry.originalLine
+                            )
+                            result.append(continuedEntry)
+                        }
+                    } else {
+                        // Variable task starts during or after fixed task
+                        // Move it to start after the fixed task
+                        let movedEntry = TimeEntry(
+                            startMinutes: fixedEntry.endMinutes,
+                            endMinutes: fixedEntry.endMinutes + entry.duration,
+                            description: entry.description,
+                            isFixed: false,
+                            originalLine: entry.originalLine
+                        )
+                        result.append(movedEntry)
+                    }
+                } else {
+                    // No conflict, normal adjustment
+                    let adjustedEntry = TimeEntry(
+                        startMinutes: adjustedStartMinutes,
+                        endMinutes: adjustedEndMinutes,
+                        description: entry.description,
+                        isFixed: false,
+                        originalLine: entry.originalLine
+                    )
+                    result.append(adjustedEntry)
+                }
+            }
+        }
+        
+        return result
+    }
+    
+    private func parseTimeEntry(_ line: String) -> TimeEntry? {
         let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Check if the line contains strikethrough text (~~text~~)
-        // If it does, skip processing this line
-        if trimmedLine.contains("~~") {
-            print("Skipping strikethrough line: '\(trimmedLine)'")
-            return line
+        // Skip strikethrough lines - check the entire line, not just if it contains ~~
+        if trimmedLine.hasPrefix("~~") && trimmedLine.hasSuffix("~~") {
+            return nil
         }
         
-        // Pattern to match time ranges with flexible format:
-        // "12:30 - 1:00 - work" or "12:30 - 1:00 work" or "12:30- 1:00 work"
+        // Also skip if the line contains ~~ anywhere (partial strikethrough)
+        if trimmedLine.contains("~~") {
+            return nil
+        }
+        
+        // Pattern to match time ranges
         let pattern = #"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*-?\s*(.+)"#
         
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            print("Failed to create regex")
-            return line
-        }
-        
-        let range = NSRange(location: 0, length: trimmedLine.utf16.count)
-        let matches = regex.matches(in: trimmedLine, options: [], range: range)
-        
-        guard let match = matches.first else {
-            print("No match found for line: '\(trimmedLine)'")
-            return line
-        }
-        
-        print("Found match in line: '\(trimmedLine)'")
-        
-        guard let startTimeRange = Range(match.range(at: 1), in: trimmedLine),
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: trimmedLine, range: NSRange(location: 0, length: trimmedLine.utf16.count)),
+              let startTimeRange = Range(match.range(at: 1), in: trimmedLine),
               let endTimeRange = Range(match.range(at: 2), in: trimmedLine),
               let descriptionRange = Range(match.range(at: 3), in: trimmedLine) else {
-            print("Failed to extract ranges from match")
-            return line
+            return nil
         }
         
         let startTimeStr = String(trimmedLine[startTimeRange])
         let endTimeStr = String(trimmedLine[endTimeRange])
         let description = String(trimmedLine[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
         
-        print("Extracted: start='\(startTimeStr)', end='\(endTimeStr)', desc='\(description)'")
-        
-        guard let adjustedStartTime = adjustTime(startTimeStr, byMinutes: minutes),
-              let adjustedEndTime = adjustTime(endTimeStr, byMinutes: minutes) else {
-            print("Failed to adjust times")
-            return line
+        guard let startMinutes = timeToMinutes(startTimeStr),
+              let endMinutes = timeToMinutes(endTimeStr) else {
+            return nil
         }
         
-        let result = "\(adjustedStartTime) - \(adjustedEndTime) - \(description)"
-        print("Adjusted line: '\(result)'")
-        return result
+        // Check if it's a fixed task (marked with **text**)
+        let isFixed = description.contains("**")
+        
+        return TimeEntry(
+            startMinutes: startMinutes,
+            endMinutes: endMinutes,
+            description: description,
+            isFixed: isFixed,
+            originalLine: line
+        )
     }
     
-    private func adjustTime(_ timeString: String, byMinutes minutes: Int) -> String? {
+    private func timeToMinutes(_ timeString: String) -> Int? {
         let components = timeString.components(separatedBy: ":")
         guard components.count == 2,
               let hours = Int(components[0]),
               let mins = Int(components[1]) else {
-            print("Failed to parse time: '\(timeString)'")
+            return nil
+        }
+        return hours * 60 + mins
+    }
+    
+    private func minutesToTime(_ minutes: Int) -> String {
+        let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
+        let hours = (adjustedMinutes / 60) % 24
+        let mins = adjustedMinutes % 60
+        return String(format: "%d:%02d", hours, mins)
+    }
+    
+    private func adjustTime(_ timeString: String, byMinutes minutes: Int) -> String? {
+        guard let timeMinutes = timeToMinutes(timeString) else {
             return nil
         }
         
-        let totalMinutes = hours * 60 + mins + minutes
-        
-        // Handle negative times by wrapping to previous day
-        let adjustedTotalMinutes = totalMinutes >= 0 ? totalMinutes : (totalMinutes % (24 * 60) + 24 * 60)
-        
-        let newHours = (adjustedTotalMinutes / 60) % 24
-        let newMins = adjustedTotalMinutes % 60
-        
-        let result = String(format: "%d:%02d", newHours, newMins)
-        print("Adjusted '\(timeString)' by \(minutes) minutes to '\(result)'")
-        return result
+        let adjustedMinutes = timeMinutes + minutes
+        return minutesToTime(adjustedMinutes)
     }
 }
 
