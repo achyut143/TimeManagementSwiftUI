@@ -44,7 +44,7 @@ struct FloatingButtonsOverlay: View {
             
             QuickAlertButton()
             
-            FloatingTimerView()
+            QuickActivityButton()
         }
     }
 }

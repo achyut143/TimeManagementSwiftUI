@@ -17,7 +17,7 @@ struct FloatingButtonsModifier: ViewModifier {
                         ZStack {
                             QuickAlertButton()
                             
-                            FloatingTimerView()
+                            QuickActivityButton()
                         }
                     }
                     .allowsHitTesting(true)

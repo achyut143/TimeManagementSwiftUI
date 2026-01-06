@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var showAlertManager = false
     @State private var showBackgroundCounter = false
     @State private var showDailyNotes = false
+    @State private var showNewActivity = false
     @State private var selectedDate = Date()
     @ObservedObject private var counterManager = BackgroundCounterManager.shared
     
@@ -52,10 +53,19 @@ struct ContentView: View {
                             }
                         }
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            Button {
-                                showAlertView = true
-                            } label: {
-                                Image(systemName: "clock")
+                            HStack {
+                                Button {
+                                    showNewActivity = true
+                                } label: {
+                                    Image(systemName: "clock.badge.plus")
+                                        .foregroundColor(.purple)
+                                }
+                                
+                                Button {
+                                    showAlertView = true
+                                } label: {
+                                    Image(systemName: "clock")
+                                }
                             }
                         }
                     }
@@ -98,11 +108,11 @@ struct ContentView: View {
                 }
                 
                 NavigationStack {
-                    FastingView()
+                    ScheduledActivityView()
                 }
                 .tabItem {
-                    Image(systemName: "fork.knife")
-                    Text("Fasting")
+                    Image(systemName: "clock.badge.checkmark")
+                    Text("Activities")
                 }
             }
             .sheet(isPresented: $showAlertView) {
@@ -114,10 +124,13 @@ struct ContentView: View {
             .sheet(isPresented: $showDailyNotes) {
                 DailyNotesView(selectedDate: selectedDate)
             }
+            .sheet(isPresented: $showNewActivity) {
+                NewScheduledActivityView()
+            }
             
             QuickAlertButton()
             
-            FloatingTimerView()
+            QuickActivityButton()
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
@@ -135,5 +148,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, Reward.self, FastingSession.self, DailyNote.self, HabitSettings.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, Reward.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self], inMemory: true)
 }
