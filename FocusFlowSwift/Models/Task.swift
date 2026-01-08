@@ -4,6 +4,7 @@ import CoreTransferable
 
 @Model
 class Task: Transferable {
+    var id: UUID = UUID() // Unique identifier for reliable task referencing
     var title: String
     var taskDescription: String
     var startTime: String
@@ -29,6 +30,7 @@ class Task: Transferable {
     var rewardLinks: [TaskRewardLink]? = []
     
     init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false) {
+        self.id = UUID()
         self.title = title
         self.taskDescription = taskDescription
         self.startTime = startTime
@@ -46,6 +48,30 @@ class Task: Transferable {
         self.timeSpent = timeSpent
         self.elapsedTime = elapsedTime
         self.copySubtasks = copySubtasks
+    }
+    
+    // Migration helper to ensure all tasks have unique UUIDs
+    func ensureUniqueId() {
+        // Check if this task has a valid UUID, if not generate a new one
+        let emptyUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        if self.id == emptyUUID || self.id.uuidString.isEmpty {
+            self.id = UUID()
+            print("🔄 Generated new UUID for task: '\(self.title)' - \(self.id.uuidString)")
+        }
+    }
+    
+    // Static method to fix duplicate UUIDs in a collection of tasks
+    static func fixDuplicateUUIDs(in tasks: [Task]) {
+        var seenUUIDs: Set<UUID> = []
+        
+        for task in tasks {
+            if seenUUIDs.contains(task.id) {
+                // Duplicate found, generate new UUID
+                task.id = UUID()
+                print("🔄 Fixed duplicate UUID for task: '\(task.title)' - new UUID: \(task.id.uuidString)")
+            }
+            seenUUIDs.insert(task.id)
+        }
     }
     
     // Helper method to get calculated time for timed tasks or timeSpent for untimed tasks

@@ -94,7 +94,7 @@ struct QuickActivityButton: View {
 struct QuickActivitiesListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive }, sort: \ScheduledActivity.createdAt, order: .reverse)
+    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
     private var activities: [ScheduledActivity]
     
     @State private var currentTime = Date()
@@ -104,10 +104,44 @@ struct QuickActivitiesListView: View {
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
+    // Sort activities by time remaining (least time first)
+    var sortedActivities: [ScheduledActivity] {
+        activities.sorted { activity1, activity2 in
+            let time1 = timeUntilNext(for: activity1)
+            let time2 = timeUntilNext(for: activity2)
+            
+            // Activities in active window come first (negative time)
+            if time1 < 0 && time2 >= 0 {
+                return true
+            } else if time1 >= 0 && time2 < 0 {
+                return false
+            } else if time1 < 0 && time2 < 0 {
+                // Both in active window, sort by remaining window time (descending)
+                return time1 > time2
+            } else {
+                // Both not in active window, sort by next time (ascending)
+                return time1 < time2
+            }
+        }
+    }
+    
+    private func timeUntilNext(for activity: ScheduledActivity) -> TimeInterval {
+        if activity.isInActiveWindow() {
+            // Return negative value for active windows (window end time - current time)
+            if let windowEnd = activity.currentWindowEndTime() {
+                return windowEnd.timeIntervalSince(currentTime)
+            }
+            return -1
+        } else if let nextTime = activity.nextScheduledTime() {
+            return nextTime.timeIntervalSince(currentTime)
+        }
+        return TimeInterval.greatestFiniteMagnitude // Activities with no next time go to the end
+    }
+    
     var body: some View {
         NavigationStack {
             List {
-                ForEach(activities, id: \.name) { activity in
+                ForEach(sortedActivities, id: \.name) { activity in
                     QuickActivityRowView(
                         activity: activity,
                         currentTime: currentTime,
@@ -144,9 +178,20 @@ struct QuickActivitiesListView: View {
     }
     
     private func recordActivityUsage(activity: ScheduledActivity) {
+        print("🚀 DEBUG: recordActivityUsage called for activity: '\(activity.name)'")
         let now = Date()
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
+        
+        // Burn attached reward if configured
+        if activity.burnAttachedReward(context: modelContext) {
+            print("🔥 Burned attached reward for activity '\(activity.name)'")
+        }
+        
+        // Add time to attached task if configured
+        if activity.addTimeToAttachedTask(context: modelContext) {
+            print("⏱️ Added time to attached task for activity '\(activity.name)'")
+        }
         
         // Find the current window
         for scheduledTime in activity.scheduledTimes {
@@ -178,8 +223,63 @@ struct QuickActivityRowView: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text(activity.name)
-                    .font(.headline)
+                HStack {
+                    Text(activity.name)
+                        .font(.headline)
+                    
+                    Spacer()
+                    
+                    // Show reward count if there are accumulated credits
+                    if activity.accumulatedWindowCredits > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "gift.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Text("\(activity.accumulatedWindowCredits)")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.orange)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                    
+                    // Show attached reward if configured
+                    if activity.hasRewardAttachment {
+                        HStack(spacing: 4) {
+                            Image(systemName: activity.effectiveRewardBurnType.icon)
+                                .font(.caption)
+                                .foregroundColor(.purple)
+                            Text(activity.formattedBurnAmount())
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.purple)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.purple.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                    
+                    // Show attached task if configured
+                    if activity.hasTaskAttachment {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.badge.plus.fill")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                            Text(activity.formattedTaskTime())
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                }
                 
                 if activity.isInActiveWindow() {
                     if let windowEnd = activity.currentWindowEndTime() {
@@ -233,5 +333,5 @@ struct QuickActivityRowView: View {
 
 #Preview {
     QuickActivityButton()
-        .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self], inMemory: true)
+        .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self, Reward.self, Task.self], inMemory: true)
 }

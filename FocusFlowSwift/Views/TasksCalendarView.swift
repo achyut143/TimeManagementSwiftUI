@@ -729,6 +729,10 @@ struct TasksCalendarView: View {
                     return !task.startTime.isEmpty && !task.endTime.isEmpty && isDateMatch
                 }
             }
+            
+            // Fix any duplicate UUIDs before displaying
+            Task.fixDuplicateUUIDs(in: tasks)
+            
             print("Fetched \(tasks.count) \(showUntimedTasks ? "untimed" : "timed") tasks for \(selectedDate)")
         } catch {
             print("Error fetching tasks: \(error)")

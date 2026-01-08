@@ -353,6 +353,8 @@ struct TasksListView: View {
         let descriptor = FetchDescriptor<Task>()
         do {
             tasks = try modelContext.fetch(descriptor)
+            // Fix any duplicate UUIDs
+            Task.fixDuplicateUUIDs(in: tasks)
         } catch {
             print("Failed to fetch tasks: \(error)")
         }

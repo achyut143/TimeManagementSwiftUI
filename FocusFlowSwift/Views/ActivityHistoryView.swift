@@ -109,8 +109,15 @@ struct HistoryRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(usage.activityName)
-                    .font(.headline)
+                // Activity name with usage type icon
+                HStack(spacing: 6) {
+                    Image(systemName: usage.effectiveUsageType.icon)
+                        .foregroundColor(usage.effectiveUsageType == .creditUsage ? .orange : .blue)
+                        .font(.caption)
+                    
+                    Text(usage.activityName)
+                        .font(.headline)
+                }
                 
                 Spacer()
                 
@@ -119,12 +126,33 @@ struct HistoryRowView: View {
                     .foregroundColor(.secondary)
             }
             
-            HStack {
-                Text("Window: \(usage.windowStartTime, style: .time) - \(usage.windowEndTime, style: .time)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Spacer()
+            // Different display based on usage type
+            if usage.effectiveUsageType == .creditUsage {
+                HStack {
+                    Text("Credit Usage")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(4)
+                    
+                    if let credits = usage.creditsUsed {
+                        Text("(\(credits) \(credits == 1 ? "credit" : "credits"))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                }
+            } else {
+                HStack {
+                    Text("Window: \(usage.windowStartTime, style: .time) - \(usage.windowEndTime, style: .time)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer()
+                }
             }
             
             if let notes = usage.notes, !notes.isEmpty {

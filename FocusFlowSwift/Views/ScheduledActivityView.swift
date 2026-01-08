@@ -8,6 +8,7 @@ struct ScheduledActivityView: View {
     
     @State private var showNewActivitySheet = false
     @State private var showHistorySheet = false
+    @State private var showRewardsSheet = false
     @State private var currentTime = Date()
     @State private var selectedActivity: ScheduledActivity?
     @State private var showActivityWindow = false
@@ -20,7 +21,37 @@ struct ScheduledActivityView: View {
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     var activeActivities: [ScheduledActivity] {
-        activities.filter { $0.isActive }
+        let filtered = activities.filter { $0.isActive }
+        return filtered.sorted { activity1, activity2 in
+            let time1 = timeUntilNext(for: activity1)
+            let time2 = timeUntilNext(for: activity2)
+            
+            // Activities in active window come first (negative time)
+            if time1 < 0 && time2 >= 0 {
+                return true
+            } else if time1 >= 0 && time2 < 0 {
+                return false
+            } else if time1 < 0 && time2 < 0 {
+                // Both in active window, sort by remaining window time (descending)
+                return time1 > time2
+            } else {
+                // Both not in active window, sort by next time (ascending)
+                return time1 < time2
+            }
+        }
+    }
+    
+    private func timeUntilNext(for activity: ScheduledActivity) -> TimeInterval {
+        if activity.isInActiveWindow() {
+            // Return negative value for active windows (window end time - current time)
+            if let windowEnd = activity.currentWindowEndTime() {
+                return windowEnd.timeIntervalSince(currentTime)
+            }
+            return -1
+        } else if let nextTime = activity.nextScheduledTime() {
+            return nextTime.timeIntervalSince(currentTime)
+        }
+        return TimeInterval.greatestFiniteMagnitude // Activities with no next time go to the end
     }
     
     var body: some View {
@@ -62,10 +93,19 @@ struct ScheduledActivityView: View {
         .navigationTitle("Scheduled Activities")
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    showHistorySheet = true
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
+                HStack {
+                    Button {
+                        showHistorySheet = true
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    
+                    Button {
+                        showRewardsSheet = true
+                    } label: {
+                        Image(systemName: "gift.fill")
+                            .foregroundColor(.orange)
+                    }
                 }
             }
             
@@ -87,6 +127,9 @@ struct ScheduledActivityView: View {
         }
         .sheet(isPresented: $showHistorySheet) {
             ActivityHistoryView()
+        }
+        .sheet(isPresented: $showRewardsSheet) {
+            ActivityRewardsView()
         }
         .sheet(isPresented: $showActivityWindow) {
             if let activity = selectedActivity {
@@ -119,6 +162,10 @@ struct ScheduledActivityView: View {
         }
         .onReceive(timer) { _ in
             currentTime = Date()
+            checkForExpiredWindows()
+        }
+        .onAppear {
+            checkForExpiredWindows()
         }
     }
     
@@ -161,9 +208,23 @@ struct ScheduledActivityView: View {
     }
     
     private func recordActivityUsage(activity: ScheduledActivity) {
+        print("🚀 DEBUG: recordActivityUsage called for activity: '\(activity.name)'")
         let now = Date()
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
+        
+        // Mark window as used for reward tracking
+        activity.markWindowAsUsed()
+        
+        // Burn attached reward if configured
+        if activity.burnAttachedReward(context: modelContext) {
+            print("🔥 Burned attached reward for activity '\(activity.name)'")
+        }
+        
+        // Add time to attached task if configured
+        if activity.addTimeToAttachedTask(context: modelContext) {
+            print("⏱️ Added time to attached task for activity '\(activity.name)'")
+        }
         
         // Find the current window
         for scheduledTime in activity.scheduledTimes {
@@ -190,6 +251,28 @@ struct ScheduledActivityView: View {
         modelContext.delete(activity)
         try? modelContext.save()
     }
+    
+    private func checkForExpiredWindows() {
+        for activity in activeActivities {
+            // Check and reset counters first
+            activity.checkAndResetCounters()
+            
+            // Check for windows that have passed unused in the current period
+            let passedWindows = activity.getPassedUnusedWindows()
+            
+            // For each passed window, check if we've already recorded it as skipped
+            // We'll use a simple approach: if windowsSkippedInPeriod is less than the number of passed windows,
+            // mark the difference as skipped
+            let expectedSkipped = passedWindows.count
+            if activity.windowsSkippedInPeriod < expectedSkipped {
+                let newlySkipped = expectedSkipped - activity.windowsSkippedInPeriod
+                for _ in 0..<newlySkipped {
+                    activity.markWindowAsSkipped()
+                }
+                try? modelContext.save()
+            }
+        }
+    }
 }
 
 struct ActivityCardView: View {
@@ -199,13 +282,26 @@ struct ActivityCardView: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     
+    @Environment(\.modelContext) private var modelContext
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
             HStack {
-                Text(activity.name)
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(activity.name)
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    HStack {
+                        Image(systemName: activity.effectiveRecurrenceType.icon)
+                            .foregroundColor(.blue)
+                            .font(.caption)
+                        Text(activity.effectiveRecurrenceType.displayName)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 
                 Spacer()
                 
@@ -260,6 +356,43 @@ struct ActivityCardView: View {
                 }
             }
             
+            // Recurrence Days Display
+            if activity.effectiveRecurrenceType != .daily {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Recurrence Days:")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        
+                        Spacer()
+                        
+                        Text("(\(activity.effectiveRecurrenceType.displayName))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    let days = getRecurrenceDaysDisplay(for: activity)
+                    if !days.isEmpty {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 6) {
+                            ForEach(days, id: \.self) { dayText in
+                                Text(dayText)
+                                    .font(.caption)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(Color.blue.opacity(0.1))
+                                    .foregroundColor(.blue)
+                                    .cornerRadius(4)
+                            }
+                        }
+                    } else {
+                        Text("No days selected")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .italic()
+                    }
+                }
+            }
+            
             // Window Duration
             HStack {
                 Text("Window Duration:")
@@ -267,6 +400,131 @@ struct ActivityCardView: View {
                 Text(durationString(from: activity.windowDuration))
             }
             .font(.subheadline)
+            
+            // Window Credits Display
+            if activity.accumulatedWindowCredits > 0 {
+                HStack {
+                    Text("Window Credits:")
+                    Spacer()
+                    Text(activity.formattedWindowCredits())
+                        .fontWeight(.semibold)
+                        .foregroundColor(.orange)
+                }
+                .font(.subheadline)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(6)
+            }
+            
+            // Attached Reward Display
+            if activity.hasRewardAttachment {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Attached Reward:")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                        if let reward = activity.getAttachedReward(context: modelContext) {
+                            HStack(spacing: 4) {
+                                Image(systemName: reward.type.icon)
+                                    .font(.caption)
+                                Text(reward.name)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
+                            .foregroundColor(.purple)
+                        }
+                    }
+                    
+                    HStack {
+                        Text("Burns:")
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Image(systemName: activity.effectiveRewardBurnType.icon)
+                                .font(.caption)
+                            Text(activity.formattedBurnAmount())
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(.red)
+                    }
+                    .font(.caption)
+                    
+                    // Show if reward can afford the burn
+                    if let reward = activity.getAttachedReward(context: modelContext) {
+                        HStack {
+                            Text("Available:")
+                            Spacer()
+                            Text(reward.formattedAmount())
+                                .foregroundColor(activity.canBurnReward(context: modelContext) ? .green : .red)
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.purple.opacity(0.1))
+                .cornerRadius(6)
+            }
+            
+            // Attached Task Display
+            if activity.hasTaskAttachment {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Attached Task:")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                        if let task = activity.getAttachedTask(context: modelContext) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle")
+                                    .font(.caption)
+                                Text(task.title)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .lineLimit(1)
+                            }
+                            .foregroundColor(.blue)
+                        }
+                    }
+                    
+                    HStack {
+                        Text("Adds:")
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.badge.plus.fill")
+                                .font(.caption)
+                            Text(activity.formattedTaskTime())
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(.green)
+                    }
+                    .font(.caption)
+                    
+                    // Show current task progress
+                    if let task = activity.getAttachedTask(context: modelContext) {
+                        HStack {
+                            Text("Current:")
+                            Spacer()
+                            let currentTime = task.timeSpent ?? 0.0
+                            let allocatedTime = task.allocatedTimeInMinutes
+                            if allocatedTime > 0 {
+                                let percentage = min(currentTime / allocatedTime, 1.0) * 100
+                                Text("\(Int(percentage))% (\(formatTaskTime(currentTime)))")
+                                    .foregroundColor(percentage >= 100 ? .green : .orange)
+                            } else {
+                                Text(formatTaskTime(currentTime))
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(6)
+            }
             
             // Next Window or Current Status
             if activity.isInActiveWindow() {
@@ -293,18 +551,52 @@ struct ActivityCardView: View {
                                 .foregroundColor(.white)
                                 .cornerRadius(10)
                         }
+                        
+                        // Use Window Credit Button
+                        if activity.accumulatedWindowCredits >= 1 {
+                            Button {
+                                if activity.useWindowCredits(1, context: modelContext) {
+                                    try? modelContext.save()
+                                }
+                            } label: {
+                                Label("Use 1 Window Credit", systemImage: "gift.fill")
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.orange)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(10)
+                            }
+                        }
                     }
                 }
             } else if let nextTime = activity.nextScheduledTime() {
                 let timeUntilNext = nextTime.timeIntervalSince(currentTime)
                 
-                HStack {
-                    Text("Next window in:")
-                    Spacer()
-                    Text(timeString(from: timeUntilNext))
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.semibold)
-                        .foregroundColor(.blue)
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("Next window in:")
+                        Spacer()
+                        Text(timeString(from: timeUntilNext))
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundColor(.blue)
+                    }
+                    
+                    // Use Window Credit Button (when not in active window)
+                    if activity.accumulatedWindowCredits >= 1 {
+                        Button {
+                            if activity.useWindowCredits(1, context: modelContext) {
+                                try? modelContext.save()
+                            }
+                        } label: {
+                            Label("Use 1 Window Credit", systemImage: "gift.fill")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Color.orange)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                        }
+                    }
                 }
             }
         }
@@ -335,11 +627,63 @@ struct ActivityCardView: View {
             return "\(seconds)s"
         }
     }
+    
+    private func formatTaskTime(_ minutes: Double) -> String {
+        let hours = Int(minutes) / 60
+        let mins = Int(minutes) % 60
+        if hours > 0 {
+            return "\(hours)h \(mins)m"
+        } else {
+            return "\(Int(minutes)) min"
+        }
+    }
+    
+    private func getRecurrenceDaysDisplay(for activity: ScheduledActivity) -> [String] {
+        print("📅 Getting recurrence days for '\(activity.name)' - Type: \(activity.effectiveRecurrenceType.displayName)")
+        print("📅 Weekdays: \(activity.selectedWeekdays), Month days: \(activity.selectedMonthDays), Months: \(activity.selectedMonths)")
+        
+        switch activity.effectiveRecurrenceType {
+        case .daily:
+            return [] // Daily activities don't need day display
+            
+        case .weekly:
+            let result = activity.selectedWeekdays.sorted().map { weekday in
+                Calendar.current.weekdaySymbols[weekday - 1]
+            }
+            print("📅 Weekly display: \(result)")
+            return result
+            
+        case .monthly:
+            let result = activity.selectedMonthDays.sorted().map { day in
+                "\(day)"
+            }
+            print("📅 Monthly display: \(result)")
+            return result
+            
+        case .quarterly:
+            var result: [String] = []
+            
+            // Add selected months
+            let months = activity.selectedMonths.sorted().map { month in
+                Calendar.current.monthSymbols[month - 1]
+            }
+            result.append(contentsOf: months)
+            
+            // Add selected days with "Day" prefix to distinguish from months
+            let days = activity.selectedMonthDays.sorted().map { day in
+                "Day \(day)"
+            }
+            result.append(contentsOf: days)
+            
+            print("📅 Quarterly display: \(result)")
+            return result
+        }
+    }
 }
 
 #Preview {
     NavigationStack {
         ScheduledActivityView()
     }
-    .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self], inMemory: true)
+    .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self, Reward.self, Task.self], inMemory: true)
 }
