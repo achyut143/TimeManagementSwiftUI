@@ -3,6 +3,9 @@ import SwiftData
 import AVFoundation
 import Speech
 import Foundation
+import UniformTypeIdentifiers
+import QuickLook
+import PhotosUI
 
 struct TasksCalendarView: View {
     @Environment(\.modelContext) private var modelContext
@@ -397,6 +400,21 @@ struct TasksCalendarView: View {
                             .foregroundStyle(.orange)
                     }
                     
+                    if let attachments = task.attachments, !attachments.isEmpty {
+                        HStack(spacing: 2) {
+                            Image(systemName: "paperclip")
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                            Text("\(attachments.count)")
+                                .font(.caption2)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.blue)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    
                     if task.repeatAgain != nil {
                         Image(systemName: "repeat")
                             .font(.caption)
@@ -574,6 +592,21 @@ struct TasksCalendarView: View {
             Image(systemName: "note.text")
                 .font(.caption2)
                 .foregroundStyle(.orange)
+        }
+        
+        if let attachments = task.attachments, !attachments.isEmpty {
+            HStack(spacing: 1) {
+                Image(systemName: "paperclip")
+                    .font(.caption2)
+                    .foregroundStyle(.blue)
+                Text("\(attachments.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(.blue)
+                    .clipShape(Capsule())
+            }
         }
         
         if task.repeatAgain != nil {
@@ -1543,6 +1576,7 @@ struct TaskActionsView: View {
     @State private var showNotesDialog = false
     @State private var showPersistentNotesDialog = false
     @State private var showTimeSpentDialog = false
+    @State private var showFileAttachments = false
     @State private var showSubtasksView = false
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
@@ -1598,6 +1632,10 @@ struct TaskActionsView: View {
                         
                         actionButton("Persistent Notes", systemImage: "pin.fill", color: .purple) {
                             showPersistentNotesDialog = true
+                        }
+                        
+                        actionButton("Attach Files", systemImage: "paperclip", color: .brown) {
+                            showFileAttachments = true
                         }
                         
                         actionButton("Time Spent", systemImage: "clock.fill", color: .cyan) {
@@ -1666,6 +1704,9 @@ struct TaskActionsView: View {
         }
         .sheet(isPresented: $showTimeSpentDialog) {
             TimeSpentEditorView(task: task)
+        }
+        .sheet(isPresented: $showFileAttachments) {
+            TaskAttachmentsManagementView(task: task)
         }
         .sheet(isPresented: $showSubtasksView) {
             SubtasksView(parentTask: task)

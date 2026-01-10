@@ -201,6 +201,21 @@ struct UntimedTasksView: View {
                             .foregroundStyle(.orange)
                     }
                     
+                    if let attachments = task.attachments, !attachments.isEmpty {
+                        HStack(spacing: 2) {
+                            Image(systemName: "paperclip")
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                            Text("\(attachments.count)")
+                                .font(.caption2)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.blue)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    
                     if task.repeatAgain != nil {
                         Image(systemName: "repeat")
                             .font(.caption)

@@ -112,7 +112,10 @@ struct HistoryRowView: View {
                 // Activity name with usage type icon
                 HStack(spacing: 6) {
                     Image(systemName: usage.effectiveUsageType.icon)
-                        .foregroundColor(usage.effectiveUsageType == .creditUsage ? .orange : .blue)
+                        .foregroundColor(
+                            usage.effectiveUsageType == .creditUsage ? .orange :
+                            usage.effectiveUsageType == .creditIgnore ? .red : .blue
+                        )
                         .font(.caption)
                     
                     Text(usage.activityName)
@@ -135,6 +138,24 @@ struct HistoryRowView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .background(Color.orange.opacity(0.1))
+                        .cornerRadius(4)
+                    
+                    if let credits = usage.creditsUsed {
+                        Text("(\(credits) \(credits == 1 ? "credit" : "credits"))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                }
+            } else if usage.effectiveUsageType == .creditIgnore {
+                HStack {
+                    Text("Credit Ignore")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.1))
                         .cornerRadius(4)
                     
                     if let credits = usage.creditsUsed {

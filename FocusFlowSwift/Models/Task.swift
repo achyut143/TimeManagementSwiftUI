@@ -29,6 +29,9 @@ class Task: Transferable {
     @Relationship(deleteRule: .cascade, inverse: \TaskRewardLink.task)
     var rewardLinks: [TaskRewardLink]? = []
     
+    @Relationship(deleteRule: .cascade)
+    var attachments: [TaskAttachment]?
+    
     init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false) {
         self.id = UUID()
         self.title = title

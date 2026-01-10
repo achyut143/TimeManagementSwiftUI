@@ -10,6 +10,8 @@ struct HabitDashboardView: View {
     @State private var toDate = Date()
     @State private var filterMode = "all"
     @State private var showDeleteConfirmation = false
+    @State private var showArchiveConfirmation = false
+    @State private var showArchivedHabits = false
     @State private var habitToDelete = ""
     @State private var searchText = ""
     
@@ -79,13 +81,19 @@ struct HabitDashboardView: View {
       }
     }
 
-        .alert("Delete Habit", isPresented: $showDeleteConfirmation) {
+        .alert("Habit Actions", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
+            Button("Archive", action: {
+                archiveHabit(habitToDelete)
+            })
             Button("Delete", role: .destructive) {
                 deleteHabit(habitToDelete)
             }
         } message: {
-            Text("Are you sure you want to delete this habit and all its tasks?")
+            Text("Choose an action for this habit:\n\n• Archive: Save statistics and remove from active habits\n• Delete: Permanently remove habit and all its tasks")
+        }
+        .sheet(isPresented: $showArchivedHabits) {
+            ArchivedHabitsView()
         }
     }
     
@@ -96,6 +104,14 @@ struct HabitDashboardView: View {
                 .fontWeight(.semibold)
             
             Spacer()
+            
+            Button {
+                showArchivedHabits = true
+            } label: {
+                Image(systemName: "archivebox")
+                    .font(.title3)
+                    .foregroundColor(.blue)
+            }
             
             Picker("Filter", selection: $filterMode) {
                 Text("All").tag("all")
@@ -507,6 +523,29 @@ struct HabitDashboardView: View {
         }
         
         return (currentStreak, maxStreak)
+    }
+    
+    private func archiveHabit(_ habitName: String) {
+        // Create archived habit with comprehensive statistics
+        if let archivedHabit = HabitArchiveService.archiveHabit(habitName: habitName, tasks: tasks, context: modelContext) {
+            // Insert the archived habit into the database
+            modelContext.insert(archivedHabit)
+            
+            // Delete the original habit tasks
+            let tasksToDelete = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }
+            for task in tasksToDelete {
+                modelContext.delete(task)
+            }
+            
+            try? modelContext.save()
+            
+            // Update selected habit if needed
+            if selectedHabit == habitName {
+                selectedHabit = habitNames.first { $0 != habitName } ?? ""
+            }
+            
+            print("✅ Habit '\(habitName)' archived successfully with \(archivedHabit.totalCompletedDays) completed days and \(archivedHabit.formattedCompletionPercentage) completion rate")
+        }
     }
     
     private func deleteHabit(_ habitName: String) {

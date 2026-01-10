@@ -14,6 +14,7 @@ struct HabitOverviewView: View {
     @State private var showDMSGuide = false
     @State private var showFilters = false
     @State private var selectedRepeatFilter: Int? = nil
+    @State private var selectedTagsFilter: Set<String> = []
     @State private var habitSettings: HabitSettings?
     
     var body: some View {
@@ -517,6 +518,25 @@ struct HabitOverviewView: View {
                 }
                 return true
             }
+            .filter { name in
+                // Apply tags filter if selected
+                if !selectedTagsFilter.isEmpty {
+                    let habitTasks = tasks.filter { $0.title == name && $0.repeatAgain != nil }
+                    
+                    // Check if any habit task has at least one of the selected tags
+                    return habitTasks.contains { task in
+                        // Handle empty tag selection
+                        if selectedTagsFilter.contains("") && task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
+                            return true
+                        }
+                        
+                        // Split taskDescription by commas and check for matches
+                        let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                        return !Set(taskTags).isDisjoint(with: selectedTagsFilter)
+                    }
+                }
+                return true
+            }
             .filter { searchText.isEmpty || $0.localizedCaseInsensitiveContains(searchText) }
     }
     
@@ -821,6 +841,61 @@ struct HabitOverviewView: View {
                             .padding(.horizontal, 16)
                         }
                     }
+                    
+                    // Tags Filter
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Tags")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            
+                            Spacer()
+                            
+                            if !selectedTagsFilter.isEmpty {
+                                Button("Clear") {
+                                    selectedTagsFilter.removeAll()
+                                }
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                            }
+                        }
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(getAvailableHabitTags(), id: \.self) { tag in
+                                    let isSelected = selectedTagsFilter.contains(tag)
+                                    let habitCount = getHabitCountForTag(tag)
+                                    
+                                    Button(action: {
+                                        if selectedTagsFilter.contains(tag) {
+                                            selectedTagsFilter.remove(tag)
+                                        } else {
+                                            selectedTagsFilter.insert(tag)
+                                        }
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            Text(tag.isEmpty ? "No Tag" : tag)
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                            
+                                            Text("\(habitCount) habit\(habitCount == 1 ? "" : "s")")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(isSelected ? Color.green : Color(.systemGray6))
+                                        )
+                                        .foregroundColor(isSelected ? .white : .primary)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                    }
                 }
                 .padding(.vertical, 16)
                 .background(Color(.systemBackground))
@@ -1008,7 +1083,51 @@ struct HabitOverviewView: View {
     }
     
     private func hasActiveFilters() -> Bool {
-        return selectedRepeatFilter != nil || !searchText.isEmpty
+        return selectedRepeatFilter != nil || !searchText.isEmpty || !selectedTagsFilter.isEmpty
+    }
+    
+    private func getAvailableHabitTags() -> [String] {
+        // Get all habit tasks (tasks with repeatAgain != nil)
+        let habitTasks = tasks.filter { $0.repeatAgain != nil }
+        
+        // Split taskDescription by commas and get unique tags
+        var allTags = Set<String>()
+        for task in habitTasks {
+            let tags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            for tag in tags {
+                if !tag.isEmpty {
+                    allTags.insert(tag)
+                }
+            }
+            // Also add empty tag if taskDescription is empty
+            if task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
+                allTags.insert("")
+            }
+        }
+        
+        // Return sorted array, with empty strings (no tag) at the end
+        return Array(allTags).sorted { first, second in
+            if first.isEmpty && !second.isEmpty { return false }
+            if !first.isEmpty && second.isEmpty { return true }
+            return first < second
+        }
+    }
+    
+    private func getHabitCountForTag(_ tag: String) -> Int {
+        // Get habit names that have this specific tag
+        let habitNames = Set(tasks.filter { task in
+            guard task.repeatAgain != nil else { return false }
+            
+            if tag.isEmpty {
+                // For empty tag, check if taskDescription is empty
+                return task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty
+            } else {
+                // For non-empty tag, check if it exists in comma-separated values
+                let tags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                return tags.contains(tag)
+            }
+        }.map { $0.title })
+        return habitNames.count
     }
     
     private func getActiveFiltersText() -> String {

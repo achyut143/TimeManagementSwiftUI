@@ -119,6 +119,7 @@ struct ActivityRewardCard: View {
             
             if activity.accumulatedWindowCredits >= 1 {
                 HStack(spacing: 8) {
+                    // Use buttons
                     Button {
                         if activity.useWindowCredits(1, context: modelContext) {
                             try? modelContext.save()
@@ -160,6 +161,57 @@ struct ActivityRewardCard: View {
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
                                 .background(Color.orange)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                        }
+                    }
+                    
+                    Spacer()
+                }
+                
+                // Ignore buttons (second row)
+                HStack(spacing: 8) {
+                    Button {
+                        if activity.ignoreWindowCredits(1, context: modelContext) {
+                            try? modelContext.save()
+                        }
+                    } label: {
+                        Text("Ignore 1")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.red)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                    
+                    if activity.accumulatedWindowCredits >= 2 {
+                        Button {
+                            if activity.ignoreWindowCredits(2, context: modelContext) {
+                                try? modelContext.save()
+                            }
+                        } label: {
+                            Text("Ignore 2")
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.red)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                        }
+                    }
+                    
+                    if activity.accumulatedWindowCredits >= 5 {
+                        Button {
+                            if activity.ignoreWindowCredits(5, context: modelContext) {
+                                try? modelContext.save()
+                            }
+                        } label: {
+                            Text("Ignore 5")
+                                .font(.caption)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.red)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                         }

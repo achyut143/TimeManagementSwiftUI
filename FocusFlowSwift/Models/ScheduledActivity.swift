@@ -504,17 +504,17 @@ class ScheduledActivity {
         if accumulatedWindowCredits >= credits {
             accumulatedWindowCredits -= credits
             
-            // Burn attached reward if configured
-            print("🔍 DEBUG: useWindowCredits - About to check reward burning")
-            if burnAttachedReward(context: context) {
+            // Burn attached reward if configured (multiply by credits used)
+            print("🔍 DEBUG: useWindowCredits - About to check reward burning with multiplier: \(credits)")
+            if burnAttachedReward(multiplier: credits, context: context) {
                 print("🔥 DEBUG: Successfully burned attached reward when using window credits")
             } else {
                 print("ℹ️ DEBUG: No reward to burn or burning failed when using window credits")
             }
             
-            // Add time to attached task if configured
-            print("🔍 DEBUG: useWindowCredits - About to check task time addition")
-            if addTimeToAttachedTask(context: context) {
+            // Add time to attached task if configured (multiply by credits used)
+            print("🔍 DEBUG: useWindowCredits - About to check task time addition with multiplier: \(credits)")
+            if addTimeToAttachedTask(multiplier: credits, context: context) {
                 print("⏱️ DEBUG: Successfully added time to attached task when using window credits")
             } else {
                 print("ℹ️ DEBUG: No task to add time to or addition failed when using window credits")
@@ -534,6 +534,34 @@ class ScheduledActivity {
             context.insert(usage)
             
             print("⏰ Used \(credits) window credits for '\(name)'. Remaining: \(accumulatedWindowCredits) windows")
+            return true
+        } else {
+            print("❌ Not enough window credits. Available: \(accumulatedWindowCredits), Requested: \(credits)")
+            return false
+        }
+    }
+    
+    // Ignore accumulated window credits (remove credits without burning rewards or adding task time)
+    func ignoreWindowCredits(_ credits: Int, context: ModelContext) -> Bool {
+        checkAndResetCounters()
+        
+        if accumulatedWindowCredits >= credits {
+            accumulatedWindowCredits -= credits
+            
+            // Record credit ignore in history (no reward burning or task time addition)
+            let now = Date()
+            let usage = ActivityUsageHistory(
+                activityName: name,
+                usedAt: now,
+                windowStartTime: now, // For credit ignore, start and end are the same
+                windowEndTime: now,
+                notes: "Ignored \(credits) window \(credits == 1 ? "credit" : "credits")",
+                usageType: .creditIgnore,
+                creditsUsed: credits
+            )
+            context.insert(usage)
+            
+            print("🚫 Ignored \(credits) window credits for '\(name)'. Remaining: \(accumulatedWindowCredits) windows")
             return true
         } else {
             print("❌ Not enough window credits. Available: \(accumulatedWindowCredits), Requested: \(credits)")
@@ -663,10 +691,11 @@ class ScheduledActivity {
     }
     
     // Burn reward when using activity
-    func burnAttachedReward(context: ModelContext) -> Bool {
+    func burnAttachedReward(multiplier: Int = 1, context: ModelContext) -> Bool {
         print("🔍 DEBUG: Checking reward attachment - hasRewardAttachment: \(hasRewardAttachment)")
         print("🔍 DEBUG: attachedRewardId: \(attachedRewardId?.uuidString ?? "nil")")
         print("🔍 DEBUG: rewardBurnAmount: \(rewardBurnAmount)")
+        print("🔍 DEBUG: multiplier: \(multiplier)")
         
         guard hasRewardAttachment, let reward = getAttachedReward(context: context) else {
             print("❌ DEBUG: No reward attachment configured")
@@ -674,6 +703,9 @@ class ScheduledActivity {
             print("❌ DEBUG: Reason - rewardBurnAmount is zero: \(rewardBurnAmount <= 0)")
             return false
         }
+        
+        // Apply multiplier to burn amount
+        let actualBurnAmount = rewardBurnAmount * Double(multiplier)
         
         // Convert burn amount to points based on burn type and reward type
         let pointsToBurn: Double
@@ -683,48 +715,49 @@ class ScheduledActivity {
             // Burning time (minutes)
             if reward.type == .timeReward, let rate = reward.conversionRate, rate > 0 {
                 // Convert minutes to points
-                pointsToBurn = rewardBurnAmount / rate
+                pointsToBurn = actualBurnAmount / rate
             } else {
                 // For non-time rewards, treat as points
-                pointsToBurn = rewardBurnAmount
+                pointsToBurn = actualBurnAmount
             }
         case .money:
             // Burning money (dollars)
             if reward.type == .moneyReward, let rate = reward.conversionRate, rate > 0 {
                 // Convert dollars to points
-                pointsToBurn = rewardBurnAmount / rate
+                pointsToBurn = actualBurnAmount / rate
             } else {
                 // For non-money rewards, treat as points
-                pointsToBurn = rewardBurnAmount
+                pointsToBurn = actualBurnAmount
             }
         case .points:
             // Direct points burn
-            pointsToBurn = rewardBurnAmount
+            pointsToBurn = actualBurnAmount
         }
         
         // Burn the calculated points
-        let comment = "Used activity: \(name) (\(effectiveRewardBurnType.displayName): \(formattedBurnAmount()))"
+        let comment = "Used activity: \(name) (\(effectiveRewardBurnType.displayName): \(formattedBurnAmount(multiplier: multiplier)))"
         reward.burnAmount(pointsToBurn, context: context, comment: comment)
         
-        print("🔥 Burned \(formattedBurnAmount()) from reward '\(reward.name)' for activity '\(name)'")
+        print("🔥 Burned \(formattedBurnAmount(multiplier: multiplier)) from reward '\(reward.name)' for activity '\(name)'")
         return true
     }
     
     // Format burn amount for display
-    func formattedBurnAmount() -> String {
+    func formattedBurnAmount(multiplier: Int = 1) -> String {
+        let actualAmount = rewardBurnAmount * Double(multiplier)
         switch effectiveRewardBurnType {
         case .time:
-            let hours = Int(rewardBurnAmount) / 60
-            let minutes = Int(rewardBurnAmount) % 60
+            let hours = Int(actualAmount) / 60
+            let minutes = Int(actualAmount) % 60
             if hours > 0 {
                 return "\(hours)h \(minutes)m"
             } else {
-                return "\(Int(rewardBurnAmount)) min"
+                return "\(Int(actualAmount)) min"
             }
         case .money:
-            return "$\(String(format: "%.2f", rewardBurnAmount))"
+            return "$\(String(format: "%.2f", actualAmount))"
         case .points:
-            return "\(String(format: "%.1f", rewardBurnAmount)) pts"
+            return "\(String(format: "%.1f", actualAmount)) pts"
         }
     }
     
@@ -973,10 +1006,11 @@ class ScheduledActivity {
     }
     
     // Add time to attached task when using activity
-    func addTimeToAttachedTask(context: ModelContext) -> Bool {
+    func addTimeToAttachedTask(multiplier: Int = 1, context: ModelContext) -> Bool {
         print("🔍 DEBUG: Checking task attachment - hasTaskAttachment: \(hasTaskAttachment)")
         print("🔍 DEBUG: attachedTaskId: \(attachedTaskId?.uuidString ?? "nil")")
         print("🔍 DEBUG: taskTimeAmount: \(taskTimeAmount)")
+        print("🔍 DEBUG: multiplier: \(multiplier)")
         
         guard hasTaskAttachment else {
             print("❌ DEBUG: No task attachment configured")
@@ -999,11 +1033,14 @@ class ScheduledActivity {
             // Note: We don't save the context here as it will be saved by the caller
         }
         
+        // Apply multiplier to task time amount
+        let actualTimeAmount = taskTimeAmount * Double(multiplier)
+        
         // Add time to task's timeSpent property
         let currentTimeSpent = task.timeSpent ?? 0.0
-        task.timeSpent = currentTimeSpent + taskTimeAmount
+        task.timeSpent = currentTimeSpent + actualTimeAmount
         
-        print("⏱️ Added \(formattedTaskTime()) to task '\(task.title)' for activity '\(name)'")
+        print("⏱️ Added \(formattedTaskTime(multiplier: multiplier)) to task '\(task.title)' for activity '\(name)'")
         print("⏱️ Task time spent: \(currentTimeSpent) min → \(task.timeSpent ?? 0.0) min")
         
         // Save the context to persist changes
@@ -1021,13 +1058,14 @@ class ScheduledActivity {
     }
     
     // Format task time amount for display
-    func formattedTaskTime() -> String {
-        let hours = Int(taskTimeAmount) / 60
-        let minutes = Int(taskTimeAmount) % 60
+    func formattedTaskTime(multiplier: Int = 1) -> String {
+        let actualAmount = taskTimeAmount * Double(multiplier)
+        let hours = Int(actualAmount) / 60
+        let minutes = Int(actualAmount) % 60
         if hours > 0 {
             return "\(hours)h \(minutes)m"
         } else {
-            return "\(Int(taskTimeAmount)) min"
+            return "\(Int(actualAmount)) min"
         }
     }
     
@@ -1133,6 +1171,7 @@ class ActivityUsageHistory {
 enum ActivityUsageType: String, Codable, CaseIterable {
     case regularWindow = "Regular Window"
     case creditUsage = "Credit Usage"
+    case creditIgnore = "Credit Ignore"
     
     var displayName: String {
         return self.rawValue
@@ -1144,6 +1183,8 @@ enum ActivityUsageType: String, Codable, CaseIterable {
             return "clock.fill"
         case .creditUsage:
             return "gift.fill"
+        case .creditIgnore:
+            return "trash.fill"
         }
     }
 }

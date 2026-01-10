@@ -180,6 +180,21 @@ struct TasksListView: View {
                                 .background(.blue)
                                 .clipShape(Capsule())
                             
+                            if let attachments = parentTask.attachments, !attachments.isEmpty {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "paperclip")
+                                        .font(.caption)
+                                        .foregroundStyle(.blue)
+                                    Text("\(attachments.count)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 1)
+                                        .background(.blue)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                            
                             Text(String(format: "%.1f", parentTask.weight))
                                 .font(.caption)
                                 .fontWeight(.bold)
@@ -267,6 +282,21 @@ struct TasksListView: View {
                 } else if task.notCompleted {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.red)
+                }
+                
+                if let attachments = task.attachments, !attachments.isEmpty {
+                    HStack(spacing: 2) {
+                        Image(systemName: "paperclip")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                        Text("\(attachments.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(.blue)
+                            .clipShape(Capsule())
+                    }
                 }
                 
                 Text(String(format: "%.1f", task.weight))
