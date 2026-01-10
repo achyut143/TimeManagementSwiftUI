@@ -18,6 +18,7 @@ struct TaskTableView: View {
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var endDate = Date()
     @State private var showOnlyWithNotes = false
+    @State private var showOnlyWithAttachments = false
     @State private var selectedTags: Set<String> = []
     @State private var selectedTask: Task?
     @State private var showNotes = false
@@ -48,13 +49,14 @@ struct TaskTableView: View {
             let dateInRange = taskDate >= startDate && taskDate <= endDate
             let matchesSearch = searchText.isEmpty || task.title.localizedCaseInsensitiveContains(searchText)
             let hasNotesFilter = !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty)
+            let hasAttachmentsFilter = !showOnlyWithAttachments || (task.attachments != nil && !task.attachments!.isEmpty)
             let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
             let hasNoTag = task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty
             let matchesTags = selectedTags.isEmpty || 
                              (!taskTags.isDisjoint(with: selectedTags)) ||
                              (selectedTags.contains("No Tag") && hasNoTag)
             
-            return dateInRange && matchesSearch && hasNotesFilter && matchesTags
+            return dateInRange && matchesSearch && hasNotesFilter && hasAttachmentsFilter && matchesTags
         }.sorted { $0.date ?? Date() > $1.date ?? Date() }
     }
     
@@ -258,6 +260,8 @@ struct TaskTableView: View {
             
             Toggle("Only tasks with notes", isOn: $showOnlyWithNotes)
             
+            Toggle("Only tasks with attachments", isOn: $showOnlyWithAttachments)
+            
             if !allTags.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
@@ -369,6 +373,15 @@ struct TaskRowView: View {
                     Button(action: onPersistentNotesAction) {
                         Image(systemName: "pin.fill")
                             .foregroundStyle(.purple)
+                    }
+                }
+                if let attachments = task.attachments, !attachments.isEmpty {
+                    HStack(spacing: 2) {
+                        Image(systemName: "paperclip")
+                            .foregroundStyle(.blue)
+                        Text("\(attachments.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.blue)
                     }
                 }
                 SubtaskCountButton(task: task)

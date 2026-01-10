@@ -379,6 +379,7 @@ struct TaskAttachmentsManagementView: View {
     @State private var previewURL: URL?
     @State private var dragOver = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var currentPreviewIndex = 0
     
     var body: some View {
         NavigationView {
@@ -443,6 +444,14 @@ struct TaskAttachmentsManagementView: View {
                 handlePhotoSelection(items: newItems)
             }
             .quickLookPreview($previewURL)
+            .sheet(isPresented: $showingPreview) {
+                if let attachments = task.attachments, !attachments.isEmpty {
+                    SwipeableFilePreviewView(
+                        attachments: attachments,
+                        currentIndex: $currentPreviewIndex
+                    )
+                }
+            }
         }
     }
     
@@ -513,13 +522,14 @@ struct TaskAttachmentsManagementView: View {
             LazyVGrid(columns: [
                 GridItem(.adaptive(minimum: 120, maximum: 150))
             ], spacing: 16) {
-                ForEach(attachments, id: \.id) { attachment in
-                    AttachmentCard(
-                        attachment: attachment,
-                        onPreview: { previewAttachment(attachment) },
-                        onDelete: { deleteAttachment(attachment) }
-                    )
-                }
+                    ForEach(attachments.indices, id: \.self) { index in
+                        let attachment = attachments[index]
+                        AttachmentCard(
+                            attachment: attachment,
+                            onPreview: { previewAttachment(attachment, at: index) },
+                            onDelete: { deleteAttachment(attachment) }
+                        )
+                    }
             }
         }
     }
@@ -642,9 +652,9 @@ struct TaskAttachmentsManagementView: View {
         try? modelContext.save()
     }
     
-    private func previewAttachment(_ attachment: TaskAttachment) {
+    private func previewAttachment(_ attachment: TaskAttachment, at index: Int) {
         if attachment.canPreview {
-            previewURL = attachment.fileURL
+            currentPreviewIndex = index
             showingPreview = true
         }
     }

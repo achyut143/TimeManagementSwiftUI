@@ -12,6 +12,7 @@ struct TaskAttachmentsView: View {
     @State private var showingPreview = false
     @State private var previewURL: URL?
     @State private var dragOver = false
+    @State private var currentPreviewIndex = 0
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -32,10 +33,11 @@ struct TaskAttachmentsView: View {
                 LazyVGrid(columns: [
                     GridItem(.adaptive(minimum: 120, maximum: 150))
                 ], spacing: 12) {
-                    ForEach(attachments, id: \.id) { attachment in
+                    ForEach(attachments.indices, id: \.self) { index in
+                        let attachment = attachments[index]
                         AttachmentThumbnailView(
                             attachment: attachment,
-                            onPreview: { previewAttachment(attachment) },
+                            onPreview: { previewAttachment(attachment, at: index) },
                             onDelete: { deleteAttachment(attachment) }
                         )
                     }
@@ -65,12 +67,20 @@ struct TaskAttachmentsView: View {
         }
         .fileImporter(
             isPresented: $showingFilePicker,
-            allowedContentTypes: [.image, .pdf, .text, .data],
+            allowedContentTypes: [.image, .pdf, .text, .plainText, .data, .item, .content],
             allowsMultipleSelection: true
         ) { result in
             handleFileSelection(result: result)
         }
         .quickLookPreview($previewURL)
+        .sheet(isPresented: $showingPreview) {
+            if let attachments = task.attachments, !attachments.isEmpty {
+                SwipeableFilePreviewView(
+                    attachments: attachments,
+                    currentIndex: $currentPreviewIndex
+                )
+            }
+        }
     }
     
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -105,12 +115,6 @@ struct TaskAttachmentsView: View {
             let attachment = try fileManager.saveFile(from: url, for: task.id)
             attachment.task = task
             
-            // Initialize attachments array if nil
-            if task.attachments == nil {
-                // We can't directly assign to attachments since it's computed
-                // Instead, we'll add the attachment and let SwiftData handle the relationship
-            }
-            
             modelContext.insert(attachment)
             try modelContext.save()
         } catch {
@@ -124,9 +128,9 @@ struct TaskAttachmentsView: View {
         try? modelContext.save()
     }
     
-    private func previewAttachment(_ attachment: TaskAttachment) {
+    private func previewAttachment(_ attachment: TaskAttachment, at index: Int) {
         if attachment.canPreview {
-            previewURL = attachment.fileURL
+            currentPreviewIndex = index
             showingPreview = true
         }
     }
@@ -138,13 +142,27 @@ struct AttachmentThumbnailView: View {
     let onDelete: () -> Void
     
     @StateObject private var fileManager = FileAttachmentManager.shared
+    @State private var isFileValid = true
     
     var body: some View {
         VStack(spacing: 4) {
             ZStack(alignment: .topTrailing) {
                 // Thumbnail or icon
                 Group {
-                    if attachment.isImage, let thumbnailData = attachment.thumbnailData,
+                    if !isFileValid {
+                        // Show error state for missing files
+                        VStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.title2)
+                                .foregroundColor(.orange)
+                            Text("File Missing")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
+                        .frame(width: 80, height: 80)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+                    } else if attachment.isImage, let thumbnailData = attachment.thumbnailData,
                        let uiImage = UIImage(data: thumbnailData) {
                         Image(uiImage: uiImage)
                             .resizable()
@@ -179,7 +197,9 @@ struct AttachmentThumbnailView: View {
                     }
                 }
                 .onTapGesture {
-                    onPreview()
+                    if isFileValid {
+                        onPreview()
+                    }
                 }
                 
                 // Delete button
@@ -199,10 +219,11 @@ struct AttachmentThumbnailView: View {
                     .font(.caption)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
+                    .foregroundColor(isFileValid ? .primary : .orange)
                 
-                Text(attachment.formattedFileSize)
+                Text(isFileValid ? attachment.formattedFileSize : "Missing")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(isFileValid ? .secondary : .orange)
             }
         }
         .frame(width: 120)
@@ -211,7 +232,24 @@ struct AttachmentThumbnailView: View {
         .cornerRadius(12)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                .stroke(isFileValid ? Color.gray.opacity(0.2) : Color.orange.opacity(0.5), lineWidth: 1)
         )
+        .onAppear {
+            validateFile()
+        }
+    }
+    
+    private func validateFile() {
+        let fileExists = FileManager.default.fileExists(atPath: attachment.fileURL.path)
+        let hasBackupData = attachment.originalFileData != nil
+        
+        if fileExists {
+            isFileValid = true
+        } else if hasBackupData {
+            // Try to recover using the file manager
+            isFileValid = fileManager.validateAndFixAttachment(attachment)
+        } else {
+            isFileValid = false
+        }
     }
 }

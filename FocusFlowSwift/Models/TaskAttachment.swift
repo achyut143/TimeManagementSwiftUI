@@ -11,11 +11,12 @@ class TaskAttachment {
     var fileSize: Int64
     var dateAdded: Date
     var thumbnailData: Data? // For image previews
+    var originalFileData: Data? // Store original file data for small files as backup
     
     @Relationship
     var task: Task?
     
-    init(fileName: String, fileURL: URL, fileType: String, fileSize: Int64, thumbnailData: Data? = nil) {
+    init(fileName: String, fileURL: URL, fileType: String, fileSize: Int64, thumbnailData: Data? = nil, originalFileData: Data? = nil) {
         self.id = UUID()
         self.fileName = fileName
         self.fileURL = fileURL
@@ -23,6 +24,7 @@ class TaskAttachment {
         self.fileSize = fileSize
         self.dateAdded = Date()
         self.thumbnailData = thumbnailData
+        self.originalFileData = originalFileData
     }
     
     // Check if file is an image

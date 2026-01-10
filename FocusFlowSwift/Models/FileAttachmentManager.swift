@@ -23,6 +23,50 @@ class FileAttachmentManager: ObservableObject {
         return url
     }
     
+    // Check and fix file path if needed (for development builds)
+    func validateAndFixAttachment(_ attachment: TaskAttachment) -> Bool {
+        // If file exists at current path, no need to fix
+        if FileManager.default.fileExists(atPath: attachment.fileURL.path) {
+            return true
+        }
+        
+        // If we have original file data, recreate the file
+        if let originalData = attachment.originalFileData {
+            do {
+                let newURL = attachmentsDirectory.appendingPathComponent(attachment.fileURL.lastPathComponent)
+                try originalData.write(to: newURL)
+                attachment.fileURL = newURL
+                return true
+            } catch {
+                // Failed to recreate, continue with other recovery methods
+            }
+        }
+        
+        // Try to find the file in the current attachments directory
+        let expectedFileName = attachment.fileURL.lastPathComponent
+        let newURL = attachmentsDirectory.appendingPathComponent(expectedFileName)
+        
+        if FileManager.default.fileExists(atPath: newURL.path) {
+            attachment.fileURL = newURL
+            return true
+        }
+        
+        // Try to find any file with the same original name
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: attachmentsDirectory, includingPropertiesForKeys: nil)
+            for fileURL in files {
+                if fileURL.lastPathComponent.hasSuffix("_\(attachment.fileName)") {
+                    attachment.fileURL = fileURL
+                    return true
+                }
+            }
+        } catch {
+            // Error searching for files
+        }
+        
+        return false
+    }
+    
     // Save file to attachments directory
     func saveFile(from sourceURL: URL, for taskId: UUID) throws -> TaskAttachment {
         let fileName = sourceURL.lastPathComponent
@@ -32,12 +76,41 @@ class FileAttachmentManager: ObservableObject {
         let uniqueFileName = "\(taskId.uuidString)_\(UUID().uuidString)_\(fileName)"
         let destinationURL = attachmentsDirectory.appendingPathComponent(uniqueFileName)
         
+        // Handle iCloud files - start accessing security-scoped resource
+        let isSecurityScoped = sourceURL.startAccessingSecurityScopedResource()
+        
+        defer {
+            if isSecurityScoped {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        
         // Copy file to attachments directory
-        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        do {
+            // Remove destination if it exists
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            
+        } catch {
+            throw error
+        }
         
         // Get file size
         let fileAttributes = try FileManager.default.attributesOfItem(atPath: destinationURL.path)
         let fileSize = fileAttributes[.size] as? Int64 ?? 0
+        
+        // Store original file data for small files (< 5MB) as backup
+        var originalFileData: Data?
+        if fileSize < 5_000_000 { // 5MB limit
+            do {
+                originalFileData = try Data(contentsOf: destinationURL)
+            } catch {
+                // Not critical if we can't store backup data
+            }
+        }
         
         // Generate thumbnail for images
         var thumbnailData: Data?
@@ -47,13 +120,16 @@ class FileAttachmentManager: ObservableObject {
             thumbnailData = generatePDFThumbnail(from: destinationURL)
         }
         
-        return TaskAttachment(
+        let attachment = TaskAttachment(
             fileName: fileName,
             fileURL: destinationURL,
             fileType: fileExtension,
             fileSize: fileSize,
-            thumbnailData: thumbnailData
+            thumbnailData: thumbnailData,
+            originalFileData: originalFileData
         )
+        
+        return attachment
     }
     
     // Delete attachment file
@@ -79,10 +155,34 @@ class FileAttachmentManager: ObservableObject {
     
     // Generate thumbnail for PDF files
     private func generatePDFThumbnail(from url: URL) -> Data? {
-        guard let pdfDocument = PDFDocument(url: url),
-              let firstPage = pdfDocument.page(at: 0) else { return nil }
+        // Verify file is readable
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            return nil
+        }
         
-        let thumbnailSize = CGSize(width: 100, height: 100)
+        guard let pdfDocument = PDFDocument(url: url) else {
+            // Try loading as Data first
+            guard let pdfData = try? Data(contentsOf: url),
+                  let pdfDocumentFromData = PDFDocument(data: pdfData) else {
+                return nil
+            }
+            
+            return generateThumbnailFromPDFDocument(pdfDocumentFromData)
+        }
+        
+        return generateThumbnailFromPDFDocument(pdfDocument)
+    }
+    
+    private func generateThumbnailFromPDFDocument(_ pdfDocument: PDFDocument) -> Data? {
+        guard pdfDocument.pageCount > 0 else {
+            return nil
+        }
+        
+        guard let firstPage = pdfDocument.page(at: 0) else {
+            return nil
+        }
+        
+        let thumbnailSize = CGSize(width: 120, height: 120)
         let thumbnail = firstPage.thumbnail(of: thumbnailSize, for: .cropBox)
         
         return thumbnail.pngData()
