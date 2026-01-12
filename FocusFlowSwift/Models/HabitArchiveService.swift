@@ -24,9 +24,10 @@ class HabitArchiveService {
         let totalCompletedDays = completedTasks.count
         let totalTasks = habitTasks.count
         
-        // Calculate expected days based on frequency and date range
-        let totalDays = Calendar.current.dateComponents([.day], from: startDate, to: endDate).day ?? 0
-        let totalExpectedDays = max(1, totalDays / repeatFrequency)
+        // Calculate expected days based on actual task days, not full date range
+        // Only count days where tasks actually exist (same logic as discipline tab)
+        let uniqueTaskDates = Set(habitTasks.compactMap { $0.date }).count
+        let totalExpectedDays = max(1, uniqueTaskDates) // Use actual task days, not theoretical range
         let totalMissedDays = max(0, totalExpectedDays - totalCompletedDays)
         let completionPercentage = totalExpectedDays > 0 ? (Double(totalCompletedDays) / Double(totalExpectedDays)) * 100.0 : 0.0
         
@@ -143,8 +144,9 @@ class HabitArchiveService {
             }
             
             let completedInWeek = weekTasks.filter { $0.completed }.count
-            let expectedInWeek = max(1, 7 / repeatFrequency) // Expected completions in a week
-            let weekRate = expectedInWeek > 0 ? (Double(completedInWeek) / Double(expectedInWeek)) * 100.0 : 0.0
+            // Use actual task days in the week, not theoretical expectations
+            let totalTasksInWeek = weekTasks.count
+            let weekRate = totalTasksInWeek > 0 ? (Double(completedInWeek) / Double(totalTasksInWeek)) * 100.0 : 0.0
             
             weeklyRates.append(min(100.0, weekRate)) // Cap at 100%
             
@@ -168,9 +170,9 @@ class HabitArchiveService {
             }
             
             let completedInMonth = monthTasks.filter { $0.completed }.count
-            let daysInMonth = calendar.dateComponents([.day], from: currentMonthStart, to: monthEnd).day ?? 30
-            let expectedInMonth = max(1, daysInMonth / repeatFrequency)
-            let monthRate = expectedInMonth > 0 ? (Double(completedInMonth) / Double(expectedInMonth)) * 100.0 : 0.0
+            // Use actual task days in the month, not theoretical expectations
+            let totalTasksInMonth = monthTasks.count
+            let monthRate = totalTasksInMonth > 0 ? (Double(completedInMonth) / Double(totalTasksInMonth)) * 100.0 : 0.0
             
             monthlyRates.append(min(100.0, monthRate)) // Cap at 100%
             

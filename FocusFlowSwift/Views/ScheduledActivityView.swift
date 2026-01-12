@@ -257,19 +257,29 @@ struct ScheduledActivityView: View {
             // Check and reset counters first
             activity.checkAndResetCounters()
             
-            // Check for windows that have passed unused in the current period
+            // Get windows that have passed unused in the current period
             let passedWindows = activity.getPassedUnusedWindows()
             
-            // For each passed window, check if we've already recorded it as skipped
-            // We'll use a simple approach: if windowsSkippedInPeriod is less than the number of passed windows,
-            // mark the difference as skipped
+            // For recently edited activities, be more conservative about bulk marking
             let expectedSkipped = passedWindows.count
+            
             if activity.windowsSkippedInPeriod < expectedSkipped {
+                // Calculate how many new windows to mark as skipped
                 let newlySkipped = expectedSkipped - activity.windowsSkippedInPeriod
-                for _ in 0..<newlySkipped {
-                    activity.markWindowAsSkipped()
+                
+                // For recently edited activities, only mark 1 window at a time to prevent bulk marking
+                // For normal activities, allow up to 3 windows per cycle
+                let maxWindowsToSkip = activity.needsPostEditReset() ? 1 : min(newlySkipped, 3)
+                let windowsToSkip = min(newlySkipped, maxWindowsToSkip)
+                
+                if windowsToSkip > 0 {
+                    print("🔍 Activity '\(activity.name)': Found \(newlySkipped) newly passed windows, marking \(windowsToSkip) as skipped (recently edited: \(activity.needsPostEditReset()))")
+                    
+                    for _ in 0..<windowsToSkip {
+                        activity.markWindowAsSkipped()
+                    }
+                    try? modelContext.save()
                 }
-                try? modelContext.save()
             }
         }
     }

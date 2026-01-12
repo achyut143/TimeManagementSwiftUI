@@ -57,6 +57,7 @@ class ScheduledActivity {
     var lastResetDate: Date? // Track when rewards were last reset to 0
     var windowsUsedInPeriod: Int = 0 // Track how many windows were used in current period
     var windowsSkippedInPeriod: Int = 0 // Track how many windows were skipped in current period
+    var lastEditedAt: Date? // Track when the activity was last edited (for window tracking reset)
     
     // Attached reward system
     var attachedRewardId: UUID? // ID of the attached reward
@@ -101,6 +102,7 @@ class ScheduledActivity {
         self.lastResetDate = nil
         self.windowsUsedInPeriod = 0
         self.windowsSkippedInPeriod = 0
+        self.lastEditedAt = nil
         self.attachedRewardId = attachedRewardId
         self.rewardBurnAmount = rewardBurnAmount
         self.rewardBurnType = rewardBurnType
@@ -153,6 +155,20 @@ class ScheduledActivity {
     func needsMigration() -> Bool {
         // An activity needs migration if it has no recurrence type set
         return recurrenceType == nil
+    }
+    
+    // Mark activity as recently edited (resets window tracking)
+    func markAsEdited() {
+        lastEditedAt = Date()
+        windowsSkippedInPeriod = 0
+        print("🔄 Activity '\(name)' marked as edited, reset window tracking")
+    }
+    
+    // Check if activity was recently edited and needs one-time reset (within last 10 seconds)
+    func needsPostEditReset() -> Bool {
+        guard let editTime = lastEditedAt else { return false }
+        let tenSecondsAgo = Date().addingTimeInterval(-10) // 10 seconds
+        return editTime > tenSecondsAgo
     }
     
     // Get the effective recurrence type (with migration fallback)

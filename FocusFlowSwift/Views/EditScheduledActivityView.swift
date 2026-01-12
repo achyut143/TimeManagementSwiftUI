@@ -484,6 +484,10 @@ struct EditScheduledActivityView: View {
     }
     
     private func saveChanges() {
+        // Check if scheduled times or window duration changed
+        let timesChanged = activity.scheduledTimes != scheduledTimes
+        let durationChanged = activity.windowDuration != windowDuration * 60
+        
         activity.name = activityName
         activity.scheduledTimes = scheduledTimes
         activity.windowDuration = windowDuration * 60 // Convert minutes to seconds
@@ -494,6 +498,11 @@ struct EditScheduledActivityView: View {
         activity.selectedWeekdays = Array(selectedWeekdays)
         activity.selectedMonthDays = Array(selectedMonthDays)
         activity.selectedMonths = Array(selectedMonths)
+        
+        // Mark as edited if times or duration changed to reset window tracking
+        if timesChanged || durationChanged {
+            activity.markAsEdited()
+        }
         
         // Save reward attachment data - only if both reward and amount are provided
         let burnAmount = Double(rewardBurnAmount) ?? 0.0
@@ -518,6 +527,9 @@ struct EditScheduledActivityView: View {
         }
         
         print("💾 Saved activity '\(activityName)' with \(recurrenceType.displayName) recurrence")
+        if timesChanged || durationChanged {
+            print("🔄 Reset window tracking counters due to schedule changes")
+        }
         if activity.hasRewardAttachment {
             print("🎁 Saved attached reward '\(selectedReward?.name ?? "")' with burn amount: \(activity.rewardBurnAmount) \(activity.effectiveRewardBurnType.unit)")
         }

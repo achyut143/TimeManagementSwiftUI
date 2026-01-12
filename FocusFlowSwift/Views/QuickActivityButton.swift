@@ -5,7 +5,6 @@ struct QuickActivityButton: View {
     @Query(filter: #Predicate<ScheduledActivity> { $0.isActive }, sort: \ScheduledActivity.createdAt, order: .reverse)
     private var activities: [ScheduledActivity]
     
-    @State private var showNewActivity = false
     @State private var showActivitiesList = false
     @State private var currentTime = Date()
     
@@ -57,30 +56,10 @@ struct QuickActivityButton: View {
                         }
                         .buttonStyle(PlainButtonStyle())
                     }
-                    
-                    // New Activity Button
-                    Button {
-                        showNewActivity = true
-                    } label: {
-                        ZStack {
-                            Circle()
-                                .fill(Color.purple)
-                                .frame(width: 50, height: 50)
-                                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                            
-                            Image(systemName: "plus")
-                                .font(.system(size: 20, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
                 }
                 .padding(.trailing, 20)
                 .padding(.bottom, 100) // Above tab bar
             }
-        }
-        .sheet(isPresented: $showNewActivity) {
-            NewScheduledActivityView()
         }
         .sheet(isPresented: $showActivitiesList) {
             QuickActivitiesListView()
@@ -228,7 +207,27 @@ struct QuickActivityRowView: View {
                         .font(.headline)
                     
                     Spacer()
-                    
+                }
+                
+                // Make "Next in" more dominant and put it first
+                if activity.isInActiveWindow() {
+                    if let windowEnd = activity.currentWindowEndTime() {
+                        let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
+                        Text("Window closes in \(timeString(from: remaining))")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.green)
+                    }
+                } else if let nextTime = activity.nextScheduledTime() {
+                    let timeUntilNext = nextTime.timeIntervalSince(currentTime)
+                    Text("Next in \(timeString(from: timeUntilNext))")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.blue)
+                }
+                
+                // Put reward and task metrics below "Next in"
+                HStack(spacing: 8) {
                     // Show reward count if there are accumulated credits
                     if activity.accumulatedWindowCredits > 0 {
                         HStack(spacing: 4) {
@@ -279,20 +278,8 @@ struct QuickActivityRowView: View {
                         .background(Color.blue.opacity(0.1))
                         .cornerRadius(4)
                     }
-                }
-                
-                if activity.isInActiveWindow() {
-                    if let windowEnd = activity.currentWindowEndTime() {
-                        let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
-                        Text("Window closes in \(timeString(from: remaining))")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                    }
-                } else if let nextTime = activity.nextScheduledTime() {
-                    let timeUntilNext = nextTime.timeIntervalSince(currentTime)
-                    Text("Next in \(timeString(from: timeUntilNext))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    
+                    Spacer()
                 }
             }
             

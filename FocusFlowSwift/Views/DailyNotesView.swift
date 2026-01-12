@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import AVFoundation
+import ActivityKit
 
 struct TimeEntry {
     let startMinutes: Int
@@ -13,12 +15,17 @@ struct TimeEntry {
     }
     
     func toLine() -> String {
-        let startTime = minutesToTime(startMinutes)
-        let endTime = minutesToTime(endMinutes)
+        let startTime = safeMinutesToTime(startMinutes)
+        let endTime = safeMinutesToTime(endMinutes)
         return "\(startTime) - \(endTime) - \(description)"
     }
     
-    private func minutesToTime(_ minutes: Int) -> String {
+    private func safeMinutesToTime(_ minutes: Int) -> String {
+        // Add bounds checking to prevent crashes
+        guard minutes >= -1440 && minutes <= 2880 else {
+            return "Invalid Time"
+        }
+        
         let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
         let hours = (adjustedMinutes / 60) % 24
         let mins = adjustedMinutes % 60
@@ -30,9 +37,15 @@ struct DailyNotesView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query private var dailyNotes: [DailyNote]
+    @StateObject private var settings = AlertSettings.shared
     @State private var notesText: String = ""
     @State private var adjustmentMinutes: String = ""
-    @State private var editorKey: UUID = UUID() // Force editor refresh
+    @State private var editorKey: UUID = UUID()
+    @State private var useCycles: Bool = false
+    @State private var countdownTimer: Timer?
+    @State private var timeRemaining: TimeInterval = 0
+    @State private var currentTaskName: String = ""
+    @State private var currentCycleDuration: Int = 0
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -40,11 +53,17 @@ struct DailyNotesView: View {
         return dailyNotes.first { Calendar.current.isDate($0.date, inSameDayAs: startOfDay) }
     }
     
+    private var currentTimeString: String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: Date())
+    }
+    
     private func getNoteForDate(_ date: Date) -> DailyNote? {
         let startOfDay = Calendar.current.startOfDay(for: date)
         return dailyNotes.first { Calendar.current.isDate($0.date, inSameDayAs: startOfDay) }
     }
-    
+
     var body: some View {
         NavigationView {
             Form {
@@ -103,10 +122,38 @@ struct DailyNotesView: View {
                     }
                 }
                 
+                // Simple Cycles Section
+                Section("Smart Cycles") {
+                    VStack(spacing: 12) {
+                        Toggle(isOn: $useCycles) {
+                            Text("Auto-start cycles from schedule")
+                                .font(.headline)
+                        }
+                        .onChange(of: useCycles) { _, newValue in
+                            if newValue {
+                                startSmartCycles()
+                            } else {
+                                stopCycles()
+                            }
+                        }
+                        
+                        if useCycles {
+                            Text("Automatically detects your schedule from START/END sections and starts appropriate cycles based on current time")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            
+                            if settings.isPlaying {
+                                cycleStatusView
+                            }
+                        }
+                    }
+                }
+                
                 Section("Daily Notes") {
                     RichTextEditor(text: $notesText)
                         .frame(height: 300)
-                        .id(editorKey) // Force refresh when key changes
+                        .id(editorKey)
                 }
             }
             .navigationTitle("Daily Notes")
@@ -118,18 +165,314 @@ struct DailyNotesView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         saveNotes()
+                        // If cycles are enabled, restart them with updated notes
+                        DispatchQueue.main.async {
+                            if self.useCycles {
+                                self.startSmartCycles()
+                            }
+                        }
                         dismiss()
                     }
                 }
             }
             .onAppear {
                 loadNotesForDate(selectedDate)
+                startCountdownTimer()
+            }
+            .onDisappear {
+                stopCountdownTimer()
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
             }
+            .onChange(of: notesText) { _, _ in
+                // If cycles are enabled, update them when notes change
+                DispatchQueue.main.async {
+                    if self.useCycles {
+                        self.startSmartCycles()
+                    }
+                }
+            }
         }
     }
+    
+    private var cycleStatusView: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: settings.isPaused ? "pause.circle.fill" : "play.circle.fill")
+                    .foregroundStyle(settings.isPaused ? .orange : .blue)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Current: \(currentTaskName)")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    
+                    if currentCycleDuration > 0 {
+                        Text("Duration: \(currentCycleDuration) minutes")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    // Show current time for debugging
+                    Text("Current time: \(currentTimeString)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                
+                Spacer()
+            }
+            
+            // Show conflicts if any
+            let conflicts = findConflictsAtCurrentTime()
+            if !conflicts.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("⚠️ Schedule conflicts detected:")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fontWeight(.medium)
+                    
+                    ForEach(conflicts, id: \.originalLine) { conflict in
+                        Text("• \(conflict.description) (\(safeMinutesToTime(conflict.startMinutes))-\(safeMinutesToTime(conflict.endMinutes)))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            
+            if settings.isPlaying && !settings.isPaused {
+                HStack {
+                    Image(systemName: "timer")
+                        .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
+                    Text("Time remaining: \(formatTimeRemaining(timeRemaining))")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
+                    Spacer()
+                }
+                .animation(.easeInOut(duration: 0.3), value: timeRemaining <= 30)
+            }
+            
+            HStack(spacing: 16) {
+                Button(settings.isPlaying ? "Stop" : "Start") {
+                    DispatchQueue.main.async {
+                        if self.settings.isPlaying {
+                            self.stopCycles()
+                        } else {
+                            self.startSmartCycles()
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity)
+                
+                if settings.isPlaying {
+                    Button(settings.isPaused ? "Resume" : "Pause") {
+                        DispatchQueue.main.async {
+                            if self.settings.isPaused {
+                                self.settings.isPlaying = true
+                                self.settings.isPaused = false
+                            } else {
+                                self.settings.isPlaying = false
+                                self.settings.isPaused = true
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .padding()
+        .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+    }
+    
+    private func findConflictsAtCurrentTime() -> [TimeEntry] {
+        let now = Date()
+        let calendar = Calendar.current
+        let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        
+        let timeEntries = extractTimeEntriesFromNotes()
+        let activeTasks = timeEntries.filter { entry in
+            currentMinutes >= entry.startMinutes && currentMinutes < entry.endMinutes
+        }
+        
+        return activeTasks.count > 1 ? activeTasks : []
+    }
+    
+    // MARK: - Smart Cycles Logic
+    
+    private func startSmartCycles() {
+        // Ensure this runs on the main thread since it updates UI state
+        DispatchQueue.main.async {
+            let timeEntries = self.extractTimeEntriesFromNotes()
+            guard !timeEntries.isEmpty else {
+                self.currentTaskName = "No schedule found"
+                return
+            }
+            
+            let now = Date()
+            let calendar = Calendar.current
+            let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+            
+            // Find what should be happening now - handle conflicts by priority
+            if let currentEntry = self.findBestCurrentTask(at: currentMinutes, in: timeEntries) {
+                // Currently in a scheduled task
+                self.currentTaskName = currentEntry.description
+                let remainingMinutes = currentEntry.endMinutes - currentMinutes
+                self.currentCycleDuration = remainingMinutes
+                
+                // Start cycle for remaining time
+                self.startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
+                
+            } else if let nextEntry = self.findNextTask(after: currentMinutes, in: timeEntries) {
+                // In a gap before next task - start preparation/rest cycle
+                let gapMinutes = nextEntry.startMinutes - currentMinutes
+                self.currentTaskName = "Preparation/Rest"
+                self.currentCycleDuration = gapMinutes
+                
+                // Start preparation cycle
+                self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest")
+                
+            } else {
+                // No more tasks today
+                self.currentTaskName = "Free time"
+                self.currentCycleDuration = 0
+            }
+        }
+    }
+    
+    private func findBestCurrentTask(at currentMinutes: Int, in timeEntries: [TimeEntry]) -> TimeEntry? {
+        // Find all tasks that are currently active
+        let activeTasks = timeEntries.filter { entry in
+            currentMinutes >= entry.startMinutes && currentMinutes < entry.endMinutes
+        }
+        
+        guard !activeTasks.isEmpty else { return nil }
+        
+        // If only one task, return it
+        if activeTasks.count == 1 {
+            return activeTasks.first
+        }
+        
+        // Multiple conflicting tasks - apply priority rules:
+        // 1. Prefer tasks that started more recently (later start time)
+        // 2. If same start time, prefer shorter duration (more specific)
+        // 3. If same duration, prefer first in list (order matters)
+        
+        let sortedTasks = activeTasks.sorted { task1, task2 in
+            // Rule 1: Later start time wins
+            if task1.startMinutes != task2.startMinutes {
+                return task1.startMinutes > task2.startMinutes
+            }
+            
+            // Rule 2: Shorter duration wins (more specific)
+            if task1.duration != task2.duration {
+                return task1.duration < task2.duration
+            }
+            
+            // Rule 3: Keep original order (first in notes wins)
+            return false
+        }
+        
+        let selectedTask = sortedTasks.first!
+        
+        // Log the conflict resolution for debugging
+        if activeTasks.count > 1 {
+            let conflictingTasks = activeTasks.map { 
+                let startTime = safeMinutesToTime($0.startMinutes)
+                let endTime = safeMinutesToTime($0.endMinutes)
+                return "\($0.description) (\(startTime)-\(endTime))"
+            }
+            let currentTimeStr = safeMinutesToTime(currentMinutes)
+            let selectedStartTime = safeMinutesToTime(selectedTask.startMinutes)
+            print("⚠️ Conflict at \(currentTimeStr): \(conflictingTasks.joined(separator: ", "))")
+            print("✅ Selected: \(selectedTask.description) (most recent start: \(selectedStartTime))")
+        }
+        
+        return selectedTask
+    }
+    
+    private func findNextTask(after currentMinutes: Int, in timeEntries: [TimeEntry]) -> TimeEntry? {
+        return timeEntries.first { entry in
+            entry.startMinutes > currentMinutes
+        }
+    }
+    
+    private func startCycleWithDuration(_ minutes: Int, taskName: String) {
+        // Set up AlertSettings for this cycle
+        settings.useCycles = false // Use simple mode
+        settings.intervalMinutes = minutes
+        settings.intervalSeconds = 0
+        settings.targetIntervals = 1 // Just one interval
+        settings.workIntervalText = taskName
+        
+        // Start the timer
+        settings.nextAlertDate = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        settings.isPlaying = true
+        settings.isPaused = false
+        settings.scheduleIntervalTimer()
+        
+        print("🎯 Started cycle: \(taskName) for \(minutes) minutes")
+    }
+    
+    private func stopCycles() {
+        // Ensure this runs on the main thread since it updates UI state
+        DispatchQueue.main.async {
+            self.settings.isPlaying = false
+            self.settings.isPaused = false
+            self.settings.stopTimer()
+            self.currentTaskName = ""
+            self.currentCycleDuration = 0
+        }
+    }
+    
+    private func extractTimeEntriesFromNotes() -> [TimeEntry] {
+        // Find START and END tags
+        let startTag = "START"
+        let endTag = "END"
+        
+        guard let startRange = notesText.range(of: startTag),
+              let endRange = notesText.range(of: endTag) else {
+            print("❌ No START/END tags found in notes")
+            return []
+        }
+        
+        // Extract content between START and END
+        let contentStart = startRange.upperBound
+        let contentEnd = endRange.lowerBound
+        let content = String(notesText[contentStart..<contentEnd])
+        
+        let lines = content.components(separatedBy: .newlines)
+        var timeEntries: [TimeEntry] = []
+        
+        print("📝 Parsing schedule from notes:")
+        for line in lines {
+            if let entry = parseTimeEntry(line) {
+                timeEntries.append(entry)
+                // Add safety checks to prevent EXC_BAD_ACCESS
+                let startTimeStr = safeMinutesToTime(entry.startMinutes)
+                let endTimeStr = safeMinutesToTime(entry.endMinutes)
+                let description = entry.description.isEmpty ? "No description" : entry.description
+                print("✅ Parsed: \(startTimeStr) - \(endTimeStr) - \(description)")
+            } else if !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                print("⚠️ Could not parse: '\(line.trimmingCharacters(in: .whitespacesAndNewlines))'")
+            }
+        }
+        
+        let sortedEntries = timeEntries.sorted { $0.startMinutes < $1.startMinutes }
+        print("📅 Final schedule (\(sortedEntries.count) entries):")
+        for entry in sortedEntries {
+            let startTimeStr = safeMinutesToTime(entry.startMinutes)
+            let endTimeStr = safeMinutesToTime(entry.endMinutes)
+            let description = entry.description.isEmpty ? "No description" : entry.description
+            print("   \(startTimeStr) - \(endTimeStr) - \(description)")
+        }
+        
+        return sortedEntries
+    }
+    
+    // MARK: - Existing Methods (unchanged)
     
     private func loadNotesForDate(_ date: Date) {
         if let existingNote = getNoteForDate(date) {
@@ -137,7 +480,6 @@ struct DailyNotesView: View {
         } else {
             notesText = ""
         }
-        // Refresh editor when loading new content
         editorKey = UUID()
     }
     
@@ -345,8 +687,8 @@ struct DailyNotesView: View {
             return nil
         }
         
-        // Pattern to match time ranges
-        let pattern = #"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*-?\s*(.+)"#
+        // Pattern to match time ranges - support both 12-hour and 24-hour formats
+        let pattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-?\s*(.+)"#
         
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
               let match = regex.firstMatch(in: trimmedLine, range: NSRange(location: 0, length: trimmedLine.utf16.count)),
@@ -360,8 +702,9 @@ struct DailyNotesView: View {
         let endTimeStr = String(trimmedLine[endTimeRange])
         let description = String(trimmedLine[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
         
-        guard let startMinutes = timeToMinutes(startTimeStr),
-              let endMinutes = timeToMinutes(endTimeStr) else {
+        // Parse both times with context awareness
+        guard let startMinutes = timeToMinutesWithContext(startTimeStr, endTimeStr: endTimeStr, startTimeStr: startTimeStr),
+              let endMinutes = timeToMinutesWithContext(endTimeStr, endTimeStr: endTimeStr, startTimeStr: startTimeStr) else {
             return nil
         }
         
@@ -377,30 +720,156 @@ struct DailyNotesView: View {
         )
     }
     
-    private func timeToMinutes(_ timeString: String) -> Int? {
-        let components = timeString.components(separatedBy: ":")
+    private func timeToMinutesWithContext(_ timeString: String, endTimeStr: String? = nil, startTimeStr: String? = nil) -> Int? {
+        let cleanTime = timeString.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check if it contains AM/PM
+        let hasAMPM = cleanTime.lowercased().contains("am") || cleanTime.lowercased().contains("pm")
+        let isPM = cleanTime.lowercased().contains("pm")
+        
+        // Extract just the time part (remove AM/PM)
+        let timeOnly = cleanTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression)
+        
+        let components = timeOnly.components(separatedBy: ":")
         guard components.count == 2,
               let hours = Int(components[0]),
               let mins = Int(components[1]) else {
             return nil
         }
-        return hours * 60 + mins
+        
+        var finalHours = hours
+        
+        if hasAMPM {
+            // Handle 12-hour format with explicit AM/PM
+            if isPM && hours != 12 {
+                finalHours = hours + 12  // Convert PM to 24-hour (except 12 PM)
+            } else if !isPM && hours == 12 {
+                finalHours = 0  // Convert 12 AM to 0 (midnight)
+            }
+        } else {
+            // No AM/PM specified - use context to determine
+            let now = Date()
+            let calendar = Calendar.current
+            let currentHour = calendar.component(.hour, from: now)
+            let isCurrentlyPM = currentHour >= 12
+            
+            // Check if we're dealing with a time range that crosses noon
+            var isSpecialNoonCrossing = false
+            if let startTime = startTimeStr, let endTime = endTimeStr {
+                let startComponents = startTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression).components(separatedBy: ":")
+                let endComponents = endTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression).components(separatedBy: ":")
+                
+                if let startHour = Int(startComponents[0]), let endHour = Int(endComponents[0]) {
+                    // Special case: 11:XX - 12:XX when current time is PM
+                    isSpecialNoonCrossing = (startHour == 11 && endHour == 12 && isCurrentlyPM)
+                }
+            }
+            
+            if isSpecialNoonCrossing {
+                // Handle the edge case: 11:30 - 12:30 when current time is PM
+                if hours == 11 {
+                    finalHours = 11 // Keep 11:XX as 11 AM
+                } else if hours == 12 {
+                    finalHours = 12 // Keep 12:XX as 12 PM (noon)
+                } else {
+                    // For other hours in this context, follow current time
+                    if isCurrentlyPM && hours < 12 {
+                        finalHours = hours + 12
+                    } else if hours == 12 && !isCurrentlyPM {
+                        finalHours = 0
+                    }
+                }
+            } else {
+                // Normal context-based interpretation
+                if isCurrentlyPM {
+                    if hours == 12 {
+                        finalHours = 12 // 12 PM (noon)
+                    } else if hours < 12 {
+                        finalHours = hours + 12 // Convert to PM
+                    }
+                } else {
+                    // Current time is AM
+                    if hours == 12 {
+                        finalHours = 0 // 12 AM (midnight)
+                    } else {
+                        finalHours = hours // Keep as AM
+                    }
+                }
+            }
+        }
+        
+        return finalHours * 60 + mins
     }
     
     private func minutesToTime(_ minutes: Int) -> String {
         let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
         let hours = (adjustedMinutes / 60) % 24
         let mins = adjustedMinutes % 60
-        return String(format: "%d:%02d", hours, mins)
+        
+        // Convert to 12-hour format with AM/PM for display
+        let displayHour = hours == 0 ? 12 : (hours > 12 ? hours - 12 : hours)
+        let ampm = hours < 12 ? "AM" : "PM"
+        
+        return String(format: "%d:%02d %s", displayHour, mins, ampm)
+    }
+    
+    private func safeMinutesToTime(_ minutes: Int) -> String {
+        // Add bounds checking to prevent crashes
+        guard minutes >= -1440 && minutes <= 2880 else {
+            return "Invalid Time"
+        }
+        
+        let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
+        let hours = (adjustedMinutes / 60) % 24
+        let mins = adjustedMinutes % 60
+        
+        // Convert to 12-hour format with AM/PM for display
+        let displayHour = hours == 0 ? 12 : (hours > 12 ? hours - 12 : hours)
+        let ampm = hours < 12 ? "AM" : "PM"
+        
+        return String(format: "%d:%02d %s", displayHour, mins, ampm)
     }
     
     private func adjustTime(_ timeString: String, byMinutes minutes: Int) -> String? {
-        guard let timeMinutes = timeToMinutes(timeString) else {
+        guard let timeMinutes = timeToMinutesWithContext(timeString) else {
             return nil
         }
         
         let adjustedMinutes = timeMinutes + minutes
-        return minutesToTime(adjustedMinutes)
+        return safeMinutesToTime(adjustedMinutes)
+    }
+    
+    // MARK: - Countdown Timer Methods
+    
+    private func startCountdownTimer() {
+        stopCountdownTimer()
+        
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            updateTimeRemaining()
+        }
+    }
+    
+    private func stopCountdownTimer() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+    }
+    
+    private func updateTimeRemaining() {
+        if settings.isPlaying && !settings.isPaused {
+            timeRemaining = max(0, settings.nextAlertDate.timeIntervalSinceNow)
+        } else {
+            timeRemaining = 0
+        }
+    }
+    
+    private func formatTimeRemaining(_ timeInterval: TimeInterval) -> String {
+        if timeInterval <= 0 {
+            return "00:00"
+        }
+        
+        let minutes = Int(timeInterval) / 60
+        let seconds = Int(timeInterval) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
     }
 }
 

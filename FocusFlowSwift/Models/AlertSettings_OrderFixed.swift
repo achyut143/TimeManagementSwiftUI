@@ -116,6 +116,12 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published var childLockEnabled: Bool = false {
         didSet { logger.info("childLockEnabled changed: \(oldValue) -> \(self.childLockEnabled)") }
     }
+    @Published var pausedTimeRemaining: TimeInterval = 0 {
+        didSet { logger.info("pausedTimeRemaining changed: \(oldValue) -> \(self.pausedTimeRemaining)") }
+    }
+    
+    // Pause/Resume state management
+    private var pausedAt: Date?
     
     private var timer: Timer?
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -194,13 +200,28 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
             updateStartTime()
         }
         
-        let interval = nextAlertDate.timeIntervalSinceNow
-        if interval <= 0 {
-            let totalSeconds = isInRestPeriod ? 
-                TimeInterval(restMinutes * 60 + restSeconds) : 
-                TimeInterval(intervalMinutes * 60 + intervalSeconds)
-            nextAlertDate = Date().addingTimeInterval(totalSeconds)
+        // Handle pause/resume logic
+        var interval: TimeInterval
+        if let _ = pausedAt, pausedTimeRemaining > 0 {
+            // Resuming from pause - use the stored remaining time
+            interval = pausedTimeRemaining
+            nextAlertDate = Date().addingTimeInterval(interval)
+            logger.info("Resuming from pause with \(interval) seconds remaining")
+            // Clear pause state
+            self.pausedAt = nil
+            self.pausedTimeRemaining = 0
+        } else {
+            // Starting fresh or continuing normally
+            interval = nextAlertDate.timeIntervalSinceNow
+            if interval <= 0 {
+                let totalSeconds = isInRestPeriod ? 
+                    TimeInterval(restMinutes * 60 + restSeconds) : 
+                    TimeInterval(intervalMinutes * 60 + intervalSeconds)
+                nextAlertDate = Date().addingTimeInterval(totalSeconds)
+                interval = totalSeconds
+            }
         }
+        
         updateNextAlertTime()
         
         let nextInterval = nextAlertDate.timeIntervalSinceNow
@@ -445,6 +466,17 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
     
     func stopTimer() {
+        // Store remaining time if we're pausing (not stopping completely)
+        if isPaused && isPlaying {
+            self.pausedTimeRemaining = max(0, nextAlertDate.timeIntervalSinceNow)
+            self.pausedAt = Date()
+            logger.info("Pausing timer with \(self.pausedTimeRemaining) seconds remaining")
+        } else {
+            // Clear pause state when stopping completely
+            self.pausedTimeRemaining = 0
+            self.pausedAt = nil
+        }
+        
         timer?.invalidate()
         timer = nil
         
@@ -606,6 +638,9 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         for phase in cyclePhases {
             phase.reset()
         }
+        // Clear pause state when resetting
+        pausedTimeRemaining = 0
+        pausedAt = nil
     }
     
     func getCurrentCycleProgress() -> (current: Int, total: Int) {
@@ -712,6 +747,12 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     func getTotalCycleDuration() -> Int {
         guard useCycles else { return 0 }
         return cyclePhases.reduce(0) { $0 + $1.totalMinutes }
+    }
+    
+    func clearPauseState() {
+        pausedTimeRemaining = 0
+        pausedAt = nil
+        logger.info("Pause state cleared")
     }
     
     // MARK: - Live Activity Integration

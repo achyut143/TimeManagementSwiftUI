@@ -92,11 +92,11 @@ struct ContentView: View {
                 }
                 
                 NavigationStack {
-                    RewardsView()
+                    RewardsActivitiesTabView()
                 }
                 .tabItem {
                     Image(systemName: "gift")
-                    Text("Rewards")
+                    Text("Rewards/Activities")
                 }
                 
                 NavigationStack {
@@ -105,14 +105,6 @@ struct ContentView: View {
                 .tabItem {
                     Image(systemName: "bell.badge")
                     Text("Alerts")
-                }
-                
-                NavigationStack {
-                    ScheduledActivityView()
-                }
-                .tabItem {
-                    Image(systemName: "clock.badge.checkmark")
-                    Text("Activities")
                 }
             }
             .sheet(isPresented: $showAlertView) {

@@ -564,15 +564,16 @@ struct HabitOverviewView: View {
         // Get the repeat interval from the first task (assuming all tasks with same name have same interval)
         let repeatInterval = habitSpecificTasks.first?.repeatAgain ?? 1
         
-        // Create array to track daily completion status
+        // Create array to track daily completion status - ONLY for days where tasks exist
         var dailyCompletions: [(Date, Bool)] = []
         
-        // Calculate completions for each date in range
+        // Calculate completions for each date in range - ONLY count days with actual tasks
         for date in dateRange {
             let dayTasks = habitSpecificTasks.filter { task in
                 Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
             }
             
+            // Only add to dailyCompletions if there are actual tasks on this day
             if !dayTasks.isEmpty {
                 let isCompleted = dayTasks.contains(where: { $0.completed })
                 dailyCompletions.append((date, isCompleted))
@@ -580,9 +581,10 @@ struct HabitOverviewView: View {
         }
         
         // Use DisciplineMuscleCalculator to get the score with repeat interval
+        // Pass the actual number of days with tasks, not the total date range
         return DisciplineMuscleCalculator.calculateScore(
             completions: dailyCompletions,
-            totalDays: dateRange.count,
+            totalDays: dailyCompletions.count, // Use actual task days, not dateRange.count
             repeatInterval: repeatInterval
         )
     }
@@ -597,15 +599,16 @@ struct HabitOverviewView: View {
             return true // Show all repeating tasks
         }
         
-        // Create array to track daily completion status for streak calculation
+        // Create array to track daily completion status for streak calculation - ONLY for days with tasks
         var dailyCompletions: [(Date, Bool)] = []
         
-        // Calculate stats for each date in range
+        // Calculate stats for each date in range - ONLY count days with actual tasks
         for date in dateRange {
             let dayTasks = habitSpecificTasks.filter { task in
                 Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
             }
             
+            // Only process days where tasks actually exist
             if !dayTasks.isEmpty {
                 let isCompleted = dayTasks.contains(where: { $0.completed })
                 let isMissed = dayTasks.contains(where: { $0.notCompleted })
@@ -646,12 +649,13 @@ struct HabitOverviewView: View {
         var earnedPoints: Double = 0
         var allocatedPoints: Double = 0
         
-        // Calculate points for each date in range
+        // Calculate points for each date in range - ONLY for days with actual tasks
         for date in dateRange {
             let dayTasks = habitSpecificTasks.filter { task in
                 Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
             }
             
+            // Only process days where tasks actually exist
             for task in dayTasks {
                 allocatedPoints += task.weight
                 if task.completed {

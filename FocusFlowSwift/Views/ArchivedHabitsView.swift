@@ -7,6 +7,9 @@ struct ArchivedHabitsView: View {
     @State private var searchText = ""
     @State private var selectedHabit: ArchivedHabit?
     @State private var showingDetail = false
+    @State private var showingDeleteAllAlert = false
+    @State private var habitToDelete: ArchivedHabit?
+    @State private var showingDeleteConfirmation = false
     
     var filteredHabits: [ArchivedHabit] {
         if searchText.isEmpty {
@@ -30,9 +33,49 @@ struct ArchivedHabitsView: View {
             }
             .navigationTitle("Archived Habits")
             .searchable(text: $searchText, prompt: "Search archived habits...")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) {
+                            showingDeleteAllAlert = true
+                        } label: {
+                            Label("Delete All", systemImage: "trash")
+                        }
+                        .disabled(archivedHabits.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .disabled(archivedHabits.isEmpty)
+                }
+            }
+            .alert("Delete All Archived Habits", isPresented: $showingDeleteAllAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete All", role: .destructive) {
+                    deleteAllHabits()
+                }
+            } message: {
+                Text("Are you sure you want to delete all \(archivedHabits.count) archived habits? This action cannot be undone.")
+            }
+            .alert("Delete Habit", isPresented: $showingDeleteConfirmation) {
+                Button("Cancel", role: .cancel) { 
+                    habitToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let habit = habitToDelete {
+                        deleteSingleHabit(habit)
+                    }
+                }
+            } message: {
+                if let habit = habitToDelete {
+                    Text("Are you sure you want to delete '\(habit.habitName)'? This action cannot be undone.")
+                }
+            }
             .sheet(isPresented: $showingDetail) {
                 if let habit = selectedHabit {
-                    ArchivedHabitDetailView(habit: habit)
+                    ArchivedHabitDetailView(habit: habit) { habitToDelete in
+                        self.habitToDelete = habitToDelete
+                        self.showingDeleteConfirmation = true
+                    }
                 }
             }
         }
@@ -64,6 +107,14 @@ struct ArchivedHabitsView: View {
                     selectedHabit = habit
                     showingDetail = true
                 }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        habitToDelete = habit
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
             .onDelete(perform: deleteHabits)
         }
@@ -73,6 +124,23 @@ struct ArchivedHabitsView: View {
         withAnimation {
             for index in offsets {
                 modelContext.delete(filteredHabits[index])
+            }
+            try? modelContext.save()
+        }
+    }
+    
+    private func deleteSingleHabit(_ habit: ArchivedHabit) {
+        withAnimation {
+            modelContext.delete(habit)
+            try? modelContext.save()
+        }
+        habitToDelete = nil
+    }
+    
+    private func deleteAllHabits() {
+        withAnimation {
+            for habit in archivedHabits {
+                modelContext.delete(habit)
             }
             try? modelContext.save()
         }
@@ -155,6 +223,7 @@ struct StatChip: View {
 
 struct ArchivedHabitDetailView: View {
     let habit: ArchivedHabit
+    let onDelete: (ArchivedHabit) -> Void
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -186,6 +255,15 @@ struct ArchivedHabitDetailView: View {
             .navigationTitle(habit.habitName)
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(role: .destructive) {
+                        onDelete(habit)
+                        dismiss()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()
@@ -413,5 +491,35 @@ struct StatCard: View {
     container.mainContext.insert(sampleHabit)
     
     return ArchivedHabitsView()
+        .modelContainer(container)
+}
+
+#Preview("Detail View") {
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try! ModelContainer(for: ArchivedHabit.self, configurations: config)
+    
+    let sampleHabit = ArchivedHabit(
+        habitName: "Morning Exercise",
+        habitDescription: "fitness, morning, cardio",
+        startDate: Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date(),
+        endDate: Date(),
+        repeatFrequency: 1,
+        totalExpectedDays: 90,
+        totalCompletedDays: 75,
+        totalMissedDays: 15,
+        completionPercentage: 83.3,
+        longestStreak: 21,
+        currentStreakAtArchive: 5,
+        averageWeight: 8.5,
+        totalTimeSpent: 2250,
+        firstCompletionDate: Calendar.current.date(byAdding: .day, value: -88, to: Date()),
+        lastCompletionDate: Calendar.current.date(byAdding: .day, value: -2, to: Date()),
+        totalTasks: 90,
+        bestWeekCompletions: 7,
+        worstWeekCompletions: 3,
+        averageDaysBetweenCompletions: 1.2
+    )
+    
+    return ArchivedHabitDetailView(habit: sampleHabit) { _ in }
         .modelContainer(container)
 }
