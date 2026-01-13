@@ -26,10 +26,24 @@ struct TimeEntry {
             return "Invalid Time"
         }
         
+        // Ensure we have valid values before any calculations
         let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
+        
+        // Additional safety check after adjustment
+        guard adjustedMinutes >= 0 && adjustedMinutes < (48 * 60) else {
+            return "Invalid Time"
+        }
+        
         let hours = (adjustedMinutes / 60) % 24
         let mins = adjustedMinutes % 60
-        return String(format: "%d:%02d", hours, mins)
+        
+        // Validate calculated values
+        guard hours >= 0 && hours <= 23 && mins >= 0 && mins <= 59 else {
+            return "Invalid Time"
+        }
+        
+        // Use safer string construction (24-hour format for TimeEntry)
+        return "\(hours):\(String(format: "%02d", mins))"
     }
 }
 
@@ -41,7 +55,7 @@ struct DailyNotesView: View {
     @State private var notesText: String = ""
     @State private var adjustmentMinutes: String = ""
     @State private var editorKey: UUID = UUID()
-    @State private var useCycles: Bool = false
+    @State private var useCycles: Bool = UserDefaults.standard.bool(forKey: "DailyNotesView.useCycles")
     @State private var countdownTimer: Timer?
     @State private var timeRemaining: TimeInterval = 0
     @State private var currentTaskName: String = ""
@@ -130,6 +144,9 @@ struct DailyNotesView: View {
                                 .font(.headline)
                         }
                         .onChange(of: useCycles) { _, newValue in
+                            // Save the toggle state to UserDefaults
+                            UserDefaults.standard.set(newValue, forKey: "DailyNotesView.useCycles")
+                            
                             if newValue {
                                 startSmartCycles()
                             } else {
@@ -178,6 +195,11 @@ struct DailyNotesView: View {
             .onAppear {
                 loadNotesForDate(selectedDate)
                 startCountdownTimer()
+                
+                // If cycles were previously enabled, restart them
+                if useCycles {
+                    startSmartCycles()
+                }
             }
             .onDisappear {
                 stopCountdownTimer()
@@ -241,14 +263,25 @@ struct DailyNotesView: View {
             }
             
             if settings.isPlaying && !settings.isPaused {
-                HStack {
-                    Image(systemName: "timer")
-                        .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
-                    Text("Time remaining: \(formatTimeRemaining(timeRemaining))")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
-                    Spacer()
+                VStack(spacing: 4) {
+                    HStack {
+                        Image(systemName: "timer")
+                            .font(.title2)
+                            .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
+                        Text("Time remaining:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    
+                    HStack {
+                        Text(formatTimeRemaining(timeRemaining))
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
+                            .monospacedDigit()
+                        Spacer()
+                    }
                 }
                 .animation(.easeInOut(duration: 0.3), value: timeRemaining <= 30)
             }
@@ -428,35 +461,59 @@ struct DailyNotesView: View {
     }
     
     private func extractTimeEntriesFromNotes() -> [TimeEntry] {
-        // Find START and END tags
+        // Find START and END tags - ensure they are on their own lines
         let startTag = "START"
         let endTag = "END"
         
-        guard let startRange = notesText.range(of: startTag),
-              let endRange = notesText.range(of: endTag) else {
-            print("❌ No START/END tags found in notes")
+        // Split notes into lines first to find exact tag matches
+        let allLines = notesText.components(separatedBy: .newlines)
+        
+        // Find the line indices for START and END tags
+        var startLineIndex: Int?
+        var endLineIndex: Int?
+        
+        for (index, line) in allLines.enumerated() {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedLine == startTag && startLineIndex == nil {
+                startLineIndex = index
+            } else if trimmedLine == endTag && startLineIndex != nil && endLineIndex == nil {
+                endLineIndex = index
+                break // Take the first END after START
+            }
+        }
+        
+        guard let startIndex = startLineIndex,
+              let endIndex = endLineIndex,
+              startIndex < endIndex else {
+            print("❌ No valid START/END tags found in notes (START must come before END)")
             return []
         }
         
-        // Extract content between START and END
-        let contentStart = startRange.upperBound
-        let contentEnd = endRange.lowerBound
-        let content = String(notesText[contentStart..<contentEnd])
+        // Extract only the lines between START and END (exclusive)
+        let contentLines = Array(allLines[(startIndex + 1)..<endIndex])
         
-        let lines = content.components(separatedBy: .newlines)
         var timeEntries: [TimeEntry] = []
         
-        print("📝 Parsing schedule from notes:")
-        for line in lines {
+        print("📝 Parsing schedule from notes (lines \(startIndex + 1) to \(endIndex - 1)):")
+        print("📝 Content to parse: \(contentLines.count) lines")
+        
+        for (lineIndex, line) in contentLines.enumerated() {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Skip empty lines
+            if trimmedLine.isEmpty {
+                continue
+            }
+            
             if let entry = parseTimeEntry(line) {
                 timeEntries.append(entry)
                 // Add safety checks to prevent EXC_BAD_ACCESS
                 let startTimeStr = safeMinutesToTime(entry.startMinutes)
                 let endTimeStr = safeMinutesToTime(entry.endMinutes)
                 let description = entry.description.isEmpty ? "No description" : entry.description
-                print("✅ Parsed: \(startTimeStr) - \(endTimeStr) - \(description)")
-            } else if !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                print("⚠️ Could not parse: '\(line.trimmingCharacters(in: .whitespacesAndNewlines))'")
+                print("✅ Parsed line \(lineIndex + 1): \(startTimeStr) - \(endTimeStr) - \(description)")
+            } else {
+                print("⚠️ Could not parse line \(lineIndex + 1): '\(trimmedLine)'")
             }
         }
         
@@ -802,32 +859,54 @@ struct DailyNotesView: View {
     }
     
     private func minutesToTime(_ minutes: Int) -> String {
-        let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
-        let hours = (adjustedMinutes / 60) % 24
-        let mins = adjustedMinutes % 60
-        
-        // Convert to 12-hour format with AM/PM for display
-        let displayHour = hours == 0 ? 12 : (hours > 12 ? hours - 12 : hours)
-        let ampm = hours < 12 ? "AM" : "PM"
-        
-        return String(format: "%d:%02d %s", displayHour, mins, ampm)
+        // Use the safe version to prevent crashes
+        return safeMinutesToTime(minutes)
     }
     
     private func safeMinutesToTime(_ minutes: Int) -> String {
         // Add bounds checking to prevent crashes
         guard minutes >= -1440 && minutes <= 2880 else {
+            print("⚠️ Minutes out of bounds: \(minutes)")
             return "Invalid Time"
         }
         
+        // Ensure we have valid values before any calculations
         let adjustedMinutes = minutes >= 0 ? minutes : (minutes % (24 * 60) + 24 * 60)
+        
+        // Additional safety check after adjustment
+        guard adjustedMinutes >= 0 && adjustedMinutes < (48 * 60) else {
+            print("⚠️ Adjusted minutes out of bounds: \(adjustedMinutes)")
+            return "Invalid Time"
+        }
+        
         let hours = (adjustedMinutes / 60) % 24
         let mins = adjustedMinutes % 60
+        
+        // Validate calculated values
+        guard hours >= 0 && hours <= 23 && mins >= 0 && mins <= 59 else {
+            print("⚠️ Invalid hours/mins: hours=\(hours), mins=\(mins)")
+            return "Invalid Time"
+        }
         
         // Convert to 12-hour format with AM/PM for display
         let displayHour = hours == 0 ? 12 : (hours > 12 ? hours - 12 : hours)
         let ampm = hours < 12 ? "AM" : "PM"
         
-        return String(format: "%d:%02d %s", displayHour, mins, ampm)
+        // Validate display hour
+        guard displayHour >= 1 && displayHour <= 12 else {
+            print("⚠️ Invalid display hour: \(displayHour)")
+            return "Invalid Time"
+        }
+        
+        // Use completely safe string construction
+        do {
+            let minuteStr = mins < 10 ? "0\(mins)" : "\(mins)"
+            let result = "\(displayHour):\(minuteStr) \(ampm)"
+            return result
+        } catch {
+            print("⚠️ String construction failed: \(error)")
+            return "Invalid Time"
+        }
     }
     
     private func adjustTime(_ timeString: String, byMinutes minutes: Int) -> String? {

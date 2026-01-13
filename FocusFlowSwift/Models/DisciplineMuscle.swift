@@ -73,29 +73,31 @@ class DisciplineMuscleCalculator {
     
     /// Calculate discipline muscle score for a habit over a specified period, accounting for repeat frequency
     /// - Parameters:
-    ///   - completions: Array of (Date, Bool) tuples representing daily completions
-    ///   - totalDays: Total days in the period (default 30)
+    ///   - completions: Array of (Date, Bool) tuples representing daily completions (only days with actual tasks)
+    ///   - totalDays: Total days in the period (default 30) - used for backward compatibility
     ///   - repeatInterval: How often the habit should repeat (in days, default 1 for daily)
     /// - Returns: DisciplineMuscleScore with all metrics
     static func calculateScore(completions: [(Date, Bool)], totalDays: Int = 30, repeatInterval: Int = 1) -> DisciplineMuscleScore {
         let sortedCompletions = completions.sorted { $0.0 < $1.0 }
         
-        // Calculate expected occurrences based on repeat interval
-        let expectedOccurrences = max(1, totalDays / repeatInterval)
+        // Use actual task occurrences instead of theoretical expected occurrences
+        // The completions array already contains only days where tasks were scheduled
+        let actualOccurrences = sortedCompletions.count
+        let expectedOccurrences = max(1, actualOccurrences) // Use actual occurrences as expected
         
         // 1. Base Metrics - count actual completions
         let completedDays = sortedCompletions.filter { $0.1 }.count
         
-        // 2. Streak Calculations (adjusted for repeat interval)
-        let streaks = calculateStreaks(from: sortedCompletions, repeatInterval: repeatInterval)
-        let streakBonus = Double(streaks.longest) / Double(expectedOccurrences)
+        // 2. Streak Calculations (using actual task occurrences)
+        let streaks = calculateStreaks(from: sortedCompletions)
+        let streakBonus = actualOccurrences > 0 ? Double(streaks.longest) / Double(actualOccurrences) : 0
         
-        // 3. Decay Penalty Calculation (adjusted for repeat interval)
-        let decayPenalty = calculateDecayPenalty(from: sortedCompletions, repeatInterval: repeatInterval)
+        // 3. Decay Penalty Calculation (using actual task occurrences)
+        let decayPenalty = calculateDecayPenalty(from: sortedCompletions)
         
         // 4. Final Discipline Muscle Score (DMS)
         let adjustedCompletedDays = max(0, Double(completedDays) - decayPenalty)
-        let baseScore = adjustedCompletedDays / Double(expectedOccurrences)
+        let baseScore = actualOccurrences > 0 ? adjustedCompletedDays / Double(actualOccurrences) : 0
         let disciplineScore = min(1.0, baseScore + streakBonus)
         
         // 5. Determine Discipline Level
@@ -103,7 +105,7 @@ class DisciplineMuscleCalculator {
         
         return DisciplineMuscleScore(
             completedDays: completedDays,
-            totalDays: expectedOccurrences,
+            totalDays: actualOccurrences,
             longestStreak: streaks.longest,
             currentStreak: streaks.current,
             decayPenalty: decayPenalty,
@@ -113,8 +115,8 @@ class DisciplineMuscleCalculator {
         )
     }
     
-    /// Calculate current and longest streaks from completion data, accounting for repeat interval
-    private static func calculateStreaks(from completions: [(Date, Bool)], repeatInterval: Int) -> (current: Int, longest: Int) {
+    /// Calculate current and longest streaks from completion data (using actual task occurrences)
+    private static func calculateStreaks(from completions: [(Date, Bool)]) -> (current: Int, longest: Int) {
         guard !completions.isEmpty else { return (0, 0) }
         
         let sortedCompletions = completions.sorted { $0.0 < $1.0 }
@@ -122,16 +124,8 @@ class DisciplineMuscleCalculator {
         var longestStreak = 0
         var currentStreakInData = 0
         
-        // For non-daily habits, we need to group by expected occurrence dates
-        let expectedDates = generateExpectedDates(from: sortedCompletions, repeatInterval: repeatInterval)
-        
-        // Calculate longest streak based on expected occurrences
-        for expectedDate in expectedDates {
-            let isCompleted = sortedCompletions.contains { completion in
-                let daysDiff = Calendar.current.dateComponents([.day], from: expectedDate, to: completion.0).day ?? 0
-                return abs(daysDiff) <= (repeatInterval / 2) && completion.1 // Allow some flexibility
-            }
-            
+        // Calculate longest streak based on actual task occurrences
+        for (_, isCompleted) in sortedCompletions {
             if isCompleted {
                 currentStreakInData += 1
                 longestStreak = max(longestStreak, currentStreakInData)
@@ -142,12 +136,7 @@ class DisciplineMuscleCalculator {
         
         // Calculate current streak from the end
         var currentStreak = 0
-        for expectedDate in expectedDates.reversed() {
-            let isCompleted = sortedCompletions.contains { completion in
-                let daysDiff = Calendar.current.dateComponents([.day], from: expectedDate, to: completion.0).day ?? 0
-                return abs(daysDiff) <= (repeatInterval / 2) && completion.1
-            }
-            
+        for (_, isCompleted) in sortedCompletions.reversed() {
             if isCompleted {
                 currentStreak += 1
             } else {
@@ -158,40 +147,20 @@ class DisciplineMuscleCalculator {
         return (currentStreak, longestStreak)
     }
     
-    /// Generate expected occurrence dates based on repeat interval
-    private static func generateExpectedDates(from completions: [(Date, Bool)], repeatInterval: Int) -> [Date] {
-        guard let firstDate = completions.first?.0 else { return [] }
-        guard let lastDate = completions.last?.0 else { return [] }
-        
-        var expectedDates: [Date] = []
-        var currentDate = firstDate
-        
-        while currentDate <= lastDate {
-            expectedDates.append(currentDate)
-            currentDate = Calendar.current.date(byAdding: .day, value: repeatInterval, to: currentDate) ?? currentDate
-        }
-        
-        return expectedDates
-    }
-    
-    /// Calculate decay penalty based on consecutive missed expected occurrences
-    /// Rules (adjusted for repeat interval):
+    /// Calculate decay penalty based on consecutive missed actual task occurrences
+    /// Rules:
     /// - 1 missed occurrence → no penalty
     /// - 2 missed occurrences in a row → -0.5 rep
-    /// - 3+ missed occurrences in a row → -1 rep per extra occurrence
-    private static func calculateDecayPenalty(from completions: [(Date, Bool)], repeatInterval: Int) -> Double {
+    /// - 3+ missed occurrences in a row → -0.5 + (extra × 1.0) rep
+    private static func calculateDecayPenalty(from completions: [(Date, Bool)]) -> Double {
         guard !completions.isEmpty else { return 0 }
         
-        let expectedDates = generateExpectedDates(from: completions, repeatInterval: repeatInterval)
+        let sortedCompletions = completions.sorted { $0.0 < $1.0 }
         var penalty: Double = 0
         var consecutiveMisses = 0
         
-        for expectedDate in expectedDates {
-            let isCompleted = completions.contains { completion in
-                let daysDiff = Calendar.current.dateComponents([.day], from: expectedDate, to: completion.0).day ?? 0
-                return abs(daysDiff) <= (repeatInterval / 2) && completion.1
-            }
-            
+        // Process each actual task occurrence
+        for (_, isCompleted) in sortedCompletions {
             if !isCompleted {
                 consecutiveMisses += 1
             } else {
