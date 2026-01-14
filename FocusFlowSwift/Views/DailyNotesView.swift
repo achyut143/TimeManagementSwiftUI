@@ -58,8 +58,10 @@ struct DailyNotesView: View {
     @State private var useCycles: Bool = UserDefaults.standard.bool(forKey: "DailyNotesView.useCycles")
     @State private var countdownTimer: Timer?
     @State private var timeRemaining: TimeInterval = 0
+    @State private var previousTimeRemaining: TimeInterval = 0
     @State private var currentTaskName: String = ""
     @State private var currentCycleDuration: Int = 0
+    @State private var isTransitioning: Bool = false
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -225,11 +227,18 @@ struct DailyNotesView: View {
                     .foregroundStyle(settings.isPaused ? .orange : .blue)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Current: \(currentTaskName)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                    if isTransitioning {
+                        Text("Transitioning to next task...")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text("Current: \(currentTaskName)")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
                     
-                    if currentCycleDuration > 0 {
+                    if currentCycleDuration > 0 && !isTransitioning {
                         Text("Duration: \(currentCycleDuration) minutes")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -457,6 +466,7 @@ struct DailyNotesView: View {
             self.settings.stopTimer()
             self.currentTaskName = ""
             self.currentCycleDuration = 0
+            self.isTransitioning = false
         }
     }
     
@@ -935,8 +945,21 @@ struct DailyNotesView: View {
     
     private func updateTimeRemaining() {
         if settings.isPlaying && !settings.isPaused {
-            timeRemaining = max(0, settings.nextAlertDate.timeIntervalSinceNow)
+            let newTimeRemaining = max(0, settings.nextAlertDate.timeIntervalSinceNow)
+            
+            // Check if cycle just completed (was > 0.5 seconds, now is 0, and timer is still playing)
+            if previousTimeRemaining > 0.5 && newTimeRemaining == 0 && useCycles && settings.isPlaying {
+                // Cycle completed, start next one after a brief delay
+                print("🔔 Cycle completed! Previous: \(previousTimeRemaining), New: \(newTimeRemaining)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    self.startNextCycle()
+                }
+            }
+            
+            previousTimeRemaining = timeRemaining
+            timeRemaining = newTimeRemaining
         } else {
+            previousTimeRemaining = timeRemaining
             timeRemaining = 0
         }
     }
@@ -949,6 +972,92 @@ struct DailyNotesView: View {
         let minutes = Int(timeInterval) / 60
         let seconds = Int(timeInterval) % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+    
+    // MARK: - Automatic Cycle Transition
+    
+    private func startNextCycle() {
+        print("🔄 Cycle completed, starting next cycle...")
+        
+        // Show transitioning state
+        isTransitioning = true
+        
+        // Re-evaluate what should be happening now
+        let timeEntries = extractTimeEntriesFromNotes()
+        guard !timeEntries.isEmpty else {
+            print("❌ No schedule found for next cycle")
+            currentTaskName = "No schedule found"
+            isTransitioning = false
+            return
+        }
+        
+        let now = Date()
+        let calendar = Calendar.current
+        let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        
+        // Find what should be happening now
+        if let currentEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries) {
+            // Currently in a scheduled task
+            currentTaskName = currentEntry.description
+            let remainingMinutes = currentEntry.endMinutes - currentMinutes
+            currentCycleDuration = remainingMinutes
+            
+            if remainingMinutes > 0 {
+                print("🎯 Starting task cycle: \(currentEntry.description) for \(remainingMinutes) minutes")
+                startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
+                isTransitioning = false
+            } else {
+                // Task just ended, look for next task
+                if let nextEntry = findNextTask(after: currentMinutes, in: timeEntries) {
+                    let gapMinutes = nextEntry.startMinutes - currentMinutes
+                    currentTaskName = "Preparation/Rest"
+                    currentCycleDuration = gapMinutes
+                    
+                    if gapMinutes > 0 {
+                        print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
+                        startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest")
+                        isTransitioning = false
+                    } else {
+                        // Next task starts immediately
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            self.startNextCycle()
+                        }
+                    }
+                } else {
+                    // No more tasks today
+                    print("✅ No more tasks scheduled for today")
+                    currentTaskName = "Free time"
+                    currentCycleDuration = 0
+                    isTransitioning = false
+                    stopCycles()
+                }
+            }
+            
+        } else if let nextEntry = findNextTask(after: currentMinutes, in: timeEntries) {
+            // In a gap before next task - start preparation/rest cycle
+            let gapMinutes = nextEntry.startMinutes - currentMinutes
+            currentTaskName = "Preparation/Rest"
+            currentCycleDuration = gapMinutes
+            
+            if gapMinutes > 0 {
+                print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
+                startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest")
+                isTransitioning = false
+            } else {
+                // Next task starts immediately
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.startNextCycle()
+                }
+            }
+            
+        } else {
+            // No more tasks today
+            print("✅ No more tasks scheduled for today")
+            currentTaskName = "Free time"
+            currentCycleDuration = 0
+            isTransitioning = false
+            stopCycles()
+        }
     }
 }
 

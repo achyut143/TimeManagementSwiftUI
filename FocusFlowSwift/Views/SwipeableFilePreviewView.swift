@@ -51,16 +51,17 @@ struct FilePreviewContentView: View {
     @State private var image: UIImage?
     @State private var isLoading = true
     @State private var loadError: String?
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
     
     var body: some View {
         VStack {
             if attachment.isImage {
                 Group {
                     if let image = image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .clipped()
+                        ZoomableImageView(image: image)
                     } else if isLoading {
                         ProgressView("Loading image...")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -79,7 +80,7 @@ struct FilePreviewContentView: View {
                     }
                 }
             } else if attachment.isPDF {
-                QuickLookPreview(url: attachment.fileURL)
+                PDFPreviewView(url: attachment.fileURL)
             }
             
             // File info
@@ -182,36 +183,4 @@ struct NonPreviewableFileView: View {
     }
 }
 
-struct QuickLookPreview: UIViewControllerRepresentable {
-    let url: URL
-    
-    func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
-        return controller
-    }
-    
-    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
-        // No updates needed
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(url: url)
-    }
-    
-    class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
-        
-        init(url: URL) {
-            self.url = url
-        }
-        
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
-            return 1
-        }
-        
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            return url as QLPreviewItem
-        }
-    }
-}
+// ZoomableImageView and PDFPreviewView are defined in FilePreviewView.swift

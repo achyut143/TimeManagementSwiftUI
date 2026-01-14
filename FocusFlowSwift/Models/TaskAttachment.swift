@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 class TaskAttachment {
     var id: UUID = UUID()
     var fileName: String
-    var fileURL: URL
+    var fileURL: URL // Keep as stored property for backward compatibility
     var fileType: String
     var fileSize: Int64
     var dateAdded: Date
@@ -25,6 +25,28 @@ class TaskAttachment {
         self.dateAdded = Date()
         self.thumbnailData = thumbnailData
         self.originalFileData = originalFileData
+    }
+    
+    // Helper to get the correct file URL (fixes path if container changed)
+    func getValidFileURL() -> URL {
+        // If the file exists at the stored path, return it
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            return fileURL
+        }
+        
+        // Otherwise, reconstruct using current documents directory
+        let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let attachmentsDirectory = documentsDirectory.appendingPathComponent("TaskAttachments")
+        let filename = fileURL.lastPathComponent
+        return attachmentsDirectory.appendingPathComponent(filename)
+    }
+    
+    // Update the stored URL to current container path
+    func updateToCurrentPath() {
+        let newURL = getValidFileURL()
+        if newURL.path != fileURL.path {
+            fileURL = newURL
+        }
     }
     
     // Check if file is an image

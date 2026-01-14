@@ -40,7 +40,9 @@ struct ImagePreviewView: View {
     let url: URL
     @State private var image: UIImage?
     @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
     
     var body: some View {
         GeometryReader { geometry in
@@ -51,21 +53,37 @@ struct ImagePreviewView: View {
                     .scaleEffect(scale)
                     .offset(offset)
                     .gesture(
-                        SimultaneousGesture(
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    scale = max(0.5, min(3.0, value))
-                                },
-                            DragGesture()
-                                .onChanged { value in
-                                    offset = value.translation
-                                }
-                        )
+                        MagnificationGesture()
+                            .onChanged { value in
+                                scale = max(0.5, min(5.0, lastScale * value))
+                            }
+                            .onEnded { value in
+                                lastScale = scale
+                            }
+                    )
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                offset = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                            }
+                            .onEnded { value in
+                                lastOffset = offset
+                            }
                     )
                     .onTapGesture(count: 2) {
-                        withAnimation {
-                            scale = scale == 1.0 ? 2.0 : 1.0
-                            offset = .zero
+                        withAnimation(.spring()) {
+                            if scale == 1.0 {
+                                scale = 2.0
+                                lastScale = 2.0
+                            } else {
+                                scale = 1.0
+                                lastScale = 1.0
+                                offset = .zero
+                                lastOffset = .zero
+                            }
                         }
                     }
             } else {
@@ -97,16 +115,28 @@ struct PDFPreviewView: UIViewRepresentable {
         pdfView.autoScales = true
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
+        pdfView.backgroundColor = .systemBackground
         
-        if let document = PDFDocument(url: url) {
-            pdfView.document = document
+        // Load PDF document
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let document = PDFDocument(url: url) {
+                DispatchQueue.main.async {
+                    pdfView.document = document
+                    pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit
+                }
+            }
         }
         
         return pdfView
     }
     
     func updateUIView(_ uiView: PDFView, context: Context) {
-        // No updates needed
+        if uiView.document == nil {
+            if let document = PDFDocument(url: url) {
+                uiView.document = document
+                uiView.scaleFactor = uiView.scaleFactorForSizeToFit
+            }
+        }
     }
 }
 
@@ -148,5 +178,59 @@ struct UnsupportedFileView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.gray.opacity(0.05))
+    }
+}
+
+// Shared zoomable image view for use in both FilePreviewView and SwipeableFilePreviewView
+struct ZoomableImageView: View {
+    let image: UIImage
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    
+    var body: some View {
+        GeometryReader { geometry in
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            scale = max(0.5, min(5.0, lastScale * value))
+                        }
+                        .onEnded { value in
+                            lastScale = scale
+                        }
+                )
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            offset = CGSize(
+                                width: lastOffset.width + value.translation.width,
+                                height: lastOffset.height + value.translation.height
+                            )
+                        }
+                        .onEnded { value in
+                            lastOffset = offset
+                        }
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.spring()) {
+                        if scale == 1.0 {
+                            scale = 2.0
+                            lastScale = 2.0
+                        } else {
+                            scale = 1.0
+                            lastScale = 1.0
+                            offset = .zero
+                            lastOffset = .zero
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }

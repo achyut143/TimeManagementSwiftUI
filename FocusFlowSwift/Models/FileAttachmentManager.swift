@@ -25,43 +25,33 @@ class FileAttachmentManager: ObservableObject {
     
     // Check and fix file path if needed (for development builds)
     func validateAndFixAttachment(_ attachment: TaskAttachment) -> Bool {
-        // If file exists at current path, no need to fix
-        if FileManager.default.fileExists(atPath: attachment.fileURL.path) {
+        // Get the valid file URL (handles container changes)
+        let validURL = attachment.getValidFileURL()
+        
+        // Check if file exists
+        if FileManager.default.fileExists(atPath: validURL.path) {
+            // Update stored path if it changed
+            if validURL.path != attachment.fileURL.path {
+                attachment.fileURL = validURL
+            }
             return true
         }
         
-        // If we have original file data, recreate the file
+        // If file doesn't exist but we have original file data, recreate it
         if let originalData = attachment.originalFileData {
             do {
-                let newURL = attachmentsDirectory.appendingPathComponent(attachment.fileURL.lastPathComponent)
-                try originalData.write(to: newURL)
-                attachment.fileURL = newURL
+                // Ensure directory exists
+                let directory = validURL.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                
+                // Write file
+                try originalData.write(to: validURL)
+                attachment.fileURL = validURL
                 return true
             } catch {
-                // Failed to recreate, continue with other recovery methods
+                print("Failed to recreate file from backup data: \(error)")
+                return false
             }
-        }
-        
-        // Try to find the file in the current attachments directory
-        let expectedFileName = attachment.fileURL.lastPathComponent
-        let newURL = attachmentsDirectory.appendingPathComponent(expectedFileName)
-        
-        if FileManager.default.fileExists(atPath: newURL.path) {
-            attachment.fileURL = newURL
-            return true
-        }
-        
-        // Try to find any file with the same original name
-        do {
-            let files = try FileManager.default.contentsOfDirectory(at: attachmentsDirectory, includingPropertiesForKeys: nil)
-            for fileURL in files {
-                if fileURL.lastPathComponent.hasSuffix("_\(attachment.fileName)") {
-                    attachment.fileURL = fileURL
-                    return true
-                }
-            }
-        } catch {
-            // Error searching for files
         }
         
         return false

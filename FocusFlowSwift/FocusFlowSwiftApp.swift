@@ -6,6 +6,27 @@ import UserNotifications
 import ActivityKit
 import WidgetKit
 
+// Wrapper view to handle migration with access to modelContext
+struct MigrationWrapper<Content: View>: View {
+    @Environment(\.modelContext) private var modelContext
+    @State private var hasMigrated = false
+    let content: Content
+    
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+    
+    var body: some View {
+        content
+            .onAppear {
+                if !hasMigrated {
+                    TaskAttachmentMigration.migrateAttachmentsIfNeeded(modelContext: modelContext)
+                    hasMigrated = true
+                }
+            }
+    }
+}
+
 @main
 struct FocusFlowSwiftApp: App {
     @StateObject private var alertManager = AlertManager()
@@ -25,19 +46,21 @@ struct FocusFlowSwiftApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(alertManager)
-                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                    alertManager.handleAppLifecycleChange(isActive: false)
-                    backgroundCounter.handleAppDidEnterBackground()
-                    Self.scheduleBackgroundTask()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                    alertManager.handleAppLifecycleChange(isActive: true)
-                    backgroundCounter.handleAppDidBecomeActive()
-                    // Clean up any delivered notifications when app becomes active
-                    UNUserNotificationCenter.current().removeAllDeliveredNotifications()
-                }
+            MigrationWrapper {
+                ContentView()
+                    .environmentObject(alertManager)
+                    .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                        alertManager.handleAppLifecycleChange(isActive: false)
+                        backgroundCounter.handleAppDidEnterBackground()
+                        Self.scheduleBackgroundTask()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                        alertManager.handleAppLifecycleChange(isActive: true)
+                        backgroundCounter.handleAppDidBecomeActive()
+                        // Clean up any delivered notifications when app becomes active
+                        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+                    }
+            }
         }
         .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, TaskAttachment.self, ArchivedHabit.self])
     }
