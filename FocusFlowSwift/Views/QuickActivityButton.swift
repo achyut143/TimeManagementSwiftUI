@@ -79,7 +79,9 @@ struct QuickActivitiesListView: View {
     @State private var currentTime = Date()
     @State private var selectedActivity: ScheduledActivity?
     @State private var showActivityWindow = false
+    @State private var showCreditUseSheet = false
     @State private var windowNotes = ""
+    @State private var creditsToUse = 1
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
@@ -127,6 +129,11 @@ struct QuickActivitiesListView: View {
                         onUseWindow: {
                             selectedActivity = activity
                             showActivityWindow = true
+                        },
+                        onUseCredits: {
+                            selectedActivity = activity
+                            creditsToUse = 1
+                            showCreditUseSheet = true
                         }
                     )
                 }
@@ -149,6 +156,27 @@ struct QuickActivitiesListView: View {
                     selectedActivity = nil
                     windowNotes = ""
                 }
+            }
+        }
+        .sheet(isPresented: $showCreditUseSheet) {
+            if let activity = selectedActivity {
+                CreditUseView(
+                    activity: activity,
+                    creditsToUse: $creditsToUse,
+                    onUse: {
+                        if activity.useWindowCredits(creditsToUse, context: modelContext) {
+                            try? modelContext.save()
+                        }
+                        showCreditUseSheet = false
+                        selectedActivity = nil
+                        creditsToUse = 1
+                    },
+                    onCancel: {
+                        showCreditUseSheet = false
+                        selectedActivity = nil
+                        creditsToUse = 1
+                    }
+                )
             }
         }
         .onReceive(timer) { _ in
@@ -198,6 +226,7 @@ struct QuickActivityRowView: View {
     let activity: ScheduledActivity
     let currentTime: Date
     let onUseWindow: () -> Void
+    let onUseCredits: () -> Void
     
     var body: some View {
         HStack {
@@ -285,22 +314,45 @@ struct QuickActivityRowView: View {
             
             Spacer()
             
-            if activity.isInActiveWindow() {
-                Button {
-                    onUseWindow()
-                } label: {
-                    Text("Use")
-                        .font(.caption)
-                        .fontWeight(.semibold)
+            HStack(spacing: 8) {
+                if activity.isInActiveWindow() {
+                    Button {
+                        onUseWindow()
+                    } label: {
+                        Text("Use")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.green)
+                            .cornerRadius(8)
+                    }
+                }
+                
+                if activity.accumulatedWindowCredits > 0 {
+                    Button {
+                        onUseCredits()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "gift.fill")
+                                .font(.caption)
+                            Text("Use")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
                         .foregroundColor(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color.green)
+                        .background(Color.orange)
                         .cornerRadius(8)
+                    }
                 }
-            } else {
-                Image(systemName: "clock")
-                    .foregroundColor(.secondary)
+                
+                if !activity.isInActiveWindow() && activity.accumulatedWindowCredits == 0 {
+                    Image(systemName: "clock")
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -314,6 +366,138 @@ struct QuickActivityRowView: View {
             return "\(hours)h \(minutes)m"
         } else {
             return "\(minutes)m"
+        }
+    }
+}
+
+struct CreditUseView: View {
+    let activity: ScheduledActivity
+    @Binding var creditsToUse: Int
+    let onUse: () -> Void
+    let onCancel: () -> Void
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Use Window Credits")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text(activity.name)
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                
+                VStack(spacing: 12) {
+                    Text("Available Credits")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: "gift.fill")
+                            .font(.title)
+                            .foregroundColor(.orange)
+                        Text("\(activity.accumulatedWindowCredits)")
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundColor(.orange)
+                    }
+                }
+                .padding()
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(12)
+                
+                VStack(spacing: 12) {
+                    Text("Credits to Use")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 16) {
+                        Button {
+                            if creditsToUse > 1 {
+                                creditsToUse -= 1
+                            }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.title)
+                                .foregroundColor(creditsToUse > 1 ? .blue : .gray)
+                        }
+                        .disabled(creditsToUse <= 1)
+                        
+                        Text("\(creditsToUse)")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .frame(minWidth: 60)
+                        
+                        Button {
+                            if creditsToUse < activity.accumulatedWindowCredits {
+                                creditsToUse += 1
+                            }
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title)
+                                .foregroundColor(creditsToUse < activity.accumulatedWindowCredits ? .blue : .gray)
+                        }
+                        .disabled(creditsToUse >= activity.accumulatedWindowCredits)
+                    }
+                }
+                .padding()
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(12)
+                
+                // Show what will happen
+                VStack(alignment: .leading, spacing: 8) {
+                    if activity.hasRewardAttachment {
+                        HStack(spacing: 8) {
+                            Image(systemName: activity.effectiveRewardBurnType.icon)
+                                .foregroundColor(.purple)
+                            Text("Will burn: \(activity.formattedBurnAmount(multiplier: creditsToUse))")
+                                .font(.subheadline)
+                        }
+                    }
+                    
+                    if activity.hasTaskAttachment {
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock.badge.plus.fill")
+                                .foregroundColor(.blue)
+                            Text("Will add: \(activity.formattedTaskTime(multiplier: creditsToUse))")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
+                
+                Spacer()
+                
+                HStack(spacing: 16) {
+                    Button {
+                        onCancel()
+                    } label: {
+                        Text("Cancel")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                    }
+                    
+                    Button {
+                        onUse()
+                    } label: {
+                        Text("Use Credits")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.orange)
+                            .cornerRadius(12)
+                    }
+                }
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

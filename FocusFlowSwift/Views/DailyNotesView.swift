@@ -2,6 +2,39 @@ import SwiftUI
 import SwiftData
 import AVFoundation
 import ActivityKit
+import Combine
+
+// MARK: - Speech Synthesizer Manager
+class SpeechManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    static let shared = SpeechManager()
+    private let synthesizer = AVSpeechSynthesizer()
+    
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+    
+    func speak(_ text: String) {
+        // Stop any ongoing speech
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = 0.5 // Slightly slower for clarity
+        utterance.volume = 1.0
+        
+        synthesizer.speak(utterance)
+        print("🔊 Speaking: \(text)")
+    }
+    
+    func stopSpeaking() {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+    }
+}
 
 struct TimeEntry {
     let startMinutes: Int
@@ -52,6 +85,7 @@ struct DailyNotesView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var dailyNotes: [DailyNote]
     @StateObject private var settings = AlertSettings.shared
+    @StateObject private var speechManager = SpeechManager.shared
     @State private var notesText: String = ""
     @State private var adjustmentMinutes: String = ""
     @State private var editorKey: UUID = UUID()
@@ -62,6 +96,10 @@ struct DailyNotesView: View {
     @State private var currentTaskName: String = ""
     @State private var currentCycleDuration: Int = 0
     @State private var isTransitioning: Bool = false
+    @State private var cycleEndObserver: AnyCancellable?
+    @State private var pausedAt: Date?
+    @State private var totalPausedDuration: TimeInterval = 0
+    @State private var currentTime: Date = Date() // Add this to force UI updates
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -162,7 +200,7 @@ struct DailyNotesView: View {
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                             
-                            if settings.isPlaying {
+                            if settings.isPlaying || settings.isPaused {
                                 cycleStatusView
                             }
                         }
@@ -198,6 +236,9 @@ struct DailyNotesView: View {
                 loadNotesForDate(selectedDate)
                 startCountdownTimer()
                 
+                // Load persistent pause state
+                loadPauseState()
+                
                 // If cycles were previously enabled, restart them
                 if useCycles {
                     startSmartCycles()
@@ -205,6 +246,8 @@ struct DailyNotesView: View {
             }
             .onDisappear {
                 stopCountdownTimer()
+                cycleEndObserver?.cancel()
+                speechManager.stopSpeaking()
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
@@ -271,13 +314,13 @@ struct DailyNotesView: View {
                 .padding(.vertical, 4)
             }
             
-            if settings.isPlaying && !settings.isPaused {
+            if settings.isPlaying {
                 VStack(spacing: 4) {
                     HStack {
                         Image(systemName: "timer")
                             .font(.title2)
-                            .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
-                        Text("Time remaining:")
+                            .foregroundStyle(timeRemaining <= 30 ? .red : (settings.isPaused ? .orange : .blue))
+                        Text(settings.isPaused ? "Time paused:" : "Time remaining:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -287,7 +330,7 @@ struct DailyNotesView: View {
                         Text(formatTimeRemaining(timeRemaining))
                             .font(.largeTitle)
                             .fontWeight(.bold)
-                            .foregroundStyle(timeRemaining <= 30 ? .red : .blue)
+                            .foregroundStyle(timeRemaining <= 30 ? .red : (settings.isPaused ? .orange : .blue))
                             .monospacedDigit()
                         Spacer()
                     }
@@ -312,10 +355,8 @@ struct DailyNotesView: View {
                     Button(settings.isPaused ? "Resume" : "Pause") {
                         DispatchQueue.main.async {
                             if self.settings.isPaused {
-                                self.settings.isPlaying = true
                                 self.settings.isPaused = false
                             } else {
-                                self.settings.isPlaying = false
                                 self.settings.isPaused = true
                             }
                         }
@@ -323,6 +364,38 @@ struct DailyNotesView: View {
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
                 }
+            }
+            
+            // Smart Pause button (separate from regular pause)
+            if settings.isPlaying {
+                Button(pausedAt != nil ? "Smart Resume" : "Smart Pause") {
+                    DispatchQueue.main.async {
+                        self.handleSmartPause()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(pausedAt != nil ? .green : .orange)
+                .frame(maxWidth: .infinity)
+            }
+            
+            // Show pause duration if smart paused
+            if pausedAt != nil, let pausedAtTime = pausedAt {
+                VStack(spacing: 4) {
+                    HStack {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(.orange)
+                        Text("Smart Paused for: \(formatPauseDuration(currentTime.timeIntervalSince(pausedAtTime)))")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fontWeight(.medium)
+                    }
+                    
+                    Text("All following tasks will be adjusted when you resume")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 8)
             }
         }
         .padding()
@@ -368,13 +441,13 @@ struct DailyNotesView: View {
                 self.startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
                 
             } else if let nextEntry = self.findNextTask(after: currentMinutes, in: timeEntries) {
-                // In a gap before next task - start preparation/rest cycle
+                // In a gap before next task - start preparation/rest/Drink Water cycle
                 let gapMinutes = nextEntry.startMinutes - currentMinutes
-                self.currentTaskName = "Preparation/Rest"
+                self.currentTaskName = "Preparation/Rest/Drink Water"
                 self.currentCycleDuration = gapMinutes
                 
                 // Start preparation cycle
-                self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest")
+                self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest/Drink Water")
                 
             } else {
                 // No more tasks today
@@ -455,7 +528,39 @@ struct DailyNotesView: View {
         settings.isPaused = false
         settings.scheduleIntervalTimer()
         
+        // Announce task start
+        let announcement = "Starting \(taskName) for \(minutes) minute\(minutes == 1 ? "" : "s")"
+        speechManager.speak(announcement)
+        
+        // Set up observer for when this cycle ends
+        setupCycleEndObserver()
+        
         print("🎯 Started cycle: \(taskName) for \(minutes) minutes")
+    }
+    
+    private func setupCycleEndObserver() {
+        // Cancel any existing observer
+        cycleEndObserver?.cancel()
+        
+        // Create a timer that checks more frequently for cycle completion
+        cycleEndObserver = Timer.publish(every: 0.5, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak settings] _ in
+                guard let settings = settings else { return }
+                
+                // Check if cycle just completed
+                if settings.isPlaying && !settings.isPaused {
+                    let timeRemaining = settings.nextAlertDate.timeIntervalSinceNow
+                    
+                    // If time is up or very close (within 1 second)
+                    if timeRemaining <= 1.0 && timeRemaining > -2.0 {
+                        // Trigger transition
+                        DispatchQueue.main.async {
+                            self.handleCycleCompletion()
+                        }
+                    }
+                }
+            }
     }
     
     private func stopCycles() {
@@ -467,6 +572,234 @@ struct DailyNotesView: View {
             self.currentTaskName = ""
             self.currentCycleDuration = 0
             self.isTransitioning = false
+            self.cycleEndObserver?.cancel()
+            self.speechManager.stopSpeaking()
+            
+            // Reset pause tracking
+            self.pausedAt = nil
+            self.totalPausedDuration = 0
+            self.savePauseState()
+        }
+    }
+    
+    // MARK: - Smart Pause/Resume Logic
+    
+    private func handleSmartPause() {
+        if pausedAt != nil {
+            // Resume - calculate pause duration and adjust schedule
+            resumeWithScheduleAdjustment()
+        } else {
+            // Pause - record the pause time AND pause the timer
+            pausedAt = Date()
+            savePauseState()
+            
+            // Pause the timer (but keep isPlaying true)
+            settings.isPaused = true
+            
+            let announcement = "Smart pause activated. Schedule will adjust on resume."
+            speechManager.speak(announcement)
+            
+            print("⏸️ Smart Paused at \(currentTimeString)")
+        }
+    }
+    
+    private func resumeWithScheduleAdjustment() {
+        guard let pauseStartTime = pausedAt else {
+            print("⚠️ No pause time recorded")
+            return
+        }
+        
+        // Calculate how long we were paused
+        let pauseDuration = Date().timeIntervalSince(pauseStartTime)
+        let pauseMinutes = Int(ceil(pauseDuration / 60.0))
+        
+        print("▶️ Smart Resuming after \(pauseMinutes) minute pause")
+        
+        // Adjust the schedule by the pause duration (pass pause time before clearing it)
+        adjustTimesInNotesByWithPauseTime(pauseMinutes, pauseTime: pauseStartTime)
+        
+        // Update total paused duration and reset pause time
+        totalPausedDuration = totalPausedDuration + pauseDuration
+        pausedAt = nil
+        savePauseState()
+        
+        // Resume the timer (keep isPlaying true, just unpause)
+        settings.isPaused = false
+        
+        let announcement = "Resuming after \(pauseMinutes) minute pause. Schedule adjusted."
+        speechManager.speak(announcement)
+        
+        print("✅ Schedule adjusted by +\(pauseMinutes) minutes")
+        
+        // Restart smart cycles with the adjusted schedule
+        startSmartCycles()
+    }
+    
+    private func adjustTimesInNotesByWithPauseTime(_ minutes: Int, pauseTime: Date) {
+        // Find START and END tags
+        let startTag = "START"
+        let endTag = "END"
+        
+        guard let startRange = notesText.range(of: startTag),
+              let endRange = notesText.range(of: endTag) else {
+            print("Could not find START and END tags")
+            return
+        }
+        
+        // Extract content between START and END
+        let contentStart = startRange.upperBound
+        let contentEnd = endRange.lowerBound
+        let content = String(notesText[contentStart..<contentEnd])
+        
+        // Get the time when we PAUSED to determine which task was current
+        let calendar = Calendar.current
+        let pauseMinutes = calendar.component(.hour, from: pauseTime) * 60 + calendar.component(.minute, from: pauseTime)
+        
+        // Get current time NOW (when resuming) for the new start time
+        let now = Date()
+        let resumeMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        
+        print("🔍 Pause time: \(safeMinutesToTime(pauseMinutes)), Resume time: \(safeMinutesToTime(resumeMinutes)), Pause duration: \(minutes) minutes")
+        
+        // Parse and adjust times using pause time to identify current task, resume time for new start
+        let adjustedContent = adjustFutureTimeRanges(in: content, byMinutes: minutes, pauseMinutes: pauseMinutes, resumeMinutes: resumeMinutes)
+        
+        // Replace the content between START and END
+        let beforeStart = String(notesText[..<startRange.lowerBound])
+        let afterEnd = String(notesText[endRange.upperBound...])
+        
+        notesText = beforeStart + startTag + adjustedContent + endTag + afterEnd
+        
+        // Force the editor to refresh
+        editorKey = UUID()
+        
+        // Save the adjusted notes
+        saveNotes()
+    }
+    
+    private func adjustFutureTimeRanges(in content: String, byMinutes minutes: Int, pauseMinutes: Int, resumeMinutes: Int) -> String {
+        let lines = content.components(separatedBy: .newlines)
+        var result: [String] = []
+        
+        for line in lines {
+            // Skip strikethrough lines completely
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedLine.hasPrefix("~~") && trimmedLine.hasSuffix("~~") {
+                result.append(line)
+                continue
+            }
+            if trimmedLine.contains("~~") {
+                result.append(line)
+                continue
+            }
+            
+            if let entry = parseTimeEntry(line) {
+                // Check if this is a fixed task (marked with **text**)
+                if entry.isFixed {
+                    // Fixed tasks remain unchanged
+                    result.append(line)
+                    print("📝 Kept fixed task: \(entry.description) at \(safeMinutesToTime(entry.startMinutes))-\(safeMinutesToTime(entry.endMinutes))")
+                    continue
+                }
+                
+                // Check if this was the current task when we PAUSED (not when we resume)
+                let wasCurrentTask = pauseMinutes >= entry.startMinutes && pauseMinutes < entry.endMinutes
+                
+                if wasCurrentTask {
+                    // Current task: shift by pause duration, keep FULL original duration
+                    let taskDuration = entry.duration  // Keep full original duration (15 minutes)
+                    
+                    // New start time should be: original start time + pause duration
+                    let newStartMinutes = entry.startMinutes + minutes  // Shift by pause duration
+                    let newEndMinutes = newStartMinutes + taskDuration  // Full duration
+                    
+                    let adjustedEntry = TimeEntry(
+                        startMinutes: newStartMinutes,
+                        endMinutes: newEndMinutes,
+                        description: entry.description,
+                        isFixed: entry.isFixed,
+                        originalLine: entry.originalLine
+                    )
+                    
+                    result.append(adjustedEntry.toLine())
+                    print("📝 Adjusted current task: \(entry.description) from \(safeMinutesToTime(entry.startMinutes))-\(safeMinutesToTime(entry.endMinutes)) to \(safeMinutesToTime(newStartMinutes))-\(safeMinutesToTime(newEndMinutes)) (full \(taskDuration) min preserved)")
+                    
+                } else if entry.startMinutes > pauseMinutes {
+                    // Future task (starts after pause time): shift by pause duration
+                    let adjustedStartMinutes = entry.startMinutes + minutes
+                    let adjustedEndMinutes = entry.endMinutes + minutes
+                    
+                    let adjustedEntry = TimeEntry(
+                        startMinutes: adjustedStartMinutes,
+                        endMinutes: adjustedEndMinutes,
+                        description: entry.description,
+                        isFixed: entry.isFixed,
+                        originalLine: entry.originalLine
+                    )
+                    
+                    result.append(adjustedEntry.toLine())
+                    print("📝 Adjusted future task: \(entry.description) from \(safeMinutesToTime(entry.startMinutes))-\(safeMinutesToTime(entry.endMinutes)) to \(safeMinutesToTime(adjustedStartMinutes))-\(safeMinutesToTime(adjustedEndMinutes))")
+                    
+                } else {
+                    // Past task (ended before pause time) - keep as is
+                    result.append(line)
+                    print("📝 Kept past task: \(entry.description) at \(safeMinutesToTime(entry.startMinutes))-\(safeMinutesToTime(entry.endMinutes))")
+                }
+            } else {
+                // Non-time line - keep as is (empty lines, comments, etc.)
+                result.append(line)
+            }
+        }
+        
+        return result.joined(separator: "\n")
+    }
+    
+    private func formatPauseDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        } else {
+            return "\(seconds)s"
+        }
+    }
+    
+    // MARK: - Persistence Helpers
+    
+    private func loadPauseState() {
+        pausedAt = UserDefaults.standard.object(forKey: "DailyNotesView.pausedAt") as? Date
+        totalPausedDuration = UserDefaults.standard.double(forKey: "DailyNotesView.totalPausedDuration")
+    }
+    
+    private func savePauseState() {
+        if let date = pausedAt {
+            UserDefaults.standard.set(date, forKey: "DailyNotesView.pausedAt")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "DailyNotesView.pausedAt")
+        }
+        UserDefaults.standard.set(totalPausedDuration, forKey: "DailyNotesView.totalPausedDuration")
+    }
+    
+    private func handleCycleCompletion() {
+        // Prevent multiple simultaneous transitions
+        guard !isTransitioning else {
+            print("⚠️ Already transitioning, skipping duplicate call")
+            return
+        }
+        
+        print("🔔 Cycle completed! Transitioning to next task...")
+        
+        // Announce task completion
+        let completionAnnouncement = "\(currentTaskName) completed"
+        speechManager.speak(completionAnnouncement)
+        
+        // Cancel the observer to prevent duplicate triggers
+        cycleEndObserver?.cancel()
+        
+        // Wait a moment for the announcement, then start next cycle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.startNextCycle()
         }
     }
     
@@ -944,21 +1277,20 @@ struct DailyNotesView: View {
     }
     
     private func updateTimeRemaining() {
+        // Update current time to force UI refresh
+        currentTime = Date()
+        
         if settings.isPlaying && !settings.isPaused {
             let newTimeRemaining = max(0, settings.nextAlertDate.timeIntervalSinceNow)
-            
-            // Check if cycle just completed (was > 0.5 seconds, now is 0, and timer is still playing)
-            if previousTimeRemaining > 0.5 && newTimeRemaining == 0 && useCycles && settings.isPlaying {
-                // Cycle completed, start next one after a brief delay
-                print("🔔 Cycle completed! Previous: \(previousTimeRemaining), New: \(newTimeRemaining)")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    self.startNextCycle()
-                }
-            }
-            
             previousTimeRemaining = timeRemaining
             timeRemaining = newTimeRemaining
+        } else if settings.isPlaying && settings.isPaused {
+            // When paused, keep the timeRemaining value frozen (don't update it)
+            // This preserves the time that was remaining when we paused
+            previousTimeRemaining = timeRemaining
+            // Don't change timeRemaining - keep it at the paused value
         } else {
+            // When stopped completely
             previousTimeRemaining = timeRemaining
             timeRemaining = 0
         }
@@ -977,10 +1309,13 @@ struct DailyNotesView: View {
     // MARK: - Automatic Cycle Transition
     
     private func startNextCycle() {
-        print("🔄 Cycle completed, starting next cycle...")
+        print("🔄 Starting next cycle...")
         
         // Show transitioning state
         isTransitioning = true
+        
+        // Stop the timer to ensure clean transition
+        settings.stopTimer()
         
         // Re-evaluate what should be happening now
         let timeEntries = extractTimeEntriesFromNotes()
@@ -994,6 +1329,10 @@ struct DailyNotesView: View {
         let now = Date()
         let calendar = Calendar.current
         let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        let currentTimeStr = safeMinutesToTime(currentMinutes)
+        
+        print("⏰ Current time: \(currentTimeStr) (\(currentMinutes) minutes)")
+        print("📋 Evaluating \(timeEntries.count) schedule entries")
         
         // Find what should be happening now
         if let currentEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries) {
@@ -1004,21 +1343,33 @@ struct DailyNotesView: View {
             
             if remainingMinutes > 0 {
                 print("🎯 Starting task cycle: \(currentEntry.description) for \(remainingMinutes) minutes")
-                startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
-                isTransitioning = false
+                print("   Task window: \(safeMinutesToTime(currentEntry.startMinutes)) - \(safeMinutesToTime(currentEntry.endMinutes))")
+                // Small delay to ensure clean state transition
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
+                    self.isTransitioning = false
+                }
             } else {
                 // Task just ended, look for next task
+                print("⚠️ Current task has 0 remaining minutes, looking for next task")
                 if let nextEntry = findNextTask(after: currentMinutes, in: timeEntries) {
                     let gapMinutes = nextEntry.startMinutes - currentMinutes
-                    currentTaskName = "Preparation/Rest"
+                    print("📍 Found next task: \(nextEntry.description) starting at \(safeMinutesToTime(nextEntry.startMinutes))")
+                    print("   Gap duration: \(gapMinutes) minutes")
+                    
+                    currentTaskName = "Preparation/Rest/Drink Water"
                     currentCycleDuration = gapMinutes
                     
                     if gapMinutes > 0 {
                         print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
-                        startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest")
-                        isTransitioning = false
+                        // Small delay to ensure clean state transition
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest/Drink Water")
+                            self.isTransitioning = false
+                        }
                     } else {
                         // Next task starts immediately
+                        print("⚡ Next task starts immediately, recursing...")
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             self.startNextCycle()
                         }
@@ -1034,17 +1385,24 @@ struct DailyNotesView: View {
             }
             
         } else if let nextEntry = findNextTask(after: currentMinutes, in: timeEntries) {
-            // In a gap before next task - start preparation/rest cycle
+            // In a gap before next task - start preparation/rest/Drink Water cycle
             let gapMinutes = nextEntry.startMinutes - currentMinutes
-            currentTaskName = "Preparation/Rest"
+            print("📍 Currently in gap. Next task: \(nextEntry.description) at \(safeMinutesToTime(nextEntry.startMinutes))")
+            print("   Gap duration: \(gapMinutes) minutes")
+            
+            currentTaskName = "Preparation/Rest/Drink Water"
             currentCycleDuration = gapMinutes
             
             if gapMinutes > 0 {
                 print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
-                startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest")
-                isTransitioning = false
+                // Small delay to ensure clean state transition
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest/Drink Water")
+                    self.isTransitioning = false
+                }
             } else {
                 // Next task starts immediately
+                print("⚡ Next task starts immediately (gap = 0), recursing...")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self.startNextCycle()
                 }
