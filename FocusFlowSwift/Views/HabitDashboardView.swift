@@ -5,6 +5,7 @@ import Foundation
 struct HabitDashboardView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var tasks: [Task]
+    @Query private var eventDays: [EventDay]
     @State private var selectedHabit = ""
     @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate = Date()
@@ -14,6 +15,9 @@ struct HabitDashboardView: View {
     @State private var showArchivedHabits = false
     @State private var habitToDelete = ""
     @State private var searchText = ""
+    @State private var showEventDetail = false
+    @State private var selectedEventDate: Date?
+    @State private var selectedEventDay: EventDay?
     
     var initialHabit: String? = nil
     
@@ -66,7 +70,33 @@ struct HabitDashboardView: View {
             .padding(.bottom, 20) // Add bottom padding for better scrolling
         }
         .navigationTitle("Habit Tracker")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Test Event") {
+                    // Create a test event for today
+                    let testEvent = EventDay(
+                        date: Date(),
+                        isFullDay: true,
+                        isMorning: false,
+                        isAfternoon: true,
+                        isEvening: false,
+                        events: ["Test Event"]
+                    )
+                    modelContext.insert(testEvent)
+                    try? modelContext.save()
+                    print("🔍 Test event created for today")
+                }
+            }
+        }
     .onAppear {
+      // Debug: Check eventDays loading
+      print("🔍 HabitDashboard onAppear - EventDays count: \(eventDays.count)")
+      for eventDay in eventDays {
+          let formatter = DateFormatter()
+          formatter.dateStyle = .short
+          print("🔍 EventDay: \(formatter.string(from: eventDay.date)), hasAnyEvent: \(eventDay.hasAnyEvent), types: \(eventDay.eventTypes)")
+      }
+      
       // Use initialHabit if provided, otherwise use first available
       if let initialHabit = initialHabit, filteredHabitNames.contains(initialHabit) {
         selectedHabit = initialHabit
@@ -94,6 +124,11 @@ struct HabitDashboardView: View {
         }
         .sheet(isPresented: $showArchivedHabits) {
             ArchivedHabitsView()
+        }
+        .sheet(isPresented: $showEventDetail) {
+            if let selectedDate = selectedEventDate {
+                EventDetailView(date: selectedDate, eventDay: selectedEventDay)
+            }
         }
     }
     
@@ -229,22 +264,107 @@ struct HabitDashboardView: View {
     
     private func habitDayView(date: Date) -> some View {
         let status = getStatusForDay(date: date)
+        let eventDay = eventDays.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
+        let eventTypes = eventDay?.eventTypes ?? []
         
-        return VStack(spacing: 2) {
-            Text("\(Calendar.current.component(.day, from: date))")
-                .font(.caption)
-                .fontWeight(.medium)
-            
-            Text(DateFormatter.shortMonth.string(from: date))
-                .font(.caption2)
-            
-            Text(DateFormatter.weekday.string(from: date))
-                .font(.caption2)
+        // Debug: Print detailed event information
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .short
+        if let eventDay = eventDay {
+            print("🔍 Date: \(dateFormatter.string(from: date))")
+            print("   - hasAnyEvent: \(eventDay.hasAnyEvent)")
+            print("   - isFullDay: \(eventDay.isFullDay)")
+            print("   - isMorning: \(eventDay.isMorning)")
+            print("   - isAfternoon: \(eventDay.isAfternoon)")
+            print("   - isEvening: \(eventDay.isEvening)")
+            print("   - events count: \(eventDay.events.count)")
+            print("   - eventTypes count: \(eventTypes.count)")
+            print("   - eventTypes: \(eventTypes.map { $0.rawValue })")
         }
-        .frame(width: 40, height: 40)
-        .background(colorForStatus(status))
-        .foregroundColor(status == .noData ? .primary : .white)
-        .cornerRadius(6)
+        
+        return ZStack {
+            // The habit cell content
+            VStack(spacing: 2) {
+                Text("\(Calendar.current.component(.day, from: date))")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                
+                Text(DateFormatter.shortMonth.string(from: date))
+                    .font(.caption2)
+                
+                Text(DateFormatter.weekday.string(from: date))
+                    .font(.caption2)
+            }
+            .frame(width: 40, height: 40)
+            .background(colorForStatus(status))
+            .foregroundColor(status == .noData ? .primary : .white)
+            .cornerRadius(6)
+            
+            // Event day halos - circular glowing rings with gaps
+            if !eventTypes.isEmpty {
+                Button(action: {
+                    selectedEventDate = date
+                    selectedEventDay = eventDay
+                    showEventDetail = true
+                }) {
+                    ZStack {
+                        // Primary halo - innermost ring with gap
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        eventTypes[0].color.opacity(0.8),
+                                        eventTypes[0].color.opacity(0.3)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 2.5
+                            )
+                            .frame(width: 52, height: 52)
+                            .shadow(color: eventTypes[0].color.opacity(0.6), radius: 3, x: 0, y: 0)
+                            .shadow(color: eventTypes[0].color.opacity(0.4), radius: 6, x: 0, y: 0)
+                        
+                        // Secondary halo - middle ring
+                        if eventTypes.count > 1 {
+                            Circle()
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [
+                                            eventTypes[1].color.opacity(0.7),
+                                            eventTypes[1].color.opacity(0.25)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 2
+                                )
+                                .frame(width: 58, height: 58)
+                                .shadow(color: eventTypes[1].color.opacity(0.5), radius: 4, x: 0, y: 0)
+                        }
+                        
+                        // Tertiary halo - outermost ring
+                        if eventTypes.count > 2 {
+                            Circle()
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [
+                                            eventTypes[2].color.opacity(0.6),
+                                            eventTypes[2].color.opacity(0.2)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1.5
+                                )
+                                .frame(width: 64, height: 64)
+                                .shadow(color: eventTypes[2].color.opacity(0.4), radius: 5, x: 0, y: 0)
+                        }
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
     }
     
     private var statsView: some View {
@@ -487,7 +607,8 @@ struct HabitDashboardView: View {
             total: total,
             percentage: percentage,
             currentStreak: streaks.current,
-            maxStreak: streaks.max
+            maxStreak: streaks.max,
+            habitName: selectedHabit
         )
     }
     
@@ -573,6 +694,7 @@ struct HabitStats {
     let percentage: Double
     let currentStreak: Int
     let maxStreak: Int
+    let habitName: String?
 }
 
 extension DateFormatter {

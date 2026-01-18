@@ -5,6 +5,7 @@ import Foundation
 struct HabitOverviewView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var tasks: [Task]
+    @Query private var eventDays: [EventDay]
     @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate = Date()
     @State private var filterMode = "all"
@@ -274,71 +275,105 @@ struct HabitOverviewView: View {
     }
     
     private func compactTraditionalMetrics(stats: HabitStats, pointsStats: (earned: Double, allocated: Double)) -> some View {
-        HStack(spacing: 6) {
-            // Completed/Total
-            VStack(spacing: 0) {
-                Text("\(stats.completed)/\(stats.total)")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.primary)
-                
-                Text("Score")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            
-            // Current Streak
-            VStack(spacing: 0) {
-                HStack(spacing: 1) {
-                    if stats.currentStreak > 0 {
-                        Image(systemName: "flame.fill")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
-                    Text("\(stats.currentStreak)")
+        let eventStats = calculateEventStatsForHabit(stats.habitName ?? "")
+        
+        return VStack(spacing: 4) {
+            // First row: Completed/Total, Current Streak, Max Streak
+            HStack(spacing: 6) {
+                // Completed/Total
+                VStack(spacing: 0) {
+                    Text("\(stats.completed)/\(stats.total)")
                         .font(.caption2)
                         .fontWeight(.bold)
-                        .foregroundColor(stats.currentStreak > 0 ? .orange : .secondary)
-                }
-                
-                Text("Current")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            
-            // Max Streak
-            VStack(spacing: 0) {
-                HStack(spacing: 1) {
-                    Image(systemName: "trophy.fill")
-                        .font(.caption2)
-                        .foregroundColor(.purple)
+                        .foregroundColor(.primary)
                     
-                    Text("\(stats.maxStreak)")
+                    Text("Score")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                // Current Streak
+                VStack(spacing: 0) {
+                    HStack(spacing: 1) {
+                        if stats.currentStreak > 0 {
+                            Image(systemName: "flame.fill")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
+                        Text("\(stats.currentStreak)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(stats.currentStreak > 0 ? .orange : .secondary)
+                    }
+                    
+                    Text("Current")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                
+                // Max Streak
+                VStack(spacing: 0) {
+                    HStack(spacing: 1) {
+                        Image(systemName: "trophy.fill")
+                            .font(.caption2)
+                            .foregroundColor(.purple)
+                        
+                        Text("\(stats.maxStreak)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.purple)
+                    }
+                    
+                    Text("Best")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            
+            // Second row: Points, Event Days, Non-Event Misses
+            HStack(spacing: 6) {
+                // Points
+                VStack(spacing: 0) {
+                    Text("\(Int(pointsStats.earned))/\(Int(pointsStats.allocated))")
                         .font(.caption2)
                         .fontWeight(.bold)
-                        .foregroundColor(.purple)
+                        .foregroundColor(.primary)
+                    
+                    Text("Points")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
+                .frame(maxWidth: .infinity)
                 
-                Text("Best")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            
-            // Points
-            VStack(spacing: 0) {
-                Text("\(Int(pointsStats.earned))/\(Int(pointsStats.allocated))")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.primary)
+                // Event Days
+                VStack(spacing: 0) {
+                    Text("\(eventStats.eventDays)")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.blue)
+                    
+                    Text("Events")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
                 
-                Text("Points")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                // Non-Event Misses
+                VStack(spacing: 0) {
+                    Text("\(eventStats.nonEventMisses)")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.red)
+                    
+                    Text("Misses")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
         }
     }
     
@@ -636,7 +671,8 @@ struct HabitOverviewView: View {
             total: total,
             percentage: percentage,
             currentStreak: streaks.current,
-            maxStreak: streaks.max
+            maxStreak: streaks.max,
+            habitName: habitName
         )
     }
     
@@ -1146,6 +1182,42 @@ struct HabitOverviewView: View {
         }
         
         return filters.joined(separator: ", ")
+    }
+    
+    private func calculateEventStatsForHabit(_ habitName: String) -> (eventDays: Int, nonEventMisses: Int) {
+        // Get tasks for this specific habit
+        let habitSpecificTasks = tasks.filter { task in
+            guard task.repeatAgain != nil && task.title == habitName else { return false }
+            return true
+        }
+        
+        var eventDaysCount = 0
+        var nonEventMissesCount = 0
+        
+        // Calculate stats for each date in range
+        for date in dateRange {
+            let dayTasks = habitSpecificTasks.filter { task in
+                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
+            }
+            
+            // Only process days where tasks actually exist
+            if !dayTasks.isEmpty {
+                let isEventDay = eventDays.contains { eventDay in
+                    Calendar.current.isDate(eventDay.date, inSameDayAs: date) && eventDay.hasAnyEvent
+                }
+                
+                let isCompleted = dayTasks.contains(where: { $0.completed })
+                let isMissed = dayTasks.contains(where: { $0.notCompleted })
+                
+                if isEventDay {
+                    eventDaysCount += 1
+                } else if isMissed && !isCompleted {
+                    nonEventMissesCount += 1
+                }
+            }
+        }
+        
+        return (eventDays: eventDaysCount, nonEventMisses: nonEventMissesCount)
     }
 }
 

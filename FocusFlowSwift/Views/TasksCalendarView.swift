@@ -65,6 +65,8 @@ struct TasksCalendarView: View {
                         updateQuery()
                     }
                 
+                EventDayConfigureView(selectedDate: $selectedDate)
+                
                 Spacer()
             }
             .padding()

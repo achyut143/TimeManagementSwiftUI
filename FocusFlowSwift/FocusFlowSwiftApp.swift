@@ -62,7 +62,7 @@ struct FocusFlowSwiftApp: App {
                     }
             }
         }
-        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, TaskAttachment.self, ArchivedHabit.self])
+        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self])
     }
     
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {
