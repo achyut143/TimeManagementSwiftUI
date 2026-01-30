@@ -1,13 +1,13 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
-import Speech
 import Foundation
 
 struct UntimedTasksView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var selectedDate = Date()
     @State private var tasks: [Task] = []
+    @State private var allTasks: [Task] = [] // For metrics calculation
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var editingTask: Task?
     @State private var showEditDialog = false
@@ -23,12 +23,9 @@ struct UntimedTasksView: View {
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
     @State private var showTaskCreation = false
-    @State private var showAITaskCreation = false
-    @State private var aiInput = ""
-    @State private var isRecording = false
-    @State private var isProcessing = false
-    @State private var audioEngine = AVAudioEngine()
-    @State private var recognitionTask: SFSpeechRecognitionTask?
+    @State private var showQuickTaskInput = false
+    @State private var quickTaskInput = ""
+    @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     var body: some View {
         VStack(spacing: 0) {
@@ -40,7 +37,7 @@ struct UntimedTasksView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 
-                Toggle("AI", isOn: $showAITaskCreation)
+                Toggle("Quick", isOn: $showQuickTaskInput)
                     .toggleStyle(.button)
                     .buttonStyle(.bordered)
                 
@@ -55,8 +52,8 @@ struct UntimedTasksView: View {
             .padding()
             
             if showTaskCreation {
-                if showAITaskCreation {
-                    aiTaskCreationHeader
+                if showQuickTaskInput {
+                    quickTaskInputView
                 } else {
                     taskCreationHeader
                 }
@@ -116,18 +113,63 @@ struct UntimedTasksView: View {
         }
         .sheet(isPresented: $showTaskActions) {
             if let task = selectedTaskForActions {
-                TaskActionsView(task: task, onTaskDeleted: updateQuery)
+                TaskActionsView(task: task, selectedDate: selectedDate, onTaskDeleted: updateQuery)
                     .presentationDetents([.medium])
             }
         }
     }
     
     private func untimedTaskRow(task: Task) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let metrics = task.repeatAgain != nil ? task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate) : nil
+        
+        return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(task.title)
-                    .font(.headline)
-                    .fontWeight(.medium)
+                HStack(spacing: 8) {
+                    Text(task.title)
+                        .font(.headline)
+                        .fontWeight(.medium)
+                    
+                    // Show metrics for repeat tasks
+                    if let metrics = metrics {
+                        HStack(spacing: 4) {
+                            // Score (completed/total)
+                            Text(metrics.formattedScore)
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.2))
+                                .clipShape(Capsule())
+                            
+                            // Completion rate
+                            Text(metrics.formattedCompletionRate)
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)).opacity(0.2))
+                                .clipShape(Capsule())
+                            
+                            // Current streak
+                            if metrics.currentStreak > 0 {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "flame.fill")
+                                        .font(.caption2)
+                                    Text("\(metrics.currentStreak)")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                }
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.2))
+                                .clipShape(Capsule())
+                            }
+                        }
+                    }
+                }
                 
                 if !task.taskDescription.isEmpty {
                     Text(task.taskDescription)
@@ -265,79 +307,10 @@ struct UntimedTasksView: View {
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
     
-    private var aiTaskCreationHeader: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Image(systemName: "brain.head.profile")
-                    .font(.title2)
-                    .foregroundStyle(.blue)
-                Text("AI Assistant")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
-            
-            VStack(spacing: 12) {
-                TextEditor(text: $aiInput)
-                    .frame(minHeight: 90)
-                    .padding(12)
-                    .background(Color(.systemBackground))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color(.systemGray4), lineWidth: 1)
-                    )
-                    .cornerRadius(12)
-                
-                HStack(spacing: 16) {
-                    Button(action: toggleRecording) {
-                        HStack(spacing: 8) {
-                            Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                                .font(.title3)
-                            Text(isRecording ? "Stop" : "Record")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                        }
-                        .foregroundColor(isRecording ? .red : .blue)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(isRecording ? Color.red.opacity(0.1) : Color.blue.opacity(0.1))
-                        .cornerRadius(20)
-                    }
-                    
-                    Spacer()
-                    
-                    if isProcessing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Processing...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    
-                    Button("Generate Tasks") {
-                        generateAITask()
-                    }
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(aiInput.isEmpty || isProcessing ? Color.gray : Color.blue)
-                    .cornerRadius(20)
-                    .disabled(aiInput.isEmpty || isProcessing)
-                }
-            }
+    private var quickTaskInputView: some View {
+        QuickTaskInputView(input: $quickTaskInput) { parsedTask in
+            createQuickTask(from: parsedTask)
         }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
-        )
-        .padding(.horizontal)
     }
     
     private var taskCreationHeader: some View {
@@ -429,7 +402,7 @@ struct UntimedTasksView: View {
         )
         
         do {
-            let allTasks = try modelContext.fetch(descriptor)
+            allTasks = try modelContext.fetch(descriptor) // Load all tasks for metrics
             tasks = allTasks.filter { task in
                 // Filter for tasks with empty start/end times (untimed) and matching date
                 guard let taskDate = task.date else { return false }
@@ -444,6 +417,7 @@ struct UntimedTasksView: View {
         } catch {
             print("Error fetching untimed tasks: \(error)")
             tasks = []
+            allTasks = []
         }
     }
     
@@ -476,6 +450,28 @@ struct UntimedTasksView: View {
         taskWeight = 1.0
         taskPriority = "P3"
         repeatDays = 0
+    }
+    
+    private func createQuickTask(from parsed: QuickTaskParser.ParsedTask) {
+        let task = Task(
+            title: parsed.title,
+            taskDescription: "",
+            startTime: parsed.startTime,
+            endTime: parsed.endTime,
+            weight: parsed.weight,
+            date: selectedDate,
+            repeatAgain: parsed.repeatDays,
+            priority: "P3"
+        )
+        
+        modelContext.insert(task)
+        
+        do {
+            try modelContext.save()
+            updateQuery()
+        } catch {
+            print("Error saving quick task: \(error)")
+        }
     }
     
     private func toggleTaskCompletion(_ task: Task) {
@@ -530,127 +526,6 @@ struct UntimedTasksView: View {
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = 0.5
         speechSynthesizer.speak(utterance)
-    }
-    
-    // MARK: - AI and Recording Functions
-    private func toggleRecording() {
-        if isRecording {
-            stopRecording()
-        } else {
-            startRecording()
-        }
-    }
-    
-    private func startRecording() {
-        SFSpeechRecognizer.requestAuthorization { status in
-            guard status == .authorized else { return }
-        }
-        
-        let recognizer = SFSpeechRecognizer()
-        guard let recognizer = recognizer, recognizer.isAvailable else { return }
-        
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        
-        let audioSession = AVAudioSession.sharedInstance()
-        do {
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try audioSession.setActive(true)
-        } catch {
-            print("Audio session error: \(error)")
-            return
-        }
-        
-        audioEngine = AVAudioEngine()
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
-        }
-        
-        recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-            if let result = result {
-                DispatchQueue.main.async {
-                    self.aiInput = result.bestTranscription.formattedString
-                    if result.isFinal {
-                        self.stopRecording()
-                    }
-                }
-            }
-            if error != nil {
-                DispatchQueue.main.async {
-                    self.stopRecording()
-                }
-            }
-        }
-        
-        audioEngine.prepare()
-        try? audioEngine.start()
-        isRecording = true
-    }
-    
-    private func stopRecording() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        try? AVAudioSession.sharedInstance().setActive(false)
-        isRecording = false
-    }
-    
-    private func generateAITask() {
-        isProcessing = true
-        
-        _Concurrency.Task {
-            do {
-                let openAI = OpenAIService()
-                let tasksData = try await openAI.generateTasks(from: aiInput)
-                
-                DispatchQueue.main.async {
-                    for taskData in tasksData {
-                        // Create untimed tasks from AI input
-                        let newTask = Task(
-                            title: taskData.title,
-                            taskDescription: taskData.description,
-                            startTime: "", // No start time for untimed tasks
-                            endTime: "", // No end time for untimed tasks
-                            weight: taskData.weight,
-                            date: selectedDate, // Keep the date
-                            priority: taskData.priority
-                        )
-                        
-                        self.modelContext.insert(newTask)
-                    }
-                    try? self.modelContext.save()
-                    
-                    self.updateQuery()
-                    self.aiInput = ""
-                    self.isProcessing = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.isProcessing = false
-                    self.createTaskWithFallback()
-                }
-            }
-        }
-    }
-    
-    private func createTaskWithFallback() {
-        let newTask = Task(
-            title: aiInput.components(separatedBy: .newlines).first ?? "AI Task",
-            taskDescription: "ai-generated",
-            startTime: "", // No start time
-            endTime: "", // No end time
-            weight: 1.0,
-            date: selectedDate // Keep the date
-        )
-        
-        modelContext.insert(newTask)
-        try? modelContext.save()
-        updateQuery()
-        aiInput = ""
     }
     
     private func createRepeatTask(from task: Task) {

@@ -1,7 +1,6 @@
 import SwiftUI
 import SwiftData
 import AVFoundation
-import Speech
 import Foundation
 import UniformTypeIdentifiers
 import QuickLook
@@ -11,6 +10,7 @@ struct TasksCalendarView: View {
     @Environment(\.modelContext) private var modelContext
     @Binding var selectedDate: Date
     @State private var tasks: [Task] = []
+    @State private var allTasks: [Task] = [] // For metrics calculation
     @State private var currentTime = Date()
     @State private var timer: Timer?
     @State private var speechSynthesizer = AVSpeechSynthesizer()
@@ -34,13 +34,10 @@ struct TasksCalendarView: View {
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
     @State private var showTaskCreation = false
-    @State private var showAITaskCreation = false
-    @State private var aiInput = ""
-    @State private var isRecording = false
-    @State private var isProcessing = false
-    @State private var audioEngine = AVAudioEngine()
-    @State private var recognitionTask: SFSpeechRecognitionTask?
+    @State private var showQuickTaskInput = false
+    @State private var quickTaskInput = ""
     @State private var showUntimedTasks = false
+    @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     var body: some View {
         VStack(spacing: 0) {
@@ -72,8 +69,8 @@ struct TasksCalendarView: View {
             .padding()
             
             if showTaskCreation {
-                if showAITaskCreation {
-                    aiTaskCreationHeader
+                if showQuickTaskInput {
+                    quickTaskInputView
                 } else {
                     taskCreationHeader
                 }
@@ -128,90 +125,17 @@ struct TasksCalendarView: View {
         }
         .sheet(isPresented: $showTaskActions) {
             if let task = selectedTaskForActions {
-                TaskActionsView(task: task, onTaskDeleted: updateQuery)
+                TaskActionsView(task: task, selectedDate: selectedDate, onTaskDeleted: updateQuery)
                     .presentationDetents([.medium])
             }
         }
 
     }
     
-    private var aiTaskCreationHeader: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Image(systemName: "brain.head.profile")
-                    .font(.title2)
-                    .foregroundStyle(.blue)
-                Text("AI Assistant")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.primary)
-                Spacer()
-                
-                Toggle("AI", isOn: $showAITaskCreation)
-                    .toggleStyle(.button)
-                    .buttonStyle(.bordered)
-            }
-            
-            VStack(spacing: 12) {
-                TextEditor(text: $aiInput)
-                    .frame(minHeight: 90)
-                    .padding(12)
-                    .background(Color(.systemBackground))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color(.systemGray4), lineWidth: 1)
-                    )
-                    .cornerRadius(12)
-                
-                HStack(spacing: 16) {
-                    Button(action: toggleRecording) {
-                        HStack(spacing: 8) {
-                            Image(systemName: isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                                .font(.title3)
-                            Text(isRecording ? "Stop" : "Record")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                        }
-                        .foregroundColor(isRecording ? .red : .blue)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(isRecording ? Color.red.opacity(0.1) : Color.blue.opacity(0.1))
-                        .cornerRadius(20)
-                    }
-                    
-                    Spacer()
-                    
-                    if isProcessing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text("Processing...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    
-                    Button("Generate Tasks") {
-                        generateAITask()
-                    }
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(aiInput.isEmpty || isProcessing ? Color.gray : Color.blue)
-                    .cornerRadius(20)
-                    .disabled(aiInput.isEmpty || isProcessing)
-                }
-            }
+    private var quickTaskInputView: some View {
+        QuickTaskInputView(input: $quickTaskInput) { parsedTask in
+            createQuickTask(from: parsedTask)
         }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
-        )
-        .padding(.horizontal)
     }
     
     private var taskCreationHeader: some View {
@@ -224,7 +148,7 @@ struct TasksCalendarView: View {
                 
                 Spacer()
                 
-                Toggle("AI", isOn: $showAITaskCreation)
+                Toggle("Quick", isOn: $showQuickTaskInput)
                     .toggleStyle(.button)
                     .buttonStyle(.bordered)
             }
@@ -335,11 +259,56 @@ struct TasksCalendarView: View {
     }
     
     private func untimedTaskRow(task: Task) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let metrics = task.repeatAgain != nil ? task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate) : nil
+        
+        return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(task.title)
-                    .font(.headline)
-                    .fontWeight(.medium)
+                HStack(spacing: 8) {
+                    Text(task.title)
+                        .font(.headline)
+                        .fontWeight(.medium)
+                    
+                    // Show metrics for repeat tasks
+                    if let metrics = metrics {
+                        HStack(spacing: 4) {
+                            // Score (completed/total)
+                            Text(metrics.formattedScore)
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.2))
+                                .clipShape(Capsule())
+                            
+                            // Completion rate
+                            Text(metrics.formattedCompletionRate)
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)).opacity(0.2))
+                                .clipShape(Capsule())
+                            
+                            // Current streak
+                            if metrics.currentStreak > 0 {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "flame.fill")
+                                        .font(.caption2)
+                                    Text("\(metrics.currentStreak)")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                }
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.2))
+                                .clipShape(Capsule())
+                            }
+                        }
+                    }
+                }
                 
                 if !task.taskDescription.isEmpty {
                     Text(task.taskDescription)
@@ -533,12 +502,43 @@ struct TasksCalendarView: View {
 
   return VStack(alignment: .leading, spacing: 4) {
     if isStartSlot {
+      let metrics = task.repeatAgain != nil ? task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate) : nil
+      
       VStack(alignment: .leading, spacing: 2) {
         HStack {
           Text(task.title)
             .font(.caption)
             .fontWeight(.medium)
             .lineLimit(1)
+          
+          // Show metrics for repeat tasks
+          if let metrics = metrics {
+              HStack(spacing: 2) {
+                  // Score
+                  Text(metrics.formattedScore)
+                      .font(.caption2)
+                      .fontWeight(.bold)
+                      .foregroundColor(.blue)
+                  
+                  // Completion rate
+                  Text(metrics.formattedCompletionRate)
+                      .font(.caption2)
+                      .fontWeight(.bold)
+                      .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
+                  
+                  // Streak
+                  if metrics.currentStreak > 0 {
+                      Image(systemName: "flame.fill")
+                          .font(.caption2)
+                          .foregroundColor(.orange)
+                      Text("\(metrics.currentStreak)")
+                          .font(.caption2)
+                          .fontWeight(.bold)
+                          .foregroundColor(.orange)
+                  }
+              }
+          }
+          
           Spacer()
         }
         HStack {
@@ -751,7 +751,7 @@ struct TasksCalendarView: View {
         )
         
         do {
-            let allTasks = try modelContext.fetch(descriptor)
+            allTasks = try modelContext.fetch(descriptor) // Load all tasks for metrics
             tasks = allTasks.filter { task in
                 guard let taskDate = task.date else { return false }
                 let isDateMatch = Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
@@ -772,6 +772,7 @@ struct TasksCalendarView: View {
         } catch {
             print("Error fetching tasks: \(error)")
             tasks = []
+            allTasks = []
         }
     }
     
@@ -983,6 +984,33 @@ struct TasksCalendarView: View {
         copySubtasks = false
     }
     
+    private func createQuickTask(from parsed: QuickTaskParser.ParsedTask) {
+        let task = Task(
+            title: parsed.title,
+            taskDescription: "",
+            startTime: parsed.startTime,
+            endTime: parsed.endTime,
+            weight: parsed.weight,
+            date: selectedDate,
+            repeatAgain: parsed.repeatDays,
+            priority: "P3"
+        )
+        
+        modelContext.insert(task)
+        
+        // Schedule notifications only for timed tasks
+        if !parsed.isUntimed {
+            scheduleTaskNotifications(for: task)
+        }
+        
+        do {
+            try modelContext.save()
+            updateQuery()
+        } catch {
+            print("Error saving quick task: \(error)")
+        }
+    }
+    
     private func createTaskFromInput() {
         guard !taskInput.isEmpty else { return }
         
@@ -1145,151 +1173,6 @@ struct TasksCalendarView: View {
         if percentage >= 80 { return .green }
         if percentage >= 50 { return .orange }
         return .red
-    }
-    
-    private func toggleRecording() {
-        if isRecording {
-            stopRecording()
-        } else {
-            startRecording()
-        }
-    }
-    
-    private func startRecording() {
-        SFSpeechRecognizer.requestAuthorization { status in
-            guard status == .authorized else { return }
-        }
-        
-        let recognizer = SFSpeechRecognizer()
-        guard let recognizer = recognizer, recognizer.isAvailable else { return }
-        
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        
-        let audioSession = AVAudioSession.sharedInstance()
-        do {
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try audioSession.setActive(true)
-        } catch {
-            print("Audio session error: \(error)")
-            return
-        }
-        
-        audioEngine = AVAudioEngine()
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
-        }
-        
-        recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-            if let result = result {
-                DispatchQueue.main.async {
-                    self.aiInput = result.bestTranscription.formattedString
-                    if result.isFinal {
-                        self.stopRecording()
-                    }
-                }
-            }
-            if error != nil {
-                DispatchQueue.main.async {
-                    self.stopRecording()
-                }
-            }
-        }
-        
-        audioEngine.prepare()
-        try? audioEngine.start()
-        isRecording = true
-    }
-    
-    private func stopRecording() {
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        try? AVAudioSession.sharedInstance().setActive(false)
-        isRecording = false
-    }
-    
-    private func generateAITask() {
-        isProcessing = true
-        
-        _Concurrency.Task {
-            do {
-                let openAI = OpenAIService()
-                let tasksData = try await openAI.generateTasks(from: aiInput)
-                
-                DispatchQueue.main.async {
-                    for taskData in tasksData {
-                        let taskDate = self.parseDate(from: taskData.date)
-                        let newTask = Task(
-                            title: taskData.title,
-                            taskDescription: taskData.description,
-                            startTime: self.convertTo24Hour(taskData.startTime),
-                            endTime: self.convertTo24Hour(taskData.endTime),
-                            weight: taskData.weight,
-                            date: taskDate,
-                            priority: taskData.priority
-                        )
-                        
-                        self.modelContext.insert(newTask)
-                    }
-                    try? self.modelContext.save()
-                    
-                    self.updateQuery()
-                    self.aiInput = ""
-                    self.isProcessing = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.isProcessing = false
-                    self.createTaskWithFallback()
-                }
-            }
-        }
-    }
-    
-    private func convertTo24Hour(_ timeString: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        
-        guard let date = formatter.date(from: timeString) else {
-            return timeString
-        }
-        
-        formatter.dateFormat = "HH:mm"
-        return formatter.string(from: date)
-    }
-    
-    private func parseDate(from dateString: String) -> Date {
-        if dateString.lowercased() == "today" {
-            return selectedDate
-        }
-        if dateString.lowercased() == "tomorrow" {
-            return Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
-        }
-        
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: dateString) ?? selectedDate
-    }
-    
-    private func createTaskWithFallback() {
-        let newTask = Task(
-            title: aiInput.components(separatedBy: .newlines).first ?? "AI Task",
-            taskDescription: "ai-generated",
-            startTime: "09:00",
-            endTime: "10:00",
-            weight: 1.0,
-            date: selectedDate
-        )
-        
-        modelContext.insert(newTask)
-        try? modelContext.save()
-        updateQuery()
-        aiInput = ""
     }
     
     private func scheduleTaskNotifications(for task: Task) {
@@ -1569,7 +1452,9 @@ struct EditTaskView: View {
 
 struct TaskActionsView: View {
     @Query private var allSubtasks: [Subtask]
+    @Query private var allTasks: [Task] // For metrics calculation
     let task: Task
+    let selectedDate: Date
     let onTaskDeleted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -1583,6 +1468,7 @@ struct TaskActionsView: View {
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
     @State private var showRewardWorkflows = false
+    @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     private var subtaskCount: Int {
         return allSubtasks.filter { 
@@ -1596,10 +1482,55 @@ struct TaskActionsView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     VStack(spacing: 8) {
-                        Text(task.title)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .multilineTextAlignment(.center)
+                        HStack(spacing: 8) {
+                            Text(task.title)
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .multilineTextAlignment(.center)
+                            
+                            // Show metrics for repeat tasks
+                            if task.repeatAgain != nil {
+                                let metrics = task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate)
+                                
+                                HStack(spacing: 6) {
+                                    // Score
+                                    Text(metrics.formattedScore)
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.blue)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.blue.opacity(0.2))
+                                        .clipShape(Capsule())
+                                    
+                                    // Completion rate
+                                    Text(metrics.formattedCompletionRate)
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)).opacity(0.2))
+                                        .clipShape(Capsule())
+                                    
+                                    // Streak
+                                    if metrics.currentStreak > 0 {
+                                        HStack(spacing: 2) {
+                                            Image(systemName: "flame.fill")
+                                                .font(.caption)
+                                            Text("\(metrics.currentStreak)")
+                                                .font(.caption)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(.orange)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.orange.opacity(0.2))
+                                        .clipShape(Capsule())
+                                    }
+                                }
+                            }
+                        }
                         
                         if !task.startTime.isEmpty || !task.endTime.isEmpty {
                             Text("\(task.startTime) - \(task.endTime)")

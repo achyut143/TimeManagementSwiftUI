@@ -7,6 +7,7 @@ struct QuickActivityButton: View {
     
     @State private var showActivitiesList = false
     @State private var currentTime = Date()
+    @State private var refreshTrigger = UUID()
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
@@ -41,6 +42,7 @@ struct QuickActivityButton: View {
                     // Quick Activities List Button
                     if !activities.isEmpty {
                         Button {
+                            refreshTrigger = UUID() // Force refresh when opening
                             showActivitiesList = true
                         } label: {
                             ZStack {
@@ -62,7 +64,7 @@ struct QuickActivityButton: View {
             }
         }
         .sheet(isPresented: $showActivitiesList) {
-            QuickActivitiesListView()
+            QuickActivitiesListView(refreshTrigger: refreshTrigger)
         }
         .onReceive(timer) { _ in
             currentTime = Date()
@@ -83,6 +85,7 @@ struct QuickActivitiesListView: View {
     @State private var windowNotes = ""
     @State private var creditsToUse = 1
     
+    let refreshTrigger: UUID
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     // Sort activities by time remaining (least time first)
@@ -106,6 +109,23 @@ struct QuickActivitiesListView: View {
         }
     }
     
+    // Group activities by recurrence type
+    var dailyActivities: [ScheduledActivity] {
+        sortedActivities.filter { ($0.recurrenceType ?? .daily) == .daily }
+    }
+    
+    var weeklyActivities: [ScheduledActivity] {
+        sortedActivities.filter { ($0.recurrenceType ?? .daily) == .weekly }
+    }
+    
+    var monthlyActivities: [ScheduledActivity] {
+        sortedActivities.filter { ($0.recurrenceType ?? .daily) == .monthly }
+    }
+    
+    var quarterlyActivities: [ScheduledActivity] {
+        sortedActivities.filter { ($0.recurrenceType ?? .daily) == .quarterly }
+    }
+    
     private func timeUntilNext(for activity: ScheduledActivity) -> TimeInterval {
         if activity.isInActiveWindow() {
             // Return negative value for active windows (window end time - current time)
@@ -122,22 +142,111 @@ struct QuickActivitiesListView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(sortedActivities, id: \.name) { activity in
-                    QuickActivityRowView(
-                        activity: activity,
-                        currentTime: currentTime,
-                        onUseWindow: {
-                            selectedActivity = activity
-                            showActivityWindow = true
-                        },
-                        onUseCredits: {
-                            selectedActivity = activity
-                            creditsToUse = 1
-                            showCreditUseSheet = true
+                // Daily Activities Section
+                if !dailyActivities.isEmpty {
+                    Section(header: HStack {
+                        Image(systemName: "calendar")
+                            .foregroundColor(.blue)
+                        Text("Daily")
+                            .font(.headline)
+                    }) {
+                        ForEach(dailyActivities, id: \.name) { activity in
+                            QuickActivityRowView(
+                                activity: activity,
+                                currentTime: currentTime,
+                                onUseWindow: {
+                                    selectedActivity = activity
+                                    showActivityWindow = true
+                                },
+                                onUseCredits: {
+                                    selectedActivity = activity
+                                    creditsToUse = 1
+                                    showCreditUseSheet = true
+                                }
+                            )
                         }
-                    )
+                    }
+                }
+                
+                // Weekly Activities Section
+                if !weeklyActivities.isEmpty {
+                    Section(header: HStack {
+                        Image(systemName: "calendar.badge.clock")
+                            .foregroundColor(.green)
+                        Text("Weekly")
+                            .font(.headline)
+                    }) {
+                        ForEach(weeklyActivities, id: \.name) { activity in
+                            QuickActivityRowView(
+                                activity: activity,
+                                currentTime: currentTime,
+                                onUseWindow: {
+                                    selectedActivity = activity
+                                    showActivityWindow = true
+                                },
+                                onUseCredits: {
+                                    selectedActivity = activity
+                                    creditsToUse = 1
+                                    showCreditUseSheet = true
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                // Monthly Activities Section
+                if !monthlyActivities.isEmpty {
+                    Section(header: HStack {
+                        Image(systemName: "calendar.circle")
+                            .foregroundColor(.orange)
+                        Text("Monthly")
+                            .font(.headline)
+                    }) {
+                        ForEach(monthlyActivities, id: \.name) { activity in
+                            QuickActivityRowView(
+                                activity: activity,
+                                currentTime: currentTime,
+                                onUseWindow: {
+                                    selectedActivity = activity
+                                    showActivityWindow = true
+                                },
+                                onUseCredits: {
+                                    selectedActivity = activity
+                                    creditsToUse = 1
+                                    showCreditUseSheet = true
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                // Quarterly Activities Section
+                if !quarterlyActivities.isEmpty {
+                    Section(header: HStack {
+                        Image(systemName: "calendar.badge.plus")
+                            .foregroundColor(.purple)
+                        Text("Quarterly")
+                            .font(.headline)
+                    }) {
+                        ForEach(quarterlyActivities, id: \.name) { activity in
+                            QuickActivityRowView(
+                                activity: activity,
+                                currentTime: currentTime,
+                                onUseWindow: {
+                                    selectedActivity = activity
+                                    showActivityWindow = true
+                                },
+                                onUseCredits: {
+                                    selectedActivity = activity
+                                    creditsToUse = 1
+                                    showCreditUseSheet = true
+                                }
+                            )
+                        }
+                    }
                 }
             }
+            .id(refreshTrigger) // Force list refresh when trigger changes
             .navigationTitle("Quick Activities")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -181,6 +290,10 @@ struct QuickActivitiesListView: View {
         }
         .onReceive(timer) { _ in
             currentTime = Date()
+        }
+        .onAppear {
+            // Refresh data when view appears
+            try? modelContext.save()
         }
     }
     
@@ -371,6 +484,7 @@ struct QuickActivityRowView: View {
 }
 
 struct CreditUseView: View {
+    @Environment(\.modelContext) private var modelContext
     let activity: ScheduledActivity
     @Binding var creditsToUse: Int
     let onUse: () -> Void
@@ -470,19 +584,7 @@ struct CreditUseView: View {
                 
                 Spacer()
                 
-                HStack(spacing: 16) {
-                    Button {
-                        onCancel()
-                    } label: {
-                        Text("Cancel")
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.gray.opacity(0.2))
-                            .cornerRadius(12)
-                    }
-                    
+                VStack(spacing: 12) {
                     Button {
                         onUse()
                     } label: {
@@ -492,6 +594,33 @@ struct CreditUseView: View {
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.orange)
+                            .cornerRadius(12)
+                    }
+                    
+                    Button {
+                        if activity.ignoreWindowCredits(creditsToUse, context: modelContext) {
+                            try? modelContext.save()
+                        }
+                        onCancel()
+                    } label: {
+                        Text("Ignore Credits")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.red)
+                            .cornerRadius(12)
+                    }
+                    
+                    Button {
+                        onCancel()
+                    } label: {
+                        Text("Cancel")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
                             .cornerRadius(12)
                     }
                 }

@@ -100,6 +100,11 @@ struct DailyNotesView: View {
     @State private var pausedAt: Date?
     @State private var totalPausedDuration: TimeInterval = 0
     @State private var currentTime: Date = Date() // Add this to force UI updates
+    @State private var scheduleFrom: String = ""
+    @State private var scheduleTo: String = ""
+    @State private var scheduleInterval: String = ""
+    @State private var scheduleGap: String = ""
+    @State private var scheduleTaskName: String = ""
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -211,6 +216,65 @@ struct DailyNotesView: View {
                     RichTextEditor(text: $notesText)
                         .frame(height: 300)
                         .id(editorKey)
+                }
+                
+                Section("Schedule Generator") {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Text("From:")
+                                .frame(width: 60, alignment: .leading)
+                            TextField("12:30", text: $scheduleFrom)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numbersAndPunctuation)
+                        }
+                        
+                        HStack {
+                            Text("To:")
+                                .frame(width: 60, alignment: .leading)
+                            TextField("5:30", text: $scheduleTo)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numbersAndPunctuation)
+                        }
+                        
+                        HStack {
+                            Text("Interval:")
+                                .frame(width: 60, alignment: .leading)
+                            TextField("30", text: $scheduleInterval)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                            Text("min")
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack {
+                            Text("Gap:")
+                                .frame(width: 60, alignment: .leading)
+                            TextField("5", text: $scheduleGap)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                            Text("min")
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack {
+                            Text("Task:")
+                                .frame(width: 60, alignment: .leading)
+                            TextField("work", text: $scheduleTaskName)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                        }
+                        
+                        Button("Generate Schedule") {
+                            generateSchedule()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(scheduleFrom.isEmpty || scheduleTo.isEmpty || 
+                                 scheduleInterval.isEmpty || scheduleGap.isEmpty || 
+                                 scheduleTaskName.isEmpty)
+                        
+                        Text("Generates time blocks with specified intervals and gaps between them")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .navigationTitle("Daily Notes")
@@ -1307,6 +1371,95 @@ struct DailyNotesView: View {
     }
     
     // MARK: - Automatic Cycle Transition
+    
+    private func generateSchedule() {
+        print("🔧 Generate button clicked")
+        print("   From: \(scheduleFrom), To: \(scheduleTo)")
+        print("   Interval: \(scheduleInterval), Gap: \(scheduleGap)")
+        print("   Task: \(scheduleTaskName)")
+        
+        guard let intervalMinutes = Int(scheduleInterval),
+              let gapMinutes = Int(scheduleGap),
+              let fromMinutes = parseTimeToMinutes(scheduleFrom),
+              var toMinutes = parseTimeToMinutes(scheduleTo) else {
+            print("❌ Invalid input values")
+            print("   Interval parse: \(Int(scheduleInterval) != nil ? "✓" : "✗")")
+            print("   Gap parse: \(Int(scheduleGap) != nil ? "✓" : "✗")")
+            print("   From parse: \(parseTimeToMinutes(scheduleFrom) != nil ? "✓" : "✗")")
+            print("   To parse: \(parseTimeToMinutes(scheduleTo) != nil ? "✓" : "✗")")
+            return
+        }
+        
+        // Adjust end time if it's before start time (assume PM)
+        toMinutes = adjustEndTimeIfNeeded(startMinutes: fromMinutes, endMinutes: toMinutes)
+        
+        print("✅ All inputs parsed successfully")
+        print("   From minutes: \(fromMinutes), To minutes: \(toMinutes)")
+        
+        var scheduleLines: [String] = []
+        var currentStart = fromMinutes
+        
+        while currentStart < toMinutes {
+            let currentEnd = min(currentStart + intervalMinutes, toMinutes)
+            
+            let startTime = formatMinutesToTime(currentStart)
+            let endTime = formatMinutesToTime(currentEnd)
+            
+            let line = "\(startTime) - \(endTime) - \(scheduleTaskName)"
+            scheduleLines.append(line)
+            print("   Generated: \(line)")
+            
+            // Move to next block (add interval + gap)
+            currentStart = currentEnd + gapMinutes
+        }
+        
+        print("📝 Generated \(scheduleLines.count) schedule blocks")
+        
+        // Append to notes
+        let generatedSchedule = scheduleLines.joined(separator: "\n")
+        print("📋 Current notes length: \(notesText.count)")
+        
+        if notesText.isEmpty {
+            notesText = generatedSchedule
+        } else {
+            notesText += "\n" + generatedSchedule
+        }
+        
+        print("📋 New notes length: \(notesText.count)")
+        print("📋 First 100 chars: \(String(notesText.prefix(100)))")
+        
+        // Force refresh editor
+        DispatchQueue.main.async {
+            self.editorKey = UUID()
+        }
+    }
+    
+    private func parseTimeToMinutes(_ timeString: String) -> Int? {
+        let cleanTime = timeString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let components = cleanTime.components(separatedBy: ":")
+        
+        guard components.count == 2,
+              let hours = Int(components[0]),
+              let mins = Int(components[1]) else {
+            return nil
+        }
+        
+        return hours * 60 + mins
+    }
+    
+    private func adjustEndTimeIfNeeded(startMinutes: Int, endMinutes: Int) -> Int {
+        // If end time is before start time, assume it's meant to be PM (add 12 hours)
+        if endMinutes < startMinutes && endMinutes < 720 { // 720 = 12:00
+            return endMinutes + (12 * 60)
+        }
+        return endMinutes
+    }
+    
+    private func formatMinutesToTime(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let mins = minutes % 60
+        return String(format: "%d:%02d", hours, mins)
+    }
     
     private func startNextCycle() {
         print("🔄 Starting next cycle...")

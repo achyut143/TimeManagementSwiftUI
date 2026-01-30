@@ -9,7 +9,10 @@ struct ContentView: View {
     @State private var showBackgroundCounter = false
     @State private var showDailyNotes = false
     @State private var showNewActivity = false
+    @State private var showMetricsSettings = false
     @State private var selectedDate = Date()
+    @State private var habitSettings: HabitSettings?
+    @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @ObservedObject private var counterManager = BackgroundCounterManager.shared
     
     var body: some View {
@@ -49,6 +52,51 @@ struct ContentView: View {
                                 } label: {
                                     Image(systemName: "note.text")
                                         .foregroundColor(.green)
+                                }
+                                
+                                Button {
+                                    showMetricsSettings = true
+                                } label: {
+                                    HStack(spacing: 2) {
+                                        Image(systemName: "chart.bar.fill")
+                                            .font(.caption)
+                                        Text("\(metricDays)d")
+                                            .font(.caption2)
+                                    }
+                                    .foregroundColor(.orange)
+                                }
+                                .popover(isPresented: $showMetricsSettings) {
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        Text("Metrics Period")
+                                            .font(.headline)
+                                        
+                                        Text("Show completion rate and streak for:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        
+                                        ForEach([7, 15, 30, 45, 60], id: \.self) { days in
+                                            Button(action: {
+                                                metricDays = days
+                                                if let settings = habitSettings {
+                                                    settings.updateMetricDays(days, context: modelContext)
+                                                }
+                                                showMetricsSettings = false
+                                            }) {
+                                                HStack {
+                                                    Text("Last \(days) days")
+                                                    Spacer()
+                                                    if metricDays == days {
+                                                        Image(systemName: "checkmark")
+                                                            .foregroundColor(.blue)
+                                                    }
+                                                }
+                                            }
+                                            .buttonStyle(.plain)
+                                            .padding(.vertical, 4)
+                                        }
+                                    }
+                                    .padding()
+                                    .frame(width: 200)
                                 }
                             }
                         }
@@ -126,6 +174,12 @@ struct ContentView: View {
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
+            
+            // Load habit settings
+            habitSettings = HabitSettings.getOrCreate(context: modelContext)
+            if let settings = habitSettings {
+                metricDays = settings.effectiveMetricDays
+            }
             
             // Force refresh Live Activity when main view appears
             if #available(iOS 16.1, *) {

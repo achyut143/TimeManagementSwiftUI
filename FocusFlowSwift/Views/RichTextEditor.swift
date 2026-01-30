@@ -91,7 +91,16 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        // Update if needed
+        // Update the text view when the binding changes
+        guard let textView = context.coordinator.textView else { return }
+        
+        let currentMarkdown = context.coordinator.attributedToMarkdown(textView.attributedText)
+        
+        // Only update if the text has actually changed (avoid infinite loops)
+        if currentMarkdown != text {
+            let newAttributedText = markdownToAttributed(text)
+            textView.attributedText = newAttributedText
+        }
     }
     
     private func createButton(title: String, tag: Int, isBold: Bool = false, isItalic: Bool = false, isUnderline: Bool = false, isStrike: Bool = false, coordinator: Coordinator) -> UIButton {
@@ -104,7 +113,9 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
         button.addTarget(coordinator, action: #selector(Coordinator.formatButtonTapped(_:)), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.widthAnchor.constraint(equalToConstant: 36).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        // Remove fixed height constraint to avoid conflicts with stack view
+        button.setContentHuggingPriority(.required, for: .vertical)
+        button.setContentCompressionResistancePriority(.required, for: .vertical)
         return button
     }
     
@@ -289,7 +300,7 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
             parent.text = attributedToMarkdown(attributedText)
         }
         
-        private func attributedToMarkdown(_ attributed: NSAttributedString) -> String {
+        func attributedToMarkdown(_ attributed: NSAttributedString) -> String {
             var markdown = ""
             let string = attributed.string
             let length = attributed.length

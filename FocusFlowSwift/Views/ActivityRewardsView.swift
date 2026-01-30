@@ -10,6 +10,27 @@ struct ActivityRewardsView: View {
         activities.filter { $0.isActive }
     }
     
+    var activitiesWithCredits: [ScheduledActivity] {
+        activeActivities.filter { $0.accumulatedWindowCredits > 0 }
+    }
+    
+    // Group activities by recurrence type
+    var dailyActivities: [ScheduledActivity] {
+        activitiesWithCredits.filter { ($0.recurrenceType ?? .daily) == .daily }
+    }
+    
+    var weeklyActivities: [ScheduledActivity] {
+        activitiesWithCredits.filter { ($0.recurrenceType ?? .daily) == .weekly }
+    }
+    
+    var monthlyActivities: [ScheduledActivity] {
+        activitiesWithCredits.filter { ($0.recurrenceType ?? .daily) == .monthly }
+    }
+    
+    var quarterlyActivities: [ScheduledActivity] {
+        activitiesWithCredits.filter { ($0.recurrenceType ?? .daily) == .quarterly }
+    }
+    
     var totalWindowCredits: Int {
         activeActivities.reduce(0) { $0 + $1.accumulatedWindowCredits }
     }
@@ -32,15 +53,87 @@ struct ActivityRewardsView: View {
                 .background(Color.orange.opacity(0.1))
                 .cornerRadius(12)
                 
-                if !activeActivities.isEmpty {
+                if !activitiesWithCredits.isEmpty {
                     // Individual Activity Credits
                     ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(activeActivities.filter { $0.accumulatedWindowCredits > 0 }, id: \.name) { activity in
-                                ActivityRewardCard(activity: activity, modelContext: modelContext)
+                        LazyVStack(spacing: 16) {
+                            // Daily Activities Section
+                            if !dailyActivities.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "calendar")
+                                            .foregroundColor(.blue)
+                                        Text("Daily")
+                                            .font(.headline)
+                                            .fontWeight(.semibold)
+                                    }
+                                    .padding(.horizontal)
+                                    
+                                    ForEach(dailyActivities, id: \.name) { activity in
+                                        ActivityRewardCard(activity: activity, modelContext: modelContext)
+                                            .padding(.horizontal)
+                                    }
+                                }
+                            }
+                            
+                            // Weekly Activities Section
+                            if !weeklyActivities.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "calendar.badge.clock")
+                                            .foregroundColor(.green)
+                                        Text("Weekly")
+                                            .font(.headline)
+                                            .fontWeight(.semibold)
+                                    }
+                                    .padding(.horizontal)
+                                    
+                                    ForEach(weeklyActivities, id: \.name) { activity in
+                                        ActivityRewardCard(activity: activity, modelContext: modelContext)
+                                            .padding(.horizontal)
+                                    }
+                                }
+                            }
+                            
+                            // Monthly Activities Section
+                            if !monthlyActivities.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "calendar.circle")
+                                            .foregroundColor(.orange)
+                                        Text("Monthly")
+                                            .font(.headline)
+                                            .fontWeight(.semibold)
+                                    }
+                                    .padding(.horizontal)
+                                    
+                                    ForEach(monthlyActivities, id: \.name) { activity in
+                                        ActivityRewardCard(activity: activity, modelContext: modelContext)
+                                            .padding(.horizontal)
+                                    }
+                                }
+                            }
+                            
+                            // Quarterly Activities Section
+                            if !quarterlyActivities.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "calendar.badge.plus")
+                                            .foregroundColor(.purple)
+                                        Text("Quarterly")
+                                            .font(.headline)
+                                            .fontWeight(.semibold)
+                                    }
+                                    .padding(.horizontal)
+                                    
+                                    ForEach(quarterlyActivities, id: \.name) { activity in
+                                        ActivityRewardCard(activity: activity, modelContext: modelContext)
+                                            .padding(.horizontal)
+                                    }
+                                }
                             }
                         }
-                        .padding()
+                        .padding(.vertical)
                     }
                 } else {
                     Spacer()
