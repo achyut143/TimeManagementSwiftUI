@@ -131,43 +131,74 @@ struct UntimedTasksView: View {
                     
                     // Show metrics for repeat tasks
                     if let metrics = metrics {
-                        HStack(spacing: 4) {
-                            // Score (completed/total)
-                            Text(metrics.formattedScore)
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.2))
-                                .clipShape(Capsule())
-                            
-                            // Completion rate
-                            Text(metrics.formattedCompletionRate)
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)).opacity(0.2))
-                                .clipShape(Capsule())
-                            
-                            // Current streak
-                            if metrics.currentStreak > 0 {
-                                HStack(spacing: 2) {
-                                    Image(systemName: "flame.fill")
-                                        .font(.caption2)
-                                    Text("\(metrics.currentStreak)")
+                        let pointsStats = calculatePointsForTask(task)
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                // Score (completed/total)
+                                VStack(spacing: 0) {
+                                    Text(metrics.formattedScore)
                                         .font(.caption2)
                                         .fontWeight(.bold)
+                                        .foregroundColor(.blue)
+                                    Text("Score")
+                                        .font(.system(size: 8))
+                                        .foregroundColor(.secondary)
                                 }
-                                .foregroundColor(.orange)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.orange.opacity(0.2))
-                                .clipShape(Capsule())
+                                .frame(width: 50, height: 35)
+                                .background(Color.blue.opacity(0.2))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                
+                                // Completion rate
+                                VStack(spacing: 0) {
+                                    Text(metrics.formattedCompletionRate)
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
+                                    Text("Rate")
+                                        .font(.system(size: 8))
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(width: 50, height: 35)
+                                .background(Color(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)).opacity(0.2))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                
+                                // Points
+                                VStack(spacing: 0) {
+                                    Text("\(Int(pointsStats.earned))/\(Int(pointsStats.allocated))")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.purple)
+                                    Text("Points")
+                                        .font(.system(size: 8))
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(width: 50, height: 35)
+                                .background(Color.purple.opacity(0.2))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                
+                                // Current streak
+                                if metrics.currentStreak > 0 {
+                                    VStack(spacing: 0) {
+                                        HStack(spacing: 2) {
+                                            Image(systemName: "flame.fill")
+                                                .font(.caption2)
+                                            Text("\(metrics.currentStreak)")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(.orange)
+                                        Text("Streak")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .frame(width: 50, height: 35)
+                                    .background(Color.orange.opacity(0.2))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
                             }
                         }
+                        .frame(height: 35)
                     }
                 }
                 
@@ -526,6 +557,42 @@ struct UntimedTasksView: View {
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = 0.5
         speechSynthesizer.speak(utterance)
+    }
+    
+    private func calculatePointsForTask(_ task: Task) -> (earned: Double, allocated: Double) {
+        guard task.repeatAgain != nil else {
+            return (earned: 0, allocated: 0)
+        }
+        
+        // Get all tasks with the same title (same habit)
+        let habitTasks = allTasks.filter { $0.title == task.title && $0.repeatAgain != nil }
+        
+        var earnedPoints: Double = 0
+        var allocatedPoints: Double = 0
+        
+        // Calculate points for the last metricDays
+        let calendar = Calendar.current
+        let endDate = calendar.startOfDay(for: selectedDate)
+        let startDate = calendar.date(byAdding: .day, value: -metricDays, to: endDate) ?? endDate
+        
+        var currentDate = startDate
+        while currentDate <= endDate {
+            let dayTasks = habitTasks.filter { habitTask in
+                guard let taskDate = habitTask.date else { return false }
+                return calendar.isDate(taskDate, inSameDayAs: currentDate)
+            }
+            
+            for dayTask in dayTasks {
+                allocatedPoints += dayTask.weight
+                if dayTask.completed {
+                    earnedPoints += dayTask.effectiveWeight
+                }
+            }
+            
+            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        }
+        
+        return (earned: earnedPoints, allocated: allocatedPoints)
     }
     
     private func createRepeatTask(from task: Task) {
