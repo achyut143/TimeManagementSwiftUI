@@ -1563,6 +1563,8 @@ struct TaskActionsView: View {
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
     @State private var showRewardWorkflows = false
+    @State private var isGeneratingWhy = false
+    @State private var whyGenerationError: String?
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     private var subtaskCount: Int {
@@ -1661,6 +1663,72 @@ struct TaskActionsView: View {
                             Text("\(task.startTime) - \(task.endTime)")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                        }
+                        
+                        // Why Statement Section
+                        VStack(spacing: 8) {
+                            if let whyStatement = task.whyStatement {
+                                VStack(spacing: 8) {
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: "lightbulb.fill")
+                                            .foregroundColor(.yellow)
+                                            .font(.caption)
+                                        
+                                        Text(whyStatement)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        
+                                        Spacer()
+                                        
+                                        Button(action: {
+                                            task.whyStatementPinned.toggle()
+                                            try? modelContext.save()
+                                        }) {
+                                            Image(systemName: task.whyStatementPinned ? "pin.fill" : "pin.slash")
+                                                .foregroundColor(task.whyStatementPinned ? .blue : .gray)
+                                                .font(.caption)
+                                        }
+                                    }
+                                    
+                                    if !task.whyStatementPinned {
+                                        Button(action: {
+                                            task.whyStatement = nil
+                                            generateWhyStatement()
+                                        }) {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "arrow.clockwise")
+                                                    .font(.caption2)
+                                                Text("Regenerate")
+                                                    .font(.caption2)
+                                            }
+                                            .foregroundColor(.blue)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .trailing)
+                                    }
+                                }
+                                .padding(12)
+                                .background(Color.yellow.opacity(0.1))
+                                .cornerRadius(8)
+                            } else if isGeneratingWhy {
+                                HStack {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Generating your why...")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(12)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(8)
+                            }
+                            
+                            if let error = whyGenerationError {
+                                Text(error)
+                                    .font(.caption2)
+                                    .foregroundColor(.red)
+                            }
                         }
                     }
                     .padding(.top)
@@ -1781,6 +1849,9 @@ struct TaskActionsView: View {
             })
             .presentationDetents([.medium, .large])
         }
+        .onAppear {
+            generateWhyStatement()
+        }
     }
     
     private func navigateToHabitTracker() {
@@ -1900,7 +1971,9 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             repeatAgain: task.repeatAgain,
             priority: task.priority,
             elapsedTime: task.elapsedTime, // Copy elapsed time to new task
-            copySubtasks: task.copySubtasks
+            copySubtasks: task.copySubtasks,
+            whyStatement: task.whyStatement, // Copy why statement to new task
+            whyStatementPinned: task.whyStatementPinned // Copy pin status
             // timeSpent is intentionally not copied for repeat tasks
         )
         
@@ -1976,7 +2049,9 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             repeatAgain: task.repeatAgain,
             priority: task.priority,
             elapsedTime: task.elapsedTime,
-            copySubtasks: task.copySubtasks
+            copySubtasks: task.copySubtasks,
+            whyStatement: task.whyStatement, // Copy why statement to new task
+            whyStatementPinned: task.whyStatementPinned // Copy pin status
             // timeSpent is intentionally not copied for repeat tasks
         )
         
@@ -1996,6 +2071,44 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         modelContext.delete(task)
         try? modelContext.save()
         onTaskDeleted()
+    }
+    
+    private func generateWhyStatement() {
+        // Don't generate if already pinned or currently generating
+        guard !task.whyStatementPinned && !isGeneratingWhy else { return }
+        
+        // Don't regenerate if already exists and is pinned
+        if task.whyStatement != nil && task.whyStatementPinned {
+            return
+        }
+        
+        isGeneratingWhy = true
+        whyGenerationError = nil
+        
+        _Concurrency.Task {
+            do {
+                let openAIService = OpenAIService()
+                let whyStatement = try await openAIService.generateWhyStatement(
+                    for: task.title,
+                    description: task.taskDescription,
+                    persistentNotes: task.persistentNotes,
+                    notes: task.notes
+                )
+                
+                await MainActor.run {
+                    task.whyStatement = whyStatement
+                    task.whyStatementPinned = true // Automatically pin after generation
+                    try? modelContext.save()
+                    isGeneratingWhy = false
+                }
+            } catch {
+                await MainActor.run {
+                    whyGenerationError = "Failed to generate why statement"
+                    isGeneratingWhy = false
+                    print("❌ Error generating why statement: \(error)")
+                }
+            }
+        }
     }
     
     private func pasteTask() {

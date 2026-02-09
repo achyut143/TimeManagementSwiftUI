@@ -1,0 +1,27 @@
+# Xcode
+*.xcconfig
+Config.xcconfig
+
+# API Keys and Secrets
+**/Config.xcconfig
+
+# User-specific files
+*.xcuserstate
+*.xcuserdatad/
+
+# Build files
+build/
+DerivedData/
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# macOS
+.DS_Store

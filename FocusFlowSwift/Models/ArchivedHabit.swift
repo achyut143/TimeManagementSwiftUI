@@ -23,8 +23,13 @@ class ArchivedHabit {
     
     // Additional statistics
     var totalTasks: Int // Total number of habit tasks created
+    
+    @Attribute(.transformable(by: "NSSecureUnarchiveFromData"))
     var weeklyCompletionRates: [Double] // Weekly completion rates throughout the habit's life
+    
+    @Attribute(.transformable(by: "NSSecureUnarchiveFromData"))
     var monthlyCompletionRates: [Double] // Monthly completion rates
+    
     var bestWeekCompletions: Int // Most completions in a single week
     var worstWeekCompletions: Int // Least completions in a single week
     var averageDaysBetweenCompletions: Double // Average gap between completions

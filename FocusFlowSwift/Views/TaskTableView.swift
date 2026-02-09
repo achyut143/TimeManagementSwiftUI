@@ -738,6 +738,9 @@ struct NotesView: View {
     @Environment(\.modelContext) private var modelContext
     let task: Task
     @State private var notesText: String = ""
+    @State private var isGeneratingSuggestions = false
+    @State private var suggestionError: String?
+    @State private var showSuggestionAlert = false
     
     var body: some View {
         NavigationView {
@@ -752,6 +755,38 @@ struct NotesView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+                }
+                
+                Section {
+                    Button(action: {
+                        generateSuggestions()
+                    }) {
+                        HStack {
+                            if isGeneratingSuggestions {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text("Generating suggestions...")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Image(systemName: "sparkles")
+                                    .foregroundColor(.purple)
+                                Text("Get AI Suggestions")
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                    }
+                    .disabled(isGeneratingSuggestions)
+                    
+                    if let error = suggestionError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                } header: {
+                    Text("AI Assistant")
+                } footer: {
+                    Text("Generate suggestions based on task title, persistent notes, and current day")
+                        .font(.caption2)
                 }
                 
                 Section("Notes") {
@@ -775,6 +810,45 @@ struct NotesView: View {
             }
             .onAppear {
                 notesText = task.notes ?? ""
+            }
+        }
+    }
+    
+    private func generateSuggestions() {
+        isGeneratingSuggestions = true
+        suggestionError = nil
+        
+        let calendar = Calendar.current
+        let dayOfWeek = calendar.component(.weekday, from: task.date ?? Date())
+        let dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        let dayName = dayNames[dayOfWeek - 1]
+        
+        _Concurrency.Task {
+            do {
+                let openAIService = OpenAIService()
+                let suggestions = try await openAIService.generateTaskSuggestions(
+                    taskTitle: task.title,
+                    persistentNotes: task.persistentNotes,
+                    currentNotes: notesText.isEmpty ? nil : notesText,
+                    dayOfWeek: dayName,
+                    date: task.date ?? Date()
+                )
+                
+                await MainActor.run {
+                    // Append suggestions to existing notes
+                    if notesText.isEmpty {
+                        notesText = suggestions
+                    } else {
+                        notesText += "\n\n--- AI Suggestions ---\n\(suggestions)"
+                    }
+                    isGeneratingSuggestions = false
+                }
+            } catch {
+                await MainActor.run {
+                    suggestionError = "Failed to generate suggestions"
+                    isGeneratingSuggestions = false
+                    print("❌ Error generating suggestions: \(error)")
+                }
             }
         }
     }
