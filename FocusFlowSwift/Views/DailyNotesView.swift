@@ -1212,31 +1212,35 @@ struct DailyNotesView: View {
             }
         } else {
             // No AM/PM specified - use context to determine
-            let now = Date()
-            let calendar = Calendar.current
-            let currentHour = calendar.component(.hour, from: now)
-            let isCurrentlyPM = currentHour >= 12
             
             // Check if we're dealing with a time range that crosses noon
-            var isSpecialNoonCrossing = false
+            var isNoonCrossing = false
+            var isStartTime = false
+            
             if let startTime = startTimeStr, let endTime = endTimeStr {
                 let startComponents = startTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression).components(separatedBy: ":")
                 let endComponents = endTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression).components(separatedBy: ":")
                 
                 if let startHour = Int(startComponents[0]), let endHour = Int(endComponents[0]) {
-                    // Special case: 11:XX - 12:XX when current time is PM
-                    isSpecialNoonCrossing = (startHour == 11 && endHour == 12 && isCurrentlyPM)
+                    // Detect if this is a noon-crossing range (e.g., 11:XX - 12:XX)
+                    isNoonCrossing = (startHour == 11 && endHour == 12)
+                    isStartTime = (cleanTime == startTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression))
                 }
             }
             
-            if isSpecialNoonCrossing {
-                // Handle the edge case: 11:30 - 12:30 when current time is PM
+            if isNoonCrossing {
+                // Handle the noon crossing case: 11:XX - 12:XX
                 if hours == 11 {
-                    finalHours = 11 // Keep 11:XX as 11 AM
+                    finalHours = 11 // 11:XX is 11 AM
                 } else if hours == 12 {
-                    finalHours = 12 // Keep 12:XX as 12 PM (noon)
+                    finalHours = 12 // 12:XX is 12 PM (noon)
                 } else {
-                    // For other hours in this context, follow current time
+                    // For other hours, use current time context
+                    let now = Date()
+                    let calendar = Calendar.current
+                    let currentHour = calendar.component(.hour, from: now)
+                    let isCurrentlyPM = currentHour >= 12
+                    
                     if isCurrentlyPM && hours < 12 {
                         finalHours = hours + 12
                     } else if hours == 12 && !isCurrentlyPM {
@@ -1245,6 +1249,11 @@ struct DailyNotesView: View {
                 }
             } else {
                 // Normal context-based interpretation
+                let now = Date()
+                let calendar = Calendar.current
+                let currentHour = calendar.component(.hour, from: now)
+                let isCurrentlyPM = currentHour >= 12
+                
                 if isCurrentlyPM {
                     if hours == 12 {
                         finalHours = 12 // 12 PM (noon)
@@ -1436,18 +1445,49 @@ struct DailyNotesView: View {
     
     private func parseTimeToMinutes(_ timeString: String) -> Int? {
         let cleanTime = timeString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let components = cleanTime.components(separatedBy: ":")
         
+        // Check if it contains AM/PM
+        let hasAMPM = cleanTime.lowercased().contains("am") || cleanTime.lowercased().contains("pm")
+        let isPM = cleanTime.lowercased().contains("pm")
+        
+        // Extract just the time part (remove AM/PM)
+        let timeOnly = cleanTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression)
+        
+        let components = timeOnly.components(separatedBy: ":")
         guard components.count == 2,
               let hours = Int(components[0]),
               let mins = Int(components[1]) else {
             return nil
         }
         
-        return hours * 60 + mins
+        var finalHours = hours
+        
+        if hasAMPM {
+            // Handle 12-hour format with explicit AM/PM
+            if isPM && hours != 12 {
+                finalHours = hours + 12  // Convert PM to 24-hour (except 12 PM)
+            } else if !isPM && hours == 12 {
+                finalHours = 0  // Convert 12 AM to 0 (midnight)
+            }
+        } else {
+            // No AM/PM - use 24-hour format as-is
+            finalHours = hours
+        }
+        
+        return finalHours * 60 + mins
     }
     
     private func adjustEndTimeIfNeeded(startMinutes: Int, endMinutes: Int) -> Int {
+        // Handle noon crossing: if start is 11:XX and end is 12:XX, treat 12:XX as PM (noon)
+        let startHour = startMinutes / 60
+        let endHour = endMinutes / 60
+        
+        if startHour == 11 && endHour == 12 {
+            // This is a noon crossing (11:XX AM - 12:XX PM)
+            // 12:XX should be treated as 12 PM (noon), which is already correct
+            return endMinutes
+        }
+        
         // If end time is before start time, assume it's meant to be PM (add 12 hours)
         if endMinutes < startMinutes && endMinutes < 720 { // 720 = 12:00
             return endMinutes + (12 * 60)
