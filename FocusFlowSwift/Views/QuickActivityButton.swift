@@ -15,6 +15,12 @@ struct QuickActivityButton: View {
         activities.contains { $0.isInActiveWindow() }
     }
     
+    var totalDailyCredits: Int {
+        activities
+            .filter { ($0.recurrenceType ?? .daily) == .daily }
+            .reduce(0) { $0 + $1.accumulatedWindowCredits }
+    }
+    
     var nextActivity: (activity: ScheduledActivity, nextTime: Date)? {
         var nextActivityInfo: (activity: ScheduledActivity, nextTime: Date)?
         var earliestTime: Date?
@@ -45,15 +51,32 @@ struct QuickActivityButton: View {
                             refreshTrigger = UUID() // Force refresh when opening
                             showActivitiesList = true
                         } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(hasActiveWindow ? Color.green : Color.blue)
-                                    .frame(width: 50, height: 50)
-                                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                            ZStack(alignment: .topTrailing) {
+                                ZStack {
+                                    Circle()
+                                        .fill(hasActiveWindow ? Color.green : Color.blue)
+                                        .frame(width: 50, height: 50)
+                                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                                    
+                                    Image(systemName: hasActiveWindow ? "clock.badge.checkmark.fill" : "clock.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(.white)
+                                }
                                 
-                                Image(systemName: hasActiveWindow ? "clock.badge.checkmark.fill" : "clock.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.white)
+                                // Notification badge for daily credits
+                                if totalDailyCredits > 0 {
+                                    Text("\(totalDailyCredits)")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(minWidth: 18, minHeight: 18)
+                                        .background(Color.orange)
+                                        .clipShape(Circle())
+                                        .overlay(
+                                            Circle()
+                                                .stroke(Color.white, lineWidth: 2)
+                                        )
+                                        .offset(x: 8, y: -8)
+                                }
                             }
                         }
                         .buttonStyle(PlainButtonStyle())
@@ -84,9 +107,13 @@ struct QuickActivitiesListView: View {
     @State private var showCreditUseSheet = false
     @State private var windowNotes = ""
     @State private var creditsToUse = 1
+    @State private var refreshTrigger: UUID
     
-    let refreshTrigger: UUID
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    
+    init(refreshTrigger: UUID) {
+        _refreshTrigger = State(initialValue: refreshTrigger)
+    }
     
     // Sort activities by time remaining (least time first)
     var sortedActivities: [ScheduledActivity] {
@@ -250,6 +277,18 @@ struct QuickActivitiesListView: View {
             .navigationTitle("Quick Activities")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        // Force refresh by updating trigger and reloading data
+                        refreshTrigger = UUID()
+                        try? modelContext.save()
+                        currentTime = Date()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundColor(.blue)
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()

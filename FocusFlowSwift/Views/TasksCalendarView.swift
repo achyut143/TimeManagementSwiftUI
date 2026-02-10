@@ -1722,6 +1722,19 @@ struct TaskActionsView: View {
                                 .padding(12)
                                 .background(Color.gray.opacity(0.1))
                                 .cornerRadius(8)
+                            } else {
+                                // Show placeholder when no why statement exists
+                                HStack {
+                                    Image(systemName: "lightbulb")
+                                        .foregroundColor(.gray)
+                                        .font(.caption)
+                                    Text("Why statement will generate automatically...")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(12)
+                                .background(Color.gray.opacity(0.05))
+                                .cornerRadius(8)
                             }
                             
                             if let error = whyGenerationError {
@@ -1730,6 +1743,7 @@ struct TaskActionsView: View {
                                     .foregroundColor(.red)
                             }
                         }
+                        .padding(.horizontal)
                     }
                     .padding(.top)
                     
@@ -2074,20 +2088,32 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
     }
     
     private func generateWhyStatement() {
-        // Don't generate if already pinned or currently generating
-        guard !task.whyStatementPinned && !isGeneratingWhy else { return }
-        
-        // Don't regenerate if already exists and is pinned
-        if task.whyStatement != nil && task.whyStatementPinned {
+        // Don't generate if currently generating
+        guard !isGeneratingWhy else {
+            print("⏳ Already generating why statement")
             return
         }
         
+        // Don't regenerate if already exists and is pinned
+        if task.whyStatement != nil && task.whyStatementPinned {
+            print("📌 Why statement already exists and is pinned")
+            return
+        }
+        
+        // Don't generate if statement exists but not pinned (user unpinned it manually)
+        if task.whyStatement != nil && !task.whyStatementPinned {
+            print("🔓 Why statement exists but unpinned - ready to regenerate")
+            // Allow regeneration
+        }
+        
+        print("🚀 Starting why statement generation for: \(task.title)")
         isGeneratingWhy = true
         whyGenerationError = nil
         
         _Concurrency.Task {
             do {
                 let openAIService = OpenAIService()
+                print("📡 Calling OpenAI API...")
                 let whyStatement = try await openAIService.generateWhyStatement(
                     for: task.title,
                     description: task.taskDescription,
@@ -2096,6 +2122,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
                 )
                 
                 await MainActor.run {
+                    print("✅ Why statement generated: \(whyStatement)")
                     task.whyStatement = whyStatement
                     task.whyStatementPinned = true // Automatically pin after generation
                     try? modelContext.save()
@@ -2103,7 +2130,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
                 }
             } catch {
                 await MainActor.run {
-                    whyGenerationError = "Failed to generate why statement"
+                    whyGenerationError = "Failed to generate why statement: \(error.localizedDescription)"
                     isGeneratingWhy = false
                     print("❌ Error generating why statement: \(error)")
                 }

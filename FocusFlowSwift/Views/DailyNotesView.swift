@@ -50,6 +50,18 @@ struct TimeEntry {
     func toLine() -> String {
         let startTime = safeMinutesToTime(startMinutes)
         let endTime = safeMinutesToTime(endMinutes)
+        
+        // Extract numbering prefix from original line if present
+        let trimmedOriginal = originalLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let numberingPattern = "^(\\d+\\)\\s*)"
+        
+        if let regex = try? NSRegularExpression(pattern: numberingPattern, options: []),
+           let match = regex.firstMatch(in: trimmedOriginal, range: NSRange(location: 0, length: trimmedOriginal.utf16.count)),
+           let numberingRange = Range(match.range(at: 1), in: trimmedOriginal) {
+            let numbering = String(trimmedOriginal[numberingRange])
+            return "\(numbering)\(startTime) - \(endTime) - \(description)"
+        }
+        
         return "\(startTime) - \(endTime) - \(description)"
     }
     
@@ -105,6 +117,7 @@ struct DailyNotesView: View {
     @State private var scheduleInterval: String = ""
     @State private var scheduleGap: String = ""
     @State private var scheduleTaskName: String = ""
+    @State private var notesDebounceTimer: Timer?
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -312,15 +325,20 @@ struct DailyNotesView: View {
                 stopCountdownTimer()
                 cycleEndObserver?.cancel()
                 speechManager.stopSpeaking()
+                notesDebounceTimer?.invalidate()
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
             }
             .onChange(of: notesText) { _, _ in
-                // If cycles are enabled, update them when notes change
-                DispatchQueue.main.async {
-                    if self.useCycles {
-                        self.startSmartCycles()
+                // Debounce: Cancel previous timer and start a new one
+                notesDebounceTimer?.invalidate()
+                notesDebounceTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
+                    // If cycles are enabled, update them when notes change (after 1 second of no typing)
+                    DispatchQueue.main.async {
+                        if self.useCycles {
+                            self.startSmartCycles()
+                        }
                     }
                 }
             }
@@ -358,6 +376,102 @@ struct DailyNotesView: View {
                 }
                 
                 Spacer()
+            }
+            
+            // Task Progress Indicator
+            let taskProgress = calculateTaskProgress()
+            if taskProgress.total > 0 {
+                VStack(spacing: 6) {
+                    // First row: Main progress
+                    HStack(spacing: 6) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                            Text("\(taskProgress.completed)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.green)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+                        
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                            Text("\(taskProgress.running)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.blue)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+                        
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("\(taskProgress.remaining)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+                        
+                        Spacer()
+                    }
+                    
+                    // Second row: Labels
+                    HStack(spacing: 6) {
+                        Text("Done")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 50, alignment: .leading)
+                        
+                        Text("Current")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 50, alignment: .leading)
+                        
+                        Text("Upcoming")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 60, alignment: .leading)
+                        
+                        Spacer()
+                    }
+                    
+                    // Third row: Accountability metric
+                    if taskProgress.unacknowledged > 0 {
+                        Divider()
+                        
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Text("Pending Review:")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.orange)
+                            Text("\(taskProgress.unacknowledged)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.orange)
+                            Text("not marked")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
             
             // Show conflicts if any
@@ -477,6 +591,91 @@ struct DailyNotesView: View {
         }
         
         return activeTasks.count > 1 ? activeTasks : []
+    }
+    
+    private func calculateTaskProgress() -> (completed: Int, running: Int, remaining: Int, unacknowledged: Int, total: Int) {
+        let now = Date()
+        let calendar = Calendar.current
+        let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        
+        // Get all lines from notes between START and END
+        let startTag = "START"
+        let endTag = "END"
+        let allLines = notesText.components(separatedBy: .newlines)
+        
+        // Find START and END indices
+        var startLineIndex: Int?
+        var endLineIndex: Int?
+        
+        for (index, line) in allLines.enumerated() {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedLine == startTag && startLineIndex == nil {
+                startLineIndex = index
+            } else if trimmedLine == endTag && startLineIndex != nil && endLineIndex == nil {
+                endLineIndex = index
+                break
+            }
+        }
+        
+        guard let startIndex = startLineIndex,
+              let endIndex = endLineIndex,
+              startIndex < endIndex else {
+            return (0, 0, 0, 0, 0)
+        }
+        
+        let contentLines = Array(allLines[(startIndex + 1)..<endIndex])
+        
+        var completed = 0  // Only acknowledged (strikethrough) completed tasks
+        var current = 0    // Active task + unacknowledged completed tasks
+        var remaining = 0
+        var unacknowledged = 0
+        
+        // Parse ALL lines including strikethrough
+        for line in contentLines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Skip empty lines
+            if trimmedLine.isEmpty {
+                continue
+            }
+            
+            // Check if line is strikethrough
+            let isStrikethrough = trimmedLine.hasPrefix("~~") && trimmedLine.hasSuffix("~~")
+            
+            // Try to parse the line (remove strikethrough markers first if present)
+            var lineToParse = isStrikethrough ? 
+                String(trimmedLine.dropFirst(2).dropLast(2)) : trimmedLine
+            
+            // Remove numbering prefix if present (e.g., "1) ", "2) ", "123) ")
+            lineToParse = lineToParse.replacingOccurrences(
+                of: "^\\d+\\)\\s*",
+                with: "",
+                options: .regularExpression
+            )
+            
+            if let entry = parseTimeEntry(lineToParse) {
+                if currentMinutes >= entry.endMinutes {
+                    // Task has ended
+                    if isStrikethrough {
+                        // Acknowledged - count as completed
+                        completed += 1
+                    } else {
+                        // Not acknowledged - count as current (needs attention)
+                        current += 1
+                        unacknowledged += 1
+                    }
+                } else if currentMinutes >= entry.startMinutes && currentMinutes < entry.endMinutes {
+                    // Task is currently active - count as current
+                    current += 1
+                } else if currentMinutes < entry.startMinutes {
+                    // Task hasn't started yet - it's remaining
+                    remaining += 1
+                }
+            }
+        }
+        
+        let total = completed + current + remaining
+        return (completed, current, remaining, unacknowledged, total)
     }
     
     // MARK: - Smart Cycles Logic
@@ -1151,20 +1350,27 @@ struct DailyNotesView: View {
             return nil
         }
         
+        // Remove numbering prefix if present (e.g., "1) ", "2) ", "123) ")
+        let lineWithoutNumbering = trimmedLine.replacingOccurrences(
+            of: "^\\d+\\)\\s*",
+            with: "",
+            options: .regularExpression
+        )
+        
         // Pattern to match time ranges - support both 12-hour and 24-hour formats
         let pattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-?\s*(.+)"#
         
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: trimmedLine, range: NSRange(location: 0, length: trimmedLine.utf16.count)),
-              let startTimeRange = Range(match.range(at: 1), in: trimmedLine),
-              let endTimeRange = Range(match.range(at: 2), in: trimmedLine),
-              let descriptionRange = Range(match.range(at: 3), in: trimmedLine) else {
+              let match = regex.firstMatch(in: lineWithoutNumbering, range: NSRange(location: 0, length: lineWithoutNumbering.utf16.count)),
+              let startTimeRange = Range(match.range(at: 1), in: lineWithoutNumbering),
+              let endTimeRange = Range(match.range(at: 2), in: lineWithoutNumbering),
+              let descriptionRange = Range(match.range(at: 3), in: lineWithoutNumbering) else {
             return nil
         }
         
-        let startTimeStr = String(trimmedLine[startTimeRange])
-        let endTimeStr = String(trimmedLine[endTimeRange])
-        let description = String(trimmedLine[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let startTimeStr = String(lineWithoutNumbering[startTimeRange])
+        let endTimeStr = String(lineWithoutNumbering[endTimeRange])
+        let description = String(lineWithoutNumbering[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Parse both times with context awareness
         guard let startMinutes = timeToMinutesWithContext(startTimeStr, endTimeStr: endTimeStr, startTimeStr: startTimeStr),
@@ -1407,6 +1613,7 @@ struct DailyNotesView: View {
         
         var scheduleLines: [String] = []
         var currentStart = fromMinutes
+        var taskNumber = 1
         
         while currentStart < toMinutes {
             let currentEnd = min(currentStart + intervalMinutes, toMinutes)
@@ -1414,12 +1621,13 @@ struct DailyNotesView: View {
             let startTime = formatMinutesToTime(currentStart)
             let endTime = formatMinutesToTime(currentEnd)
             
-            let line = "\(startTime) - \(endTime) - \(scheduleTaskName)"
+            let line = "\(taskNumber)) \(startTime) - \(endTime) - \(scheduleTaskName)"
             scheduleLines.append(line)
             print("   Generated: \(line)")
             
             // Move to next block (add interval + gap)
             currentStart = currentEnd + gapMinutes
+            taskNumber += 1
         }
         
         print("📝 Generated \(scheduleLines.count) schedule blocks")
