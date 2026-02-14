@@ -17,6 +17,10 @@ struct HabitOverviewView: View {
     @State private var selectedRepeatFilter: Int? = nil
     @State private var selectedTagsFilter: Set<String> = []
     @State private var habitSettings: HabitSettings?
+    @State private var showShareSheet = false
+    @State private var pdfURL: URL?
+    @State private var showNoNotesAlert = false
+    @State private var noNotesHabitName = ""
     
     var body: some View {
         NavigationStack {
@@ -54,6 +58,16 @@ struct HabitOverviewView: View {
                             }
                     }
                 }
+            }
+            .sheet(isPresented: $showShareSheet) {
+                if let pdfURL = pdfURL {
+                    ShareSheet(items: [pdfURL])
+                }
+            }
+            .alert("No Notes Available", isPresented: $showNoNotesAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("There are no notes for \(noNotesHabitName) in the selected date range.")
             }
         }
     }
@@ -107,87 +121,113 @@ struct HabitOverviewView: View {
         let disciplineScore = calculateDisciplineScoreForHabit(habitName)
         let habitColor = Color.blue // All habits use blue color
         
-        return Button(action: {
-            selectedHabit = habitName
-            showDetailedView = true
-        }) {
-            VStack(spacing: 8) {
-                // Header with habit name and frequency
-                HStack {
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(habitColor)
-                                .frame(width: 6, height: 6)
+        return HStack(spacing: 0) {
+            Button(action: {
+                selectedHabit = habitName
+                showDetailedView = true
+            }) {
+                VStack(spacing: 8) {
+                    // Header with habit name and frequency
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(habitColor)
+                                    .frame(width: 6, height: 6)
+                                
+                                Text(habitName)
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.leading)
+                                    .lineLimit(nil) // Allow unlimited lines
+                            }
                             
-                            Text(habitName)
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.primary)
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(nil) // Allow unlimited lines
+                            if filterMode == "discipline" {
+                                let repeatInterval = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }.first?.repeatAgain ?? 1
+                                let frequencyText = repeatInterval == 1 ? "Daily" : repeatInterval == 7 ? "Weekly" : "Every \(repeatInterval)d"
+                                Text(frequencyText)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .padding(.leading, 10)
+                            } else {
+                                Text("\(stats.missed) missed")
+                                    .font(.caption2)
+                                    .foregroundColor(.red.opacity(0.8))
+                                    .padding(.leading, 10)
+                            }
                         }
                         
-                        if filterMode == "discipline" {
-                            let repeatInterval = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }.first?.repeatAgain ?? 1
-                            let frequencyText = repeatInterval == 1 ? "Daily" : repeatInterval == 7 ? "Weekly" : "Every \(repeatInterval)d"
-                            Text(frequencyText)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .padding(.leading, 10)
-                        } else {
-                            Text("\(stats.missed) missed")
-                                .font(.caption2)
-                                .foregroundColor(.red.opacity(0.8))
-                                .padding(.leading, 10)
+                        Spacer()
+                        
+                        // Main metric (compact)
+                        VStack(spacing: 1) {
+                            if filterMode == "discipline" {
+                                let levelColors = disciplineScore.disciplineLevel.color
+                                Text(String(format: "%.2f", disciplineScore.disciplineScore))
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(Color(hex: levelColors.primary))
+                                
+                                Text("DMS")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                let percentageColor = getPercentageColor(stats.percentage)
+                                Text("\(Int(stats.percentage))%")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(percentageColor)
+                                
+                                Text("Success")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                     
-                    Spacer()
-                    
-                    // Main metric (compact)
-                    VStack(spacing: 1) {
-                        if filterMode == "discipline" {
-                            let levelColors = disciplineScore.disciplineLevel.color
-                            Text(String(format: "%.2f", disciplineScore.disciplineScore))
-                                .font(.subheadline)
-                                .fontWeight(.bold)
-                                .foregroundColor(Color(hex: levelColors.primary))
-                            
-                            Text("DMS")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        } else {
-                            let percentageColor = getPercentageColor(stats.percentage)
-                            Text("\(Int(stats.percentage))%")
-                                .font(.subheadline)
-                                .fontWeight(.bold)
-                                .foregroundColor(percentageColor)
-                            
-                            Text("Success")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
+                    // Compact metrics
+                    if filterMode == "discipline" {
+                        compactDisciplineMetrics(disciplineScore: disciplineScore)
+                    } else {
+                        compactTraditionalMetrics(stats: stats, pointsStats: pointsStats)
                     }
                 }
-                
-                // Compact metrics
-                if filterMode == "discipline" {
-                    compactDisciplineMetrics(disciplineScore: disciplineScore)
-                } else {
-                    compactTraditionalMetrics(stats: stats, pointsStats: pointsStats)
+                .padding(10)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            // Download button with notes count badge
+            Button(action: {
+                downloadHabitNotes(habitName: habitName)
+            }) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                        .frame(width: 44, height: 44)
+                    
+                    let notesCount = getNotesCount(habitName: habitName)
+                    if notesCount > 0 {
+                        Text("\(notesCount)")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(3)
+                            .background(Circle().fill(Color.red))
+                            .offset(x: -2, y: 10)
+                    }
                 }
             }
-            .padding(10)
-            .background(Color(.systemBackground))
-            .cornerRadius(6)
-            .shadow(color: .black.opacity(0.02), radius: 1, x: 0, y: 1)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(.systemGray6), lineWidth: 0.5)
-            )
+            .buttonStyle(PlainButtonStyle())
         }
-        .buttonStyle(PlainButtonStyle())
+        .background(Color(.systemBackground))
+        .cornerRadius(6)
+        .shadow(color: .black.opacity(0.02), radius: 1, x: 0, y: 1)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(.systemGray6), lineWidth: 0.5)
+        )
     }
     
     private func compactDisciplineMetrics(disciplineScore: DisciplineMuscleScore) -> some View {
@@ -1219,6 +1259,60 @@ struct HabitOverviewView: View {
         
         return (eventDays: eventDaysCount, nonEventMisses: nonEventMissesCount)
     }
+    
+    // MARK: - PDF Generation
+    
+    private func getNotesCount(habitName: String) -> Int {
+        let habitTasks = tasks.filter { task in
+            guard task.title == habitName,
+                  let taskDate = task.date,
+                  taskDate >= fromDate && taskDate <= toDate,
+                  let notes = task.notes,
+                  !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            return true
+        }
+        return habitTasks.count
+    }
+    
+    private func downloadHabitNotes(habitName: String) {
+        // Get tasks for this habit within date range
+        let habitTasks = tasks.filter { task in
+            guard task.title == habitName,
+                  let taskDate = task.date,
+                  taskDate >= fromDate && taskDate <= toDate else {
+                return false
+            }
+            return true
+        }
+        
+        // Check if there are any notes
+        let tasksWithNotes = habitTasks.filter { task in
+            guard let notes = task.notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            return true
+        }
+        
+        if tasksWithNotes.isEmpty {
+            // Show alert that there are no notes
+            noNotesHabitName = habitName
+            showNoNotesAlert = true
+            return
+        }
+        
+        // Generate PDF
+        if let url = HabitNotesPDFGenerator.generatePDF(
+            habitName: habitName,
+            tasks: habitTasks,
+            fromDate: fromDate,
+            toDate: toDate
+        ) {
+            pdfURL = url
+            showShareSheet = true
+        }
+    }
 }
 
 // MARK: - Color Extension for Hex Support
@@ -1247,6 +1341,18 @@ extension Color {
             opacity: Double(a) / 255
         )
     }
+}
+
+// MARK: - ShareSheet for PDF Export
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 #Preview {

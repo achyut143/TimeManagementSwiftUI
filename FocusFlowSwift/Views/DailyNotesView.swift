@@ -118,6 +118,9 @@ struct DailyNotesView: View {
     @State private var scheduleGap: String = ""
     @State private var scheduleTaskName: String = ""
     @State private var notesDebounceTimer: Timer?
+    @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
+    @State private var lastReminderTime: Date?
+    @State private var reminderTimer: Timer?
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -217,6 +220,28 @@ struct DailyNotesView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
+                            
+                            // Reminder Interval Setting
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Reminder interval:")
+                                        .font(.subheadline)
+                                    TextField("0", text: $reminderInterval)
+                                        .keyboardType(.numberPad)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        .frame(width: 60)
+                                    Text("min")
+                                        .foregroundColor(.secondary)
+                                }
+                                .onChange(of: reminderInterval) { _, newValue in
+                                    UserDefaults.standard.set(newValue, forKey: "DailyNotesView.reminderInterval")
+                                }
+                                
+                                Text("Set to 0 to disable. When set (e.g., 5), you'll get voice reminders every 5 minutes with time remaining.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 4)
                             
                             if settings.isPlaying || settings.isPaused {
                                 cycleStatusView
@@ -326,6 +351,7 @@ struct DailyNotesView: View {
                 cycleEndObserver?.cancel()
                 speechManager.stopSpeaking()
                 notesDebounceTimer?.invalidate()
+                reminderTimer?.invalidate()
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
@@ -629,6 +655,7 @@ struct DailyNotesView: View {
         var current = 0    // Active task + unacknowledged completed tasks
         var remaining = 0
         var unacknowledged = 0
+        var previousEndMinutes: Int? = nil
         
         // Parse ALL lines including strikethrough
         for line in contentLines {
@@ -653,7 +680,9 @@ struct DailyNotesView: View {
                 options: .regularExpression
             )
             
-            if let entry = parseTimeEntry(lineToParse) {
+            if let entry = parseTimeEntrySequential(lineToParse, previousEndMinutes: previousEndMinutes) {
+                previousEndMinutes = entry.endMinutes
+                
                 if currentMinutes >= entry.endMinutes {
                     // Task has ended
                     if isStrikethrough {
@@ -798,6 +827,9 @@ struct DailyNotesView: View {
         // Set up observer for when this cycle ends
         setupCycleEndObserver()
         
+        // Start reminder timer if interval is set
+        startReminderTimer()
+        
         print("🎯 Started cycle: \(taskName) for \(minutes) minutes")
     }
     
@@ -837,6 +869,9 @@ struct DailyNotesView: View {
             self.isTransitioning = false
             self.cycleEndObserver?.cancel()
             self.speechManager.stopSpeaking()
+            
+            // Stop reminder timer
+            self.stopReminderTimer()
             
             // Reset pause tracking
             self.pausedAt = nil
@@ -1099,6 +1134,7 @@ struct DailyNotesView: View {
         let contentLines = Array(allLines[(startIndex + 1)..<endIndex])
         
         var timeEntries: [TimeEntry] = []
+        var previousEndMinutes: Int? = nil
         
         print("📝 Parsing schedule from notes (lines \(startIndex + 1) to \(endIndex - 1)):")
         print("📝 Content to parse: \(contentLines.count) lines")
@@ -1111,8 +1147,10 @@ struct DailyNotesView: View {
                 continue
             }
             
-            if let entry = parseTimeEntry(line) {
+            if let entry = parseTimeEntrySequential(line, previousEndMinutes: previousEndMinutes) {
                 timeEntries.append(entry)
+                previousEndMinutes = entry.endMinutes
+                
                 // Add safety checks to prevent EXC_BAD_ACCESS
                 let startTimeStr = safeMinutesToTime(entry.startMinutes)
                 let endTimeStr = safeMinutesToTime(entry.endMinutes)
@@ -1123,16 +1161,15 @@ struct DailyNotesView: View {
             }
         }
         
-        let sortedEntries = timeEntries.sorted { $0.startMinutes < $1.startMinutes }
-        print("📅 Final schedule (\(sortedEntries.count) entries):")
-        for entry in sortedEntries {
+        print("📅 Final schedule (\(timeEntries.count) entries):")
+        for entry in timeEntries {
             let startTimeStr = safeMinutesToTime(entry.startMinutes)
             let endTimeStr = safeMinutesToTime(entry.endMinutes)
             let description = entry.description.isEmpty ? "No description" : entry.description
             print("   \(startTimeStr) - \(endTimeStr) - \(description)")
         }
         
-        return sortedEntries
+        return timeEntries
     }
     
     // MARK: - Existing Methods (unchanged)
@@ -1337,7 +1374,7 @@ struct DailyNotesView: View {
         return result
     }
     
-    private func parseTimeEntry(_ line: String) -> TimeEntry? {
+    private func parseTimeEntrySequential(_ line: String, previousEndMinutes: Int?) -> TimeEntry? {
         let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Skip strikethrough lines - check the entire line, not just if it contains ~~
@@ -1372,9 +1409,9 @@ struct DailyNotesView: View {
         let endTimeStr = String(lineWithoutNumbering[endTimeRange])
         let description = String(lineWithoutNumbering[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Parse both times with context awareness
-        guard let startMinutes = timeToMinutesWithContext(startTimeStr, endTimeStr: endTimeStr, startTimeStr: startTimeStr),
-              let endMinutes = timeToMinutesWithContext(endTimeStr, endTimeStr: endTimeStr, startTimeStr: startTimeStr) else {
+        // Parse times sequentially (respecting chronological order)
+        guard let startMinutes = timeToMinutesSequential(startTimeStr, previousEndMinutes: previousEndMinutes),
+              let endMinutes = timeToMinutesSequential(endTimeStr, previousEndMinutes: startMinutes) else {
             return nil
         }
         
@@ -1388,6 +1425,118 @@ struct DailyNotesView: View {
             isFixed: isFixed,
             originalLine: line
         )
+    }
+    
+    private func parseTimeEntry(_ line: String) -> TimeEntry? {
+        // Fallback to non-sequential parsing for backward compatibility
+        return parseTimeEntrySequential(line, previousEndMinutes: nil)
+    }
+    
+    private func timeToMinutesSequential(_ timeString: String, previousEndMinutes: Int?) -> Int? {
+        let cleanTime = timeString.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check if it contains AM/PM
+        let hasAMPM = cleanTime.lowercased().contains("am") || cleanTime.lowercased().contains("pm")
+        let isPM = cleanTime.lowercased().contains("pm")
+        
+        // Extract just the time part (remove AM/PM)
+        let timeOnly = cleanTime.replacingOccurrences(of: "\\s*[AaPp][Mm]", with: "", options: .regularExpression)
+        
+        let components = timeOnly.components(separatedBy: ":")
+        guard components.count == 2,
+              let hours = Int(components[0]),
+              let mins = Int(components[1]) else {
+            return nil
+        }
+        
+        var finalHours = hours
+        
+        if hasAMPM {
+            // Handle 12-hour format with explicit AM/PM
+            if isPM && hours != 12 {
+                finalHours = hours + 12  // Convert PM to 24-hour (except 12 PM)
+            } else if !isPM && hours == 12 {
+                finalHours = 0  // Convert 12 AM to 0 (midnight)
+            }
+        } else {
+            // No AM/PM specified - use sequential logic
+            
+            if let prevEnd = previousEndMinutes {
+                // We have a previous time to reference
+                let prevEndHour = (prevEnd / 60) % 24
+                
+                // Calculate the raw minutes for this time
+                let rawMinutes = hours * 60 + mins
+                
+                // Try different interpretations and pick the one that makes sense chronologically
+                var candidates: [Int] = []
+                
+                // Option 1: Same period as previous (AM stays AM, PM stays PM)
+                if hours == 12 {
+                    // 12:XX could be noon (12 PM) or midnight (12 AM)
+                    candidates.append(12 * 60 + mins)  // 12 PM (noon)
+                    candidates.append(0 * 60 + mins)   // 12 AM (midnight)
+                } else if hours < 12 {
+                    // Could be AM or PM
+                    candidates.append(hours * 60 + mins)        // AM interpretation
+                    candidates.append((hours + 12) * 60 + mins) // PM interpretation
+                } else {
+                    // Already in 24-hour format (13-23)
+                    candidates.append(rawMinutes)
+                }
+                
+                // Pick the first candidate that's >= previous end time
+                for candidate in candidates.sorted() {
+                    if candidate >= prevEnd {
+                        finalHours = candidate / 60
+                        return candidate
+                    }
+                }
+                
+                // If no candidate works, the time might be on the next day
+                // For now, pick the smallest candidate that makes sense
+                if let bestCandidate = candidates.sorted().first(where: { $0 >= prevEnd }) {
+                    return bestCandidate
+                }
+                
+                // Last resort: assume PM if hour is small and previous was in PM
+                if hours < 12 && prevEndHour >= 12 {
+                    finalHours = hours + 12
+                } else {
+                    finalHours = hours
+                }
+            } else {
+                // No previous time - use current time context
+                let now = Date()
+                let calendar = Calendar.current
+                let currentHour = calendar.component(.hour, from: now)
+                
+                if hours == 12 {
+                    // 12:XX - determine if noon or midnight based on current time
+                    if currentHour >= 11 && currentHour <= 13 {
+                        finalHours = 12  // Noon
+                    } else if currentHour < 11 {
+                        finalHours = 12  // Assume noon (upcoming)
+                    } else {
+                        finalHours = 0   // Midnight (next day)
+                    }
+                } else if hours < 12 {
+                    // Could be AM or PM - use current time as hint
+                    if currentHour >= 12 {
+                        // Currently PM - assume PM for small hours
+                        finalHours = hours + 12
+                    } else {
+                        // Currently AM - assume AM
+                        finalHours = hours
+                    }
+                } else {
+                    // Already 24-hour format
+                    finalHours = hours
+                }
+            }
+        }
+        
+        return finalHours * 60 + mins
     }
     
     private func timeToMinutesWithContext(_ timeString: String, endTimeStr: String? = nil, startTimeStr: String? = nil) -> Int? {
@@ -1718,6 +1867,9 @@ struct DailyNotesView: View {
         // Stop the timer to ensure clean transition
         settings.stopTimer()
         
+        // Stop reminder timer during transition
+        stopReminderTimer()
+        
         // Re-evaluate what should be happening now
         let timeEntries = extractTimeEntriesFromNotes()
         guard !timeEntries.isEmpty else {
@@ -1817,6 +1969,74 @@ struct DailyNotesView: View {
             isTransitioning = false
             stopCycles()
         }
+    }
+    
+    // MARK: - Reminder Timer Functions
+    
+    private func startReminderTimer() {
+        // Stop any existing reminder timer
+        stopReminderTimer()
+        
+        // Check if reminder interval is set and valid
+        guard let intervalMinutes = Int(reminderInterval), intervalMinutes > 0 else {
+            return
+        }
+        
+        // Reset last reminder time
+        lastReminderTime = Date()
+        
+        // Create a timer that checks every second
+        reminderTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            
+            // Only remind if playing and not paused
+            guard self.settings.isPlaying && !self.settings.isPaused else {
+                return
+            }
+            
+            // Check if it's time for a reminder
+            if let lastReminder = self.lastReminderTime {
+                let timeSinceLastReminder = Date().timeIntervalSince(lastReminder)
+                let intervalSeconds = TimeInterval(intervalMinutes * 60)
+                
+                if timeSinceLastReminder >= intervalSeconds {
+                    // Time for a reminder
+                    self.giveTimeReminder()
+                    self.lastReminderTime = Date()
+                }
+            }
+        }
+        
+        print("⏰ Reminder timer started with \(intervalMinutes) minute interval")
+    }
+    
+    private func stopReminderTimer() {
+        reminderTimer?.invalidate()
+        reminderTimer = nil
+        lastReminderTime = nil
+    }
+    
+    private func giveTimeReminder() {
+        // Calculate time remaining
+        let remaining = settings.nextAlertDate.timeIntervalSinceNow
+        
+        guard remaining > 0 else {
+            return
+        }
+        
+        let remainingMinutes = Int(ceil(remaining / 60.0))
+        
+        // Create reminder message
+        let message: String
+        if remainingMinutes == 1 {
+            message = "1 minute left"
+        } else {
+            message = "\(remainingMinutes) minutes left"
+        }
+        
+        // Speak the reminder
+        speechManager.speak(message)
+        
+        print("🔔 Reminder: \(message) for task: \(currentTaskName)")
     }
 }
 
