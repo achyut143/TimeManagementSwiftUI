@@ -183,6 +183,9 @@ struct ActivityRewardCard: View {
     let modelContext: ModelContext
     
     @State private var showUseOptions = false
+    @State private var showChart = false
+    @State private var showOverdraftSheet = false
+    @State private var overdraftWindows = 1
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -210,9 +213,38 @@ struct ActivityRewardCard: View {
                     .foregroundColor(.secondary)
             }
             
-            if activity.accumulatedWindowCredits >= 1 {
-                HStack(spacing: 8) {
-                    // Use buttons
+            if activity.overdraftWindowsUsed > 0 {
+                HStack {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .foregroundColor(.red)
+                        .font(.caption)
+                    Text("Overdraft used: \(activity.overdraftWindowsUsed)")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+            }
+            
+            // Chart button
+            Button {
+                showChart = true
+            } label: {
+                HStack {
+                    Image(systemName: "chart.bar.fill")
+                        .font(.caption)
+                    Text("View Chart")
+                        .font(.caption)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.1))
+                .foregroundColor(.blue)
+                .cornerRadius(8)
+            }
+            
+            // Always show use/overdraft buttons
+            HStack(spacing: 8) {
+                if activity.accumulatedWindowCredits >= 1 {
+                    // Use buttons for credits
                     Button {
                         if activity.useWindowCredits(1, context: modelContext) {
                             try? modelContext.save()
@@ -258,11 +290,31 @@ struct ActivityRewardCard: View {
                                 .cornerRadius(8)
                         }
                     }
-                    
-                    Spacer()
                 }
                 
-                // Ignore buttons (second row)
+                // Always show overdraft button
+                Button {
+                    showOverdraftSheet = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.caption)
+                        Text("Overdraft")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                
+                Spacer()
+            }
+            
+            // Ignore buttons (second row) - only if credits available
+            if activity.accumulatedWindowCredits >= 1 {
                 HStack(spacing: 8) {
                     Button {
                         if activity.ignoreWindowCredits(1, context: modelContext) {
@@ -273,7 +325,7 @@ struct ActivityRewardCard: View {
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(Color.red)
+                            .background(Color.gray)
                             .foregroundColor(.white)
                             .cornerRadius(8)
                     }
@@ -288,7 +340,7 @@ struct ActivityRewardCard: View {
                                 .font(.caption)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(Color.red)
+                                .background(Color.gray)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                         }
@@ -304,7 +356,7 @@ struct ActivityRewardCard: View {
                                 .font(.caption)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(Color.red)
+                                .background(Color.gray)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                         }
@@ -317,6 +369,146 @@ struct ActivityRewardCard: View {
         .padding()
         .background(Color(.secondarySystemGroupedBackground))
         .cornerRadius(12)
+        .sheet(isPresented: $showChart) {
+            NavigationStack {
+                ScrollView {
+                    ActivityWindowChartView(activity: activity)
+                }
+                .navigationTitle(activity.name)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            showChart = false
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showOverdraftSheet) {
+            OverdraftUseView(
+                activity: activity,
+                overdraftWindows: $overdraftWindows,
+                modelContext: modelContext,
+                onDismiss: {
+                    showOverdraftSheet = false
+                }
+            )
+        }
+    }
+}
+
+struct OverdraftUseView: View {
+    let activity: ScheduledActivity
+    @Binding var overdraftWindows: Int
+    let modelContext: ModelContext
+    let onDismiss: () -> Void
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("Use Overdraft Windows")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Text(activity.name)
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                
+                VStack(spacing: 12) {
+                    Text("Overdraft Windows")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 16) {
+                        Button {
+                            if overdraftWindows > 1 {
+                                overdraftWindows -= 1
+                            }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.title)
+                                .foregroundColor(overdraftWindows > 1 ? .red : .gray)
+                        }
+                        .disabled(overdraftWindows <= 1)
+                        
+                        Text("\(overdraftWindows)")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .foregroundColor(.red)
+                            .frame(minWidth: 60)
+                        
+                        Button {
+                            overdraftWindows += 1
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title)
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.red.opacity(0.1))
+                .cornerRadius(12)
+                
+                // Show what will happen
+                VStack(alignment: .leading, spacing: 8) {
+                    if activity.hasRewardAttachment {
+                        HStack(spacing: 8) {
+                            Image(systemName: activity.effectiveRewardBurnType.icon)
+                                .foregroundColor(.purple)
+                            Text("Will burn: \(activity.formattedBurnAmount(multiplier: overdraftWindows))")
+                                .font(.subheadline)
+                        }
+                    }
+                    
+                    if activity.hasTaskAttachment {
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock.badge.plus.fill")
+                                .foregroundColor(.blue)
+                            Text("Will add: \(activity.formattedTaskTime(multiplier: overdraftWindows))")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
+                
+                Spacer()
+                
+                VStack(spacing: 12) {
+                    Button {
+                        if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
+                            try? modelContext.save()
+                        }
+                        onDismiss()
+                    } label: {
+                        Text("Use \(overdraftWindows) Overdraft \(overdraftWindows == 1 ? "Window" : "Windows")")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.red)
+                            .cornerRadius(12)
+                    }
+                    
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Text("Cancel")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                    }
+                }
+            }
+            .padding()
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 

@@ -293,6 +293,7 @@ struct ActivityCardView: View {
     let onDelete: () -> Void
     
     @Environment(\.modelContext) private var modelContext
+    @State private var showChart = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -425,6 +426,38 @@ struct ActivityCardView: View {
                 .padding(.vertical, 4)
                 .background(Color.orange.opacity(0.1))
                 .cornerRadius(6)
+            }
+            
+            // Overdraft Display
+            if activity.overdraftWindowsUsed > 0 {
+                HStack {
+                    Text("Overdraft Used:")
+                    Spacer()
+                    Text("\(activity.overdraftWindowsUsed) \(activity.overdraftWindowsUsed == 1 ? "window" : "windows")")
+                        .fontWeight(.semibold)
+                        .foregroundColor(.red)
+                }
+                .font(.subheadline)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.red.opacity(0.1))
+                .cornerRadius(6)
+            }
+            
+            // Chart Button
+            Button {
+                showChart = true
+            } label: {
+                HStack {
+                    Image(systemName: "chart.bar.fill")
+                    Text("View Usage Chart")
+                        .fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.blue.opacity(0.1))
+                .foregroundColor(.blue)
+                .cornerRadius(8)
             }
             
             // Attached Reward Display
@@ -613,6 +646,22 @@ struct ActivityCardView: View {
         .padding()
         .background(Color(.secondarySystemGroupedBackground))
         .cornerRadius(12)
+        .sheet(isPresented: $showChart) {
+            NavigationStack {
+                ScrollView {
+                    ActivityWindowChartView(activity: activity)
+                }
+                .navigationTitle(activity.name)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            showChart = false
+                        }
+                    }
+                }
+            }
+        }
     }
     
     private func timeString(from interval: TimeInterval) -> String {

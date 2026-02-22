@@ -58,6 +58,7 @@ class ScheduledActivity {
     var windowsUsedInPeriod: Int = 0 // Track how many windows were used in current period
     var windowsSkippedInPeriod: Int = 0 // Track how many windows were skipped in current period
     var lastEditedAt: Date? // Track when the activity was last edited (for window tracking reset)
+    var overdraftWindowsUsed: Int = 0 // Track how many windows were used beyond allocated (overdraft)
     
     // Attached reward system
     var attachedRewardId: UUID? // ID of the attached reward
@@ -108,6 +109,7 @@ class ScheduledActivity {
         self.rewardBurnType = rewardBurnType
         self.attachedTaskId = attachedTaskId
         self.taskTimeAmount = taskTimeAmount
+        self.overdraftWindowsUsed = 0
     }
     
     // Migration helper for existing activities
@@ -493,6 +495,7 @@ class ScheduledActivity {
         
         windowsUsedInPeriod = 0
         windowsSkippedInPeriod = 0
+        overdraftWindowsUsed = 0 // Reset overdraft tracking
         lastResetDate = Date()
     }
     
@@ -555,6 +558,46 @@ class ScheduledActivity {
             print("❌ Not enough window credits. Available: \(accumulatedWindowCredits), Requested: \(credits)")
             return false
         }
+    }
+    
+    // Use overdraft windows (allows using more windows than allocated)
+    func useOverdraftWindows(_ windows: Int, context: ModelContext) -> Bool {
+        checkAndResetCounters()
+        
+        // Track overdraft usage
+        overdraftWindowsUsed += windows
+        
+        // Burn attached reward if configured (multiply by windows used)
+        print("🔍 DEBUG: useOverdraftWindows - About to check reward burning with multiplier: \(windows)")
+        if burnAttachedReward(multiplier: windows, context: context) {
+            print("🔥 DEBUG: Successfully burned attached reward when using overdraft windows")
+        } else {
+            print("ℹ️ DEBUG: No reward to burn or burning failed when using overdraft windows")
+        }
+        
+        // Add time to attached task if configured (multiply by windows used)
+        print("🔍 DEBUG: useOverdraftWindows - About to check task time addition with multiplier: \(windows)")
+        if addTimeToAttachedTask(multiplier: windows, context: context) {
+            print("⏱️ DEBUG: Successfully added time to attached task when using overdraft windows")
+        } else {
+            print("ℹ️ DEBUG: No task to add time to or addition failed when using overdraft windows")
+        }
+        
+        // Record overdraft usage in history
+        let now = Date()
+        let usage = ActivityUsageHistory(
+            activityName: name,
+            usedAt: now,
+            windowStartTime: now,
+            windowEndTime: now,
+            notes: "Used \(windows) overdraft \(windows == 1 ? "window" : "windows")",
+            usageType: .overdraftUsage,
+            creditsUsed: windows
+        )
+        context.insert(usage)
+        
+        print("📈 Used \(windows) overdraft windows for '\(name)'. Total overdraft: \(overdraftWindowsUsed) windows")
+        return true
     }
     
     // Ignore accumulated window credits (remove credits without burning rewards or adding task time)
@@ -1188,6 +1231,7 @@ enum ActivityUsageType: String, Codable, CaseIterable {
     case regularWindow = "Regular Window"
     case creditUsage = "Credit Usage"
     case creditIgnore = "Credit Ignore"
+    case overdraftUsage = "Overdraft Usage"
     
     var displayName: String {
         return self.rawValue
@@ -1201,6 +1245,8 @@ enum ActivityUsageType: String, Codable, CaseIterable {
             return "gift.fill"
         case .creditIgnore:
             return "trash.fill"
+        case .overdraftUsage:
+            return "arrow.up.circle.fill"
         }
     }
 }

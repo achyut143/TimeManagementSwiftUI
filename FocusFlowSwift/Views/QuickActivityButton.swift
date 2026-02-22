@@ -2,21 +2,27 @@ import SwiftUI
 import SwiftData
 
 struct QuickActivityButton: View {
+    @Environment(\.modelContext) private var modelContext
     @Query(filter: #Predicate<ScheduledActivity> { $0.isActive }, sort: \ScheduledActivity.createdAt, order: .reverse)
     private var activities: [ScheduledActivity]
     
     @State private var showActivitiesList = false
     @State private var currentTime = Date()
     @State private var refreshTrigger = UUID()
+    @State private var forceRefresh = false
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     var hasActiveWindow: Bool {
-        activities.contains { $0.isInActiveWindow() }
+        // Access forceRefresh to trigger recalculation
+        _ = forceRefresh
+        return activities.contains { $0.isInActiveWindow() }
     }
     
     var totalDailyCredits: Int {
-        activities
+        // Access forceRefresh to trigger recalculation
+        _ = forceRefresh
+        return activities
             .filter { ($0.recurrenceType ?? .daily) == .daily }
             .reduce(0) { $0 + $1.accumulatedWindowCredits }
     }
@@ -48,7 +54,9 @@ struct QuickActivityButton: View {
                     // Quick Activities List Button
                     if !activities.isEmpty {
                         Button {
-                            refreshTrigger = UUID() // Force refresh when opening
+                            // Force refresh the model context before opening
+                            modelContext.processPendingChanges()
+                            refreshTrigger = UUID()
                             showActivitiesList = true
                         } label: {
                             ZStack(alignment: .topTrailing) {
@@ -87,10 +95,13 @@ struct QuickActivityButton: View {
             }
         }
         .sheet(isPresented: $showActivitiesList) {
-            QuickActivitiesListView(refreshTrigger: refreshTrigger)
+            QuickActivitiesListView(activities: activities, refreshTrigger: refreshTrigger)
         }
         .onReceive(timer) { _ in
             currentTime = Date()
+            // Periodically refresh to pick up changes
+            modelContext.processPendingChanges()
+            forceRefresh.toggle()
         }
     }
 }
@@ -98,8 +109,8 @@ struct QuickActivityButton: View {
 struct QuickActivitiesListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
-    private var activities: [ScheduledActivity]
+    
+    let activities: [ScheduledActivity] // Passed from parent instead of querying
     
     @State private var currentTime = Date()
     @State private var selectedActivity: ScheduledActivity?
@@ -108,16 +119,21 @@ struct QuickActivitiesListView: View {
     @State private var windowNotes = ""
     @State private var creditsToUse = 1
     @State private var refreshTrigger: UUID
+    @State private var forceRefresh = false
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
-    init(refreshTrigger: UUID) {
+    init(activities: [ScheduledActivity], refreshTrigger: UUID) {
+        self.activities = activities
         _refreshTrigger = State(initialValue: refreshTrigger)
     }
     
     // Sort activities by time remaining (least time first)
     var sortedActivities: [ScheduledActivity] {
-        activities.sorted { activity1, activity2 in
+        // Force a refresh by accessing forceRefresh
+        _ = forceRefresh
+        
+        return activities.sorted { activity1, activity2 in
             let time1 = timeUntilNext(for: activity1)
             let time2 = timeUntilNext(for: activity2)
             
@@ -279,9 +295,9 @@ struct QuickActivitiesListView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        // Force refresh by updating trigger and reloading data
+                        // Just toggle refresh trigger - parent handles data refresh
                         refreshTrigger = UUID()
-                        try? modelContext.save()
+                        forceRefresh.toggle()
                         currentTime = Date()
                     } label: {
                         Image(systemName: "arrow.clockwise")
@@ -329,10 +345,12 @@ struct QuickActivitiesListView: View {
         }
         .onReceive(timer) { _ in
             currentTime = Date()
+            // No need to process pending changes here since we're using parent's data
+            forceRefresh.toggle()
         }
         .onAppear {
-            // Refresh data when view appears
-            try? modelContext.save()
+            // No need to process pending changes here since we're using parent's data
+            forceRefresh.toggle()
         }
     }
     
@@ -390,24 +408,43 @@ struct QuickActivityRowView: View {
                     Spacer()
                 }
                 
-                // Make "Next in" more dominant and put it first
+                // Make countdown more prominent with red color
                 if activity.isInActiveWindow() {
                     if let windowEnd = activity.currentWindowEndTime() {
                         let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
-                        Text("Window closes in \(timeString(from: remaining))")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.green)
+                        HStack(spacing: 6) {
+                            Image(systemName: "timer")
+                                .font(.title3)
+                                .foregroundColor(.red)
+                            Text(timeString(from: remaining))
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.red)
+                                .monospacedDigit()
+                            Text("left")
+                                .font(.subheadline)
+                                .foregroundColor(.red)
+                        }
+                        .padding(.vertical, 4)
                     }
                 } else if let nextTime = activity.nextScheduledTime() {
                     let timeUntilNext = nextTime.timeIntervalSince(currentTime)
-                    Text("Next in \(timeString(from: timeUntilNext))")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.blue)
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock")
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                        Text("Next in")
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                        Text(timeString(from: timeUntilNext))
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.blue)
+                            .monospacedDigit()
+                    }
                 }
                 
-                // Put reward and task metrics below "Next in"
+                // Put reward and task metrics below countdown
                 HStack(spacing: 8) {
                     // Show reward count if there are accumulated credits
                     if activity.accumulatedWindowCredits > 0 {
@@ -467,43 +504,40 @@ struct QuickActivityRowView: View {
             Spacer()
             
             HStack(spacing: 8) {
-                if activity.isInActiveWindow() {
-                    Button {
-                        onUseWindow()
-                    } label: {
-                        Text("Use")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.green)
-                            .cornerRadius(8)
-                    }
-                }
-                
-                if activity.accumulatedWindowCredits > 0 {
-                    Button {
-                        onUseCredits()
-                    } label: {
-                        HStack(spacing: 4) {
+                // Always show a Use button - it opens the sheet with credits/overdraft options
+                Button {
+                    onUseCredits()
+                } label: {
+                    HStack(spacing: 4) {
+                        if activity.isInActiveWindow() {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                            Text("Use Window")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        } else if activity.accumulatedWindowCredits > 0 {
                             Image(systemName: "gift.fill")
                                 .font(.caption)
-                            Text("Use")
+                            Text("Use Credits")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        } else {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.caption)
+                            Text("Use Overdraft")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.orange)
-                        .cornerRadius(8)
                     }
-                }
-                
-                if !activity.isInActiveWindow() && activity.accumulatedWindowCredits == 0 {
-                    Image(systemName: "clock")
-                        .foregroundColor(.secondary)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        activity.isInActiveWindow() ? Color.green :
+                        activity.accumulatedWindowCredits > 0 ? Color.orange :
+                        Color.red
+                    )
+                    .cornerRadius(8)
                 }
             }
         }
@@ -529,10 +563,13 @@ struct CreditUseView: View {
     let onUse: () -> Void
     let onCancel: () -> Void
     
+    @State private var showOverdraftOption = false
+    @State private var overdraftWindows = 1
+    
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Text("Use Window Credits")
+                Text("Use Activity Window")
                     .font(.title2)
                     .fontWeight(.bold)
                 
@@ -540,132 +577,284 @@ struct CreditUseView: View {
                     .font(.headline)
                     .foregroundColor(.secondary)
                 
-                VStack(spacing: 12) {
-                    Text("Available Credits")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    HStack(spacing: 4) {
-                        Image(systemName: "gift.fill")
-                            .font(.title)
-                            .foregroundColor(.orange)
-                        Text("\(activity.accumulatedWindowCredits)")
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundColor(.orange)
-                    }
-                }
-                .padding()
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(12)
-                
-                VStack(spacing: 12) {
-                    Text("Credits to Use")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    HStack(spacing: 16) {
-                        Button {
-                            if creditsToUse > 1 {
-                                creditsToUse -= 1
-                            }
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .font(.title)
-                                .foregroundColor(creditsToUse > 1 ? .blue : .gray)
-                        }
-                        .disabled(creditsToUse <= 1)
-                        
-                        Text("\(creditsToUse)")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                            .frame(minWidth: 60)
+                // Show active window option if in window
+                if activity.isInActiveWindow() {
+                    VStack(spacing: 12) {
+                        Text("Active Window")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                         
                         Button {
-                            if creditsToUse < activity.accumulatedWindowCredits {
-                                creditsToUse += 1
-                            }
+                            // Use the regular window
+                            // This will be handled by the parent
+                            onUse()
                         } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title)
-                                .foregroundColor(creditsToUse < activity.accumulatedWindowCredits ? .blue : .gray)
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.title2)
+                                Text("Use Current Window")
+                                    .fontWeight(.semibold)
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.green)
+                            .cornerRadius(12)
                         }
-                        .disabled(creditsToUse >= activity.accumulatedWindowCredits)
+                        
+                        if let windowEnd = activity.currentWindowEndTime() {
+                            let remaining = max(0, windowEnd.timeIntervalSince(Date()))
+                            Text("Window closes in \(timeString(from: remaining))")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
                     }
+                    .padding()
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(12)
+                    
+                    Divider()
                 }
-                .padding()
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(12)
                 
-                // Show what will happen
-                VStack(alignment: .leading, spacing: 8) {
-                    if activity.hasRewardAttachment {
-                        HStack(spacing: 8) {
-                            Image(systemName: activity.effectiveRewardBurnType.icon)
-                                .foregroundColor(.purple)
-                            Text("Will burn: \(activity.formattedBurnAmount(multiplier: creditsToUse))")
-                                .font(.subheadline)
+                // Show credits section if available
+                if activity.accumulatedWindowCredits > 0 {
+                    VStack(spacing: 12) {
+                        Text("Available Credits")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        HStack(spacing: 4) {
+                            Image(systemName: "gift.fill")
+                                .font(.title)
+                                .foregroundColor(.orange)
+                            Text("\(activity.accumulatedWindowCredits)")
+                                .font(.title)
+                                .fontWeight(.bold)
+                                .foregroundColor(.orange)
                         }
+                    }
+                    .padding()
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(12)
+                    
+                    VStack(spacing: 12) {
+                        Text("Credits to Use")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        HStack(spacing: 16) {
+                            Button {
+                                if creditsToUse > 1 {
+                                    creditsToUse -= 1
+                                }
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(creditsToUse > 1 ? .blue : .gray)
+                            }
+                            .disabled(creditsToUse <= 1)
+                            
+                            Text("\(creditsToUse)")
+                                .font(.largeTitle)
+                                .fontWeight(.bold)
+                                .frame(minWidth: 60)
+                            
+                            Button {
+                                if creditsToUse < activity.accumulatedWindowCredits {
+                                    creditsToUse += 1
+                                }
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(creditsToUse < activity.accumulatedWindowCredits ? .blue : .gray)
+                            }
+                            .disabled(creditsToUse >= activity.accumulatedWindowCredits)
+                        }
+                    }
+                    .padding()
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(12)
+                    
+                    // Show what will happen
+                    VStack(alignment: .leading, spacing: 8) {
+                        if activity.hasRewardAttachment {
+                            HStack(spacing: 8) {
+                                Image(systemName: activity.effectiveRewardBurnType.icon)
+                                    .foregroundColor(.purple)
+                                Text("Will burn: \(activity.formattedBurnAmount(multiplier: creditsToUse))")
+                                    .font(.subheadline)
+                            }
+                        }
+                        
+                        if activity.hasTaskAttachment {
+                            HStack(spacing: 8) {
+                                Image(systemName: "clock.badge.plus.fill")
+                                    .foregroundColor(.blue)
+                                Text("Will add: \(activity.formattedTaskTime(multiplier: creditsToUse))")
+                                    .font(.subheadline)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(12)
+                }
+                
+                // Overdraft Section - always visible
+                VStack(spacing: 12) {
+                    Button {
+                        showOverdraftOption.toggle()
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .foregroundColor(.red)
+                            Text(activity.accumulatedWindowCredits > 0 ? "Or Use Overdraft Windows" : "Use Overdraft Windows")
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: showOverdraftOption ? "chevron.up" : "chevron.down")
+                        }
+                        .foregroundColor(.red)
+                        .padding()
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(12)
                     }
                     
-                    if activity.hasTaskAttachment {
-                        HStack(spacing: 8) {
-                            Image(systemName: "clock.badge.plus.fill")
-                                .foregroundColor(.blue)
-                            Text("Will add: \(activity.formattedTaskTime(multiplier: creditsToUse))")
+                    if showOverdraftOption || activity.accumulatedWindowCredits == 0 {
+                        VStack(spacing: 12) {
+                            Text("Overdraft Windows")
                                 .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            
+                            HStack(spacing: 16) {
+                                Button {
+                                    if overdraftWindows > 1 {
+                                        overdraftWindows -= 1
+                                    }
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                        .font(.title)
+                                        .foregroundColor(overdraftWindows > 1 ? .red : .gray)
+                                }
+                                .disabled(overdraftWindows <= 1)
+                                
+                                Text("\(overdraftWindows)")
+                                    .font(.largeTitle)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.red)
+                                    .frame(minWidth: 60)
+                                
+                                Button {
+                                    overdraftWindows += 1
+                                } label: {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.title)
+                                        .foregroundColor(.red)
+                                }
+                            }
+                            
+                            // Show what will happen with overdraft
+                            VStack(alignment: .leading, spacing: 8) {
+                                if activity.hasRewardAttachment {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: activity.effectiveRewardBurnType.icon)
+                                            .foregroundColor(.purple)
+                                        Text("Will burn: \(activity.formattedBurnAmount(multiplier: overdraftWindows))")
+                                            .font(.subheadline)
+                                    }
+                                }
+                                
+                                if activity.hasTaskAttachment {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "clock.badge.plus.fill")
+                                            .foregroundColor(.blue)
+                                        Text("Will add: \(activity.formattedTaskTime(multiplier: overdraftWindows))")
+                                            .font(.subheadline)
+                                    }
+                                }
+                            }
+                            .padding()
+                            .background(Color.gray.opacity(0.1))
+                            .cornerRadius(8)
+                            
+                            Button {
+                                if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
+                                    try? modelContext.save()
+                                }
+                                onCancel()
+                            } label: {
+                                Text("Use \(overdraftWindows) Overdraft \(overdraftWindows == 1 ? "Window" : "Windows")")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.red)
+                                    .cornerRadius(12)
+                            }
                         }
+                        .padding()
+                        .background(Color.red.opacity(0.05))
+                        .cornerRadius(12)
                     }
                 }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(12)
                 
                 Spacer()
                 
-                VStack(spacing: 12) {
-                    Button {
-                        onUse()
-                    } label: {
-                        Text("Use Credits")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.orange)
-                            .cornerRadius(12)
-                    }
-                    
-                    Button {
-                        if activity.ignoreWindowCredits(creditsToUse, context: modelContext) {
-                            try? modelContext.save()
+                if activity.accumulatedWindowCredits > 0 && !activity.isInActiveWindow() {
+                    VStack(spacing: 12) {
+                        Button {
+                            onUse()
+                        } label: {
+                            Text("Use Credits")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.orange)
+                                .cornerRadius(12)
                         }
-                        onCancel()
-                    } label: {
-                        Text("Ignore Credits")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.red)
-                            .cornerRadius(12)
+                        
+                        Button {
+                            if activity.ignoreWindowCredits(creditsToUse, context: modelContext) {
+                                try? modelContext.save()
+                            }
+                            onCancel()
+                        } label: {
+                            Text("Ignore Credits")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.gray)
+                                .cornerRadius(12)
+                        }
                     }
-                    
-                    Button {
-                        onCancel()
-                    } label: {
-                        Text("Cancel")
-                            .font(.headline)
-                            .foregroundColor(.primary)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.gray.opacity(0.2))
-                            .cornerRadius(12)
-                    }
+                }
+                
+                Button {
+                    onCancel()
+                } label: {
+                    Text("Cancel")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.gray.opacity(0.2))
+                        .cornerRadius(12)
                 }
             }
             .padding()
             .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+    
+    private func timeString(from interval: TimeInterval) -> String {
+        let hours = Int(interval) / 3600
+        let minutes = (Int(interval) % 3600) / 60
+        
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else {
+            return "\(minutes)m"
         }
     }
 }
