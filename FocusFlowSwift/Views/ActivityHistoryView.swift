@@ -22,27 +22,45 @@ struct ActivityHistoryView: View {
         case .day:
             let startOfDay = calendar.startOfDay(for: now)
             let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? now
-            return history.filter { $0.usedAt >= startOfDay && $0.usedAt < endOfDay }
+            print("📅 DEBUG: Today filter - Start: \(startOfDay), End: \(endOfDay), Total history: \(history.count)")
+            let filtered = history.filter { $0.usedAt >= startOfDay && $0.usedAt < endOfDay }
+            print("📅 DEBUG: Today filtered count: \(filtered.count)")
+            return filtered
             
         case .week:
             let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? now
             let endOfWeek = calendar.date(byAdding: .weekOfYear, value: 1, to: startOfWeek) ?? now
-            return history.filter { $0.usedAt >= startOfWeek && $0.usedAt < endOfWeek }
+            print("📅 DEBUG: Week filter - Start: \(startOfWeek), End: \(endOfWeek), Total history: \(history.count)")
+            let filtered = history.filter { $0.usedAt >= startOfWeek && $0.usedAt < endOfWeek }
+            print("📅 DEBUG: Week filtered count: \(filtered.count)")
+            return filtered
             
         case .month:
             let startOfMonth = calendar.dateInterval(of: .month, for: now)?.start ?? now
             let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) ?? now
-            return history.filter { $0.usedAt >= startOfMonth && $0.usedAt < endOfMonth }
+            print("📅 DEBUG: Month filter - Start: \(startOfMonth), End: \(endOfMonth), Total history: \(history.count)")
+            let filtered = history.filter { $0.usedAt >= startOfMonth && $0.usedAt < endOfMonth }
+            print("📅 DEBUG: Month filtered count: \(filtered.count)")
+            print("📅 DEBUG: Month - Latest date in history: \(history.first?.usedAt ?? Date())")
+            return filtered
             
         case .all:
+            print("📅 DEBUG: All time - Total history: \(history.count)")
+            if let earliest = history.last?.usedAt, let latest = history.first?.usedAt {
+                print("📅 DEBUG: All time - Date range: \(earliest) to \(latest)")
+            }
             return history
         }
     }
     
-    var groupedHistory: [String: [ActivityUsageHistory]] {
-        Dictionary(grouping: filteredHistory) { usage in
-            DateFormatter.dayFormatter.string(from: usage.usedAt)
+    var groupedHistory: [(date: Date, key: String, items: [ActivityUsageHistory])] {
+        let grouped = Dictionary(grouping: filteredHistory) { usage in
+            Calendar.current.startOfDay(for: usage.usedAt)
         }
+        
+        return grouped.map { (date, items) in
+            (date: date, key: DateFormatter.dayFormatter.string(from: date), items: items)
+        }.sorted { $0.date > $1.date } // Sort by actual date, not string
     }
     
     var body: some View {
@@ -61,9 +79,9 @@ struct ActivityHistoryView: View {
                     emptyStateView
                 } else {
                     List {
-                        ForEach(groupedHistory.keys.sorted(by: >), id: \.self) { dateKey in
-                            Section(dateKey) {
-                                ForEach(groupedHistory[dateKey] ?? [], id: \.usedAt) { usage in
+                        ForEach(groupedHistory, id: \.date) { group in
+                            Section(group.key) {
+                                ForEach(group.items, id: \.usedAt) { usage in
                                     HistoryRowView(usage: usage)
                                 }
                             }

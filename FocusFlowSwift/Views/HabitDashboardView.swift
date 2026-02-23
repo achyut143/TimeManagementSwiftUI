@@ -10,6 +10,8 @@ struct HabitDashboardView: View {
     @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate = Date()
     @State private var filterMode = "all"
+    
+    private static let startDateKey = "HabitDashboardStartDate"
     @State private var showDeleteConfirmation = false
     @State private var showArchiveConfirmation = false
     @State private var showArchivedHabits = false
@@ -89,6 +91,9 @@ struct HabitDashboardView: View {
             }
         }
     .onAppear {
+      // Load saved start date and set end date to today
+      loadStartDate()
+      
       // Debug: Check eventDays loading
       print("🔍 HabitDashboard onAppear - EventDays count: \(eventDays.count)")
       for eventDay in eventDays {
@@ -160,14 +165,35 @@ struct HabitDashboardView: View {
     }
     
     private var dateFilters: some View {
-        HStack {
-            DatePicker("From", selection: $fromDate, displayedComponents: .date)
+        VStack(spacing: 8) {
+            DatePicker("Start Date", selection: $fromDate, displayedComponents: .date)
                 .datePickerStyle(.compact)
+                .onChange(of: fromDate) { _, newValue in
+                    saveStartDate()
+                }
             
-            DatePicker("To", selection: $toDate, displayedComponents: .date)
-                .datePickerStyle(.compact)
+            HStack {
+                Text("End Date: Today")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(toDate, style: .date)
+                    .font(.subheadline)
+            }
         }
         .padding(.horizontal)
+    }
+    
+    private func saveStartDate() {
+        UserDefaults.standard.set(fromDate, forKey: Self.startDateKey)
+    }
+    
+    private func loadStartDate() {
+        if let savedDate = UserDefaults.standard.object(forKey: Self.startDateKey) as? Date {
+            fromDate = savedDate
+        }
+        // Always set toDate to today
+        toDate = Date()
     }
     
    private var filteredHabitNames: [String] {

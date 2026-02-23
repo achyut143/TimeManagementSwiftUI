@@ -4,15 +4,12 @@ import Foundation
 @Model
 class HabitSettings {
     var fromDate: Date
-    var toDate: Date
     var lastUpdated: Date
     var metricDays: Int? // Number of days to show metrics for (7, 15, 30, 45, 60) - Optional for migration
     
     init(fromDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date(), 
-         toDate: Date = Date(),
          metricDays: Int = 30) {
         self.fromDate = fromDate
-        self.toDate = toDate
         self.lastUpdated = Date()
         self.metricDays = metricDays
     }
@@ -40,9 +37,8 @@ class HabitSettings {
         }
     }
     
-    func updateDates(from: Date, to: Date, context: ModelContext) {
+    func updateFromDate(_ from: Date, context: ModelContext) {
         self.fromDate = from
-        self.toDate = to
         self.lastUpdated = Date()
         try? context.save()
     }

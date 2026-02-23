@@ -13,6 +13,8 @@ struct ActivityWindowChartView: View {
     @State private var showDatePicker = false
     @State private var aggregationMode: AggregationMode
     
+    private static let startDateKey = "ActivityWindowChartStartDate"
+    
     init(activity: ScheduledActivity) {
         self.activity = activity
         let calendar = Calendar.current
@@ -20,27 +22,33 @@ struct ActivityWindowChartView: View {
         
         // Determine aggregation mode based on recurrence type
         let mode: AggregationMode
+        let defaultStartDate: Date
+        
         switch activity.effectiveRecurrenceType {
         case .daily:
             mode = .daily
-            // Default to last 30 days for daily
-            _startDate = State(initialValue: calendar.date(byAdding: .day, value: -29, to: now) ?? now)
+            defaultStartDate = calendar.date(byAdding: .day, value: -29, to: now) ?? now
         case .weekly:
             mode = .weekly
-            // Default to last 12 weeks for weekly
-            _startDate = State(initialValue: calendar.date(byAdding: .weekOfYear, value: -11, to: now) ?? now)
+            defaultStartDate = calendar.date(byAdding: .weekOfYear, value: -11, to: now) ?? now
         case .monthly:
             mode = .monthly
-            // Default to last 6 months for monthly
-            _startDate = State(initialValue: calendar.date(byAdding: .month, value: -5, to: now) ?? now)
+            defaultStartDate = calendar.date(byAdding: .month, value: -5, to: now) ?? now
         case .quarterly:
-            mode = .monthly // Use monthly for quarterly too
-            // Default to last 12 months for quarterly
-            _startDate = State(initialValue: calendar.date(byAdding: .month, value: -11, to: now) ?? now)
+            mode = .monthly
+            defaultStartDate = calendar.date(byAdding: .month, value: -11, to: now) ?? now
         }
         
+        // Load start date from UserDefaults or use default
+        let savedStartDate = UserDefaults.standard.object(forKey: Self.startDateKey) as? Date ?? defaultStartDate
+        
+        _startDate = State(initialValue: savedStartDate)
+        _endDate = State(initialValue: now) // Always use today
         _aggregationMode = State(initialValue: mode)
-        _endDate = State(initialValue: now)
+    }
+    
+    private func saveStartDate() {
+        UserDefaults.standard.set(startDate, forKey: Self.startDateKey)
     }
     
     // Filter usage history for this activity
@@ -192,11 +200,15 @@ struct ActivityWindowChartView: View {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? date
         
-        return activityHistory.filter { usage in
+        let usages = activityHistory.filter { usage in
             usage.usedAt >= dayStart && 
             usage.usedAt < dayEnd &&
             (usage.effectiveUsageType == .regularWindow || usage.effectiveUsageType == .creditUsage)
-        }.count
+        }
+        
+        return usages.reduce(0) { sum, usage in
+            sum + (usage.creditsUsed ?? 1)
+        }
     }
     
     // Calculate overdraft windows for a specific date
@@ -274,7 +286,18 @@ struct ActivityWindowChartView: View {
                 if showDatePicker {
                     VStack(spacing: 12) {
                         DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
-                        DatePicker("End Date", selection: $endDate, displayedComponents: .date)
+                            .onChange(of: startDate) { _, _ in
+                                saveStartDate()
+                            }
+                        
+                        HStack {
+                            Text("End Date: Today")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(endDate, style: .date)
+                                .font(.subheadline)
+                        }
                         
                         HStack(spacing: 12) {
                             switch aggregationMode {
@@ -283,6 +306,7 @@ struct ActivityWindowChartView: View {
                                     let calendar = Calendar.current
                                     endDate = Date()
                                     startDate = calendar.date(byAdding: .day, value: -6, to: endDate) ?? endDate
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
@@ -290,14 +314,16 @@ struct ActivityWindowChartView: View {
                                     let calendar = Calendar.current
                                     endDate = Date()
                                     startDate = calendar.date(byAdding: .day, value: -29, to: endDate) ?? endDate
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
                                 Button("This Month") {
                                     let calendar = Calendar.current
                                     let now = Date()
-                                    startDate = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? now
                                     endDate = now
+                                    startDate = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? now
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
@@ -306,6 +332,7 @@ struct ActivityWindowChartView: View {
                                     let calendar = Calendar.current
                                     endDate = Date()
                                     startDate = calendar.date(byAdding: .weekOfYear, value: -3, to: endDate) ?? endDate
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
@@ -313,14 +340,16 @@ struct ActivityWindowChartView: View {
                                     let calendar = Calendar.current
                                     endDate = Date()
                                     startDate = calendar.date(byAdding: .weekOfYear, value: -11, to: endDate) ?? endDate
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
                                 Button("This Quarter") {
                                     let calendar = Calendar.current
                                     let now = Date()
-                                    startDate = getQuarterStart(for: now, calendar: calendar) ?? now
                                     endDate = now
+                                    startDate = getQuarterStart(for: now, calendar: calendar) ?? now
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
@@ -329,6 +358,7 @@ struct ActivityWindowChartView: View {
                                     let calendar = Calendar.current
                                     endDate = Date()
                                     startDate = calendar.date(byAdding: .month, value: -2, to: endDate) ?? endDate
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
@@ -336,14 +366,16 @@ struct ActivityWindowChartView: View {
                                     let calendar = Calendar.current
                                     endDate = Date()
                                     startDate = calendar.date(byAdding: .month, value: -5, to: endDate) ?? endDate
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                                 
                                 Button("This Year") {
                                     let calendar = Calendar.current
                                     let now = Date()
-                                    startDate = calendar.date(from: DateComponents(year: calendar.component(.year, from: now), month: 1, day: 1)) ?? now
                                     endDate = now
+                                    startDate = calendar.date(from: DateComponents(year: calendar.component(.year, from: now), month: 1, day: 1)) ?? now
+                                    saveStartDate()
                                 }
                                 .buttonStyle(.bordered)
                             }

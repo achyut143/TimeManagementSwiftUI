@@ -826,18 +826,21 @@ struct HabitOverviewView: View {
                             Spacer()
                         }
                         
-                        HStack {
-                            DatePicker("From", selection: $fromDate, displayedComponents: .date)
+                        VStack(spacing: 8) {
+                            DatePicker("Start Date", selection: $fromDate, displayedComponents: .date)
                                 .datePickerStyle(.compact)
                                 .onChange(of: fromDate) { _, newValue in
                                     saveDateSettings()
                                 }
                             
-                            DatePicker("To", selection: $toDate, displayedComponents: .date)
-                                .datePickerStyle(.compact)
-                                .onChange(of: toDate) { _, newValue in
-                                    saveDateSettings()
-                                }
+                            HStack {
+                                Text("End Date: Today")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text(toDate, style: .date)
+                                    .font(.subheadline)
+                            }
                         }
                     }
                     
@@ -1123,15 +1126,19 @@ struct HabitOverviewView: View {
         habitSettings = HabitSettings.getOrCreate(context: modelContext)
         if let settings = habitSettings {
             fromDate = settings.fromDate
-            toDate = settings.toDate
+            // Always set toDate to today
+            toDate = Date()
         }
     }
     
     private func saveDateSettings() {
+        // Always set toDate to today (not stored, just updated in state)
+        toDate = Date()
+        
         if let settings = habitSettings {
-            settings.updateDates(from: fromDate, to: toDate, context: modelContext)
+            settings.updateFromDate(fromDate, context: modelContext)
         } else {
-            let newSettings = HabitSettings(fromDate: fromDate, toDate: toDate)
+            let newSettings = HabitSettings(fromDate: fromDate)
             modelContext.insert(newSettings)
             habitSettings = newSettings
             try? modelContext.save()
