@@ -117,10 +117,12 @@ struct DailyNotesView: View {
     @State private var scheduleInterval: String = ""
     @State private var scheduleGap: String = ""
     @State private var scheduleTaskName: String = ""
-    @State private var notesDebounceTimer: Timer?
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
     @State private var lastReminderTime: Date?
     @State private var reminderTimer: Timer?
+    @State private var showMotivation = false
+    @State private var motivationText = ""
+    @State private var isGeneratingMotivation = false
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -200,18 +202,32 @@ struct DailyNotesView: View {
                 // Simple Cycles Section
                 Section("Smart Cycles") {
                     VStack(spacing: 12) {
-                        Toggle(isOn: $useCycles) {
-                            Text("Auto-start cycles from schedule")
-                                .font(.headline)
-                        }
-                        .onChange(of: useCycles) { _, newValue in
-                            // Save the toggle state to UserDefaults
-                            UserDefaults.standard.set(newValue, forKey: "DailyNotesView.useCycles")
+                        HStack {
+                            Toggle(isOn: $useCycles) {
+                                Text("Auto-start cycles from schedule")
+                                    .font(.headline)
+                            }
+                            .onChange(of: useCycles) { _, newValue in
+                                // Save the toggle state to UserDefaults
+                                UserDefaults.standard.set(newValue, forKey: "DailyNotesView.useCycles")
+                                
+                                if newValue {
+                                    startSmartCycles()
+                                } else {
+                                    stopCycles()
+                                }
+                            }
                             
-                            if newValue {
-                                startSmartCycles()
-                            } else {
-                                stopCycles()
+                            if useCycles {
+                                Button(action: {
+                                    startSmartCycles()
+                                }) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.body)
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                         }
                         
@@ -254,6 +270,167 @@ struct DailyNotesView: View {
                     RichTextEditor(text: $notesText)
                         .frame(height: 300)
                         .id(editorKey)
+                    
+                    // AI Tags Help
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("💡 AI Tags")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.blue)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 4) {
+                                Text("\"motivate\"")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange)
+                                    .cornerRadius(4)
+                                
+                                Text("or")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                
+                                Text("#motivate")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange)
+                                    .cornerRadius(4)
+                                
+                                Text("→ Intense action-focused motivation")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            HStack(spacing: 4) {
+                                Text("\"end\"")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.purple)
+                                    .cornerRadius(4)
+                                
+                                Text("or")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                
+                                Text("#end")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.purple)
+                                    .cornerRadius(4)
+                                
+                                Text("→ End-of-day reflection & growth")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Text("No tags → Standard motivational message")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .italic()
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                }
+                
+                // Motivation Section
+                Section {
+                    VStack(spacing: 12) {
+                        Button(action: {
+                            generateMotivation()
+                        }) {
+                            HStack {
+                                Image(systemName: isGeneratingMotivation ? "hourglass" : "sparkles")
+                                    .foregroundColor(.white)
+                                Text(isGeneratingMotivation ? "Generating..." : "Generate Motivation")
+                                    .fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(
+                                LinearGradient(
+                                    colors: [Color.orange, Color.pink],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                        }
+                        .disabled(isGeneratingMotivation || currentTaskName.isEmpty)
+                        
+                        if currentTaskName.isEmpty {
+                            Text("Start a task cycle to generate motivation")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .italic()
+                        } else {
+                            Text("Current task: \(currentTaskName)")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                        
+                        if !motivationText.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "quote.opening")
+                                        .foregroundColor(.orange)
+                                        .font(.caption)
+                                    Text("Your Motivation")
+                                        .font(.headline)
+                                        .foregroundColor(.orange)
+                                    Spacer()
+                                    Button(action: {
+                                        motivationText = ""
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.gray)
+                                    }
+                                }
+                                
+                                Text(motivationText)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                    .padding()
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color.orange.opacity(0.1), Color.pink.opacity(0.1)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .cornerRadius(12)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(
+                                                LinearGradient(
+                                                    colors: [Color.orange.opacity(0.3), Color.pink.opacity(0.3)],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                ),
+                                                lineWidth: 2
+                                            )
+                                    )
+                            }
+                        }
+                    }
+                } header: {
+                    Label("Motivation", systemImage: "flame.fill")
+                        .foregroundColor(.orange)
                 }
                 
                 Section("Schedule Generator") {
@@ -333,6 +510,15 @@ struct DailyNotesView: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .keyboard) {
+                    Button("Done") {
+                        hideKeyboard()
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                hideKeyboard()
             }
             .onAppear {
                 loadNotesForDate(selectedDate)
@@ -350,23 +536,10 @@ struct DailyNotesView: View {
                 stopCountdownTimer()
                 cycleEndObserver?.cancel()
                 speechManager.stopSpeaking()
-                notesDebounceTimer?.invalidate()
                 reminderTimer?.invalidate()
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
-            }
-            .onChange(of: notesText) { _, _ in
-                // Debounce: Cancel previous timer and start a new one
-                notesDebounceTimer?.invalidate()
-                notesDebounceTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
-                    // If cycles are enabled, update them when notes change (after 1 second of no typing)
-                    DispatchQueue.main.async {
-                        if self.useCycles {
-                            self.startSmartCycles()
-                        }
-                    }
-                }
             }
         }
     }
@@ -727,7 +900,9 @@ struct DailyNotesView: View {
                 // Currently in a scheduled task
                 self.currentTaskName = currentEntry.description
                 let remainingMinutes = currentEntry.endMinutes - currentMinutes
-                self.currentCycleDuration = remainingMinutes
+                // Store the ORIGINAL duration, not remaining time
+                let originalDuration = currentEntry.endMinutes - currentEntry.startMinutes
+                self.currentCycleDuration = originalDuration
                 
                 // Start cycle for remaining time
                 self.startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
@@ -1192,6 +1367,40 @@ struct DailyNotesView: View {
         }
         
         try? modelContext.save()
+    }
+    
+    private func generateMotivation() {
+        guard !currentTaskName.isEmpty else { return }
+        
+        isGeneratingMotivation = true
+        
+        _Concurrency.Task {
+            do {
+                let openAI = OpenAIService()
+                
+                // Get persistent notes for context
+                let persistentNotes = todayNote?.content
+                
+                // Generate motivation using the standard prompt (no tags)
+                let motivation = try await openAI.generateWhyStatement(
+                    for: currentTaskName,
+                    description: "",
+                    persistentNotes: persistentNotes,
+                    notes: nil  // Don't pass current notes to avoid tag detection
+                )
+                
+                await MainActor.run {
+                    self.motivationText = motivation
+                    self.isGeneratingMotivation = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.motivationText = "Failed to generate motivation. Please check your API key and try again."
+                    self.isGeneratingMotivation = false
+                }
+                print("Error generating motivation: \(error)")
+            }
+        }
     }
     
     private func adjustTimesInNotes() {
@@ -1892,10 +2101,12 @@ struct DailyNotesView: View {
             // Currently in a scheduled task
             currentTaskName = currentEntry.description
             let remainingMinutes = currentEntry.endMinutes - currentMinutes
-            currentCycleDuration = remainingMinutes
+            // Store the ORIGINAL duration, not remaining time
+            let originalDuration = currentEntry.endMinutes - currentEntry.startMinutes
+            currentCycleDuration = originalDuration
             
             if remainingMinutes > 0 {
-                print("🎯 Starting task cycle: \(currentEntry.description) for \(remainingMinutes) minutes")
+                print("🎯 Starting task cycle: \(currentEntry.description) for \(remainingMinutes) minutes (original: \(originalDuration) min)")
                 print("   Task window: \(safeMinutesToTime(currentEntry.startMinutes)) - \(safeMinutesToTime(currentEntry.endMinutes))")
                 // Small delay to ensure clean state transition
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -2037,6 +2248,10 @@ struct DailyNotesView: View {
         speechManager.speak(message)
         
         print("🔔 Reminder: \(message) for task: \(currentTaskName)")
+    }
+    
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
 

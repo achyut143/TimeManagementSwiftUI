@@ -47,6 +47,10 @@ class HabitArchiveService {
         let weeklyRates = calculateWeeklyCompletionRates(habitTasks: habitTasks, startDate: startDate, endDate: endDate, repeatFrequency: repeatFrequency)
         let monthlyRates = calculateMonthlyCompletionRates(habitTasks: habitTasks, startDate: startDate, endDate: endDate, repeatFrequency: repeatFrequency)
         
+        // Sanitize arrays to ensure they're clean Double arrays (no strings or mixed types)
+        let cleanWeeklyRates = weeklyRates.map { Double($0) }
+        let cleanMonthlyRates = monthlyRates.map { Double($0) }
+        
         // Calculate additional statistics
         let weeklyStats = calculateWeeklyStats(habitTasks: habitTasks, startDate: startDate, endDate: endDate)
         let averageDaysBetweenCompletions = calculateAverageDaysBetweenCompletions(completedTasks: completedTasks)
@@ -69,8 +73,8 @@ class HabitArchiveService {
             firstCompletionDate: firstCompletionDate,
             lastCompletionDate: lastCompletionDate,
             totalTasks: totalTasks,
-            weeklyCompletionRates: weeklyRates,
-            monthlyCompletionRates: monthlyRates,
+            weeklyCompletionRates: cleanWeeklyRates,
+            monthlyCompletionRates: cleanMonthlyRates,
             bestWeekCompletions: weeklyStats.best,
             worstWeekCompletions: weeklyStats.worst,
             averageDaysBetweenCompletions: averageDaysBetweenCompletions

@@ -172,14 +172,11 @@ struct HabitDashboardView: View {
                     saveStartDate()
                 }
             
-            HStack {
-                Text("End Date: Today")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text(toDate, style: .date)
-                    .font(.subheadline)
-            }
+            DatePicker("End Date", selection: $toDate, displayedComponents: .date)
+                .datePickerStyle(.compact)
+                .onChange(of: toDate) { _, newValue in
+                    saveStartDate()
+                }
         }
         .padding(.horizontal)
     }
@@ -192,7 +189,7 @@ struct HabitDashboardView: View {
         if let savedDate = UserDefaults.standard.object(forKey: Self.startDateKey) as? Date {
             fromDate = savedDate
         }
-        // Always set toDate to today
+        // Set toDate to today by default
         toDate = Date()
     }
     

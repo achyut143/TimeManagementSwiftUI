@@ -290,14 +290,10 @@ struct ActivityWindowChartView: View {
                                 saveStartDate()
                             }
                         
-                        HStack {
-                            Text("End Date: Today")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(endDate, style: .date)
-                                .font(.subheadline)
-                        }
+                        DatePicker("End Date", selection: $endDate, displayedComponents: .date)
+                            .onChange(of: endDate) { _, _ in
+                                saveStartDate()
+                            }
                         
                         HStack(spacing: 12) {
                             switch aggregationMode {
@@ -478,6 +474,26 @@ struct ActivityWindowChartView: View {
                                     .font(.system(size: 8))
                             }
                         }
+                        
+                        // Total windows line (used + overdraft) - purple
+                        if data.total > 0 {
+                            LineMark(
+                                x: .value("Date", data.date, unit: .day),
+                                y: .value("Windows", data.total)
+                            )
+                            .foregroundStyle(.purple)
+                            .lineStyle(StrokeStyle(lineWidth: 2, dash: [3, 3]))
+                            .interpolationMethod(.catmullRom)
+                            .symbol {
+                                Circle()
+                                    .fill(.purple)
+                                    .frame(width: 10, height: 10)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(.white, lineWidth: 2)
+                                    )
+                            }
+                        }
                     }
                 }
                 .chartXAxis {
@@ -501,7 +517,7 @@ struct ActivityWindowChartView: View {
                 }
                 .chartLegend(position: .bottom) {
                     VStack(spacing: 8) {
-                        HStack(spacing: 16) {
+                        HStack(spacing: 12) {
                             HStack(spacing: 4) {
                                 Circle()
                                     .fill(.blue)
@@ -526,11 +542,23 @@ struct ActivityWindowChartView: View {
                                     .font(.caption)
                                     .fontWeight(.medium)
                             }
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(.purple)
+                                    .frame(width: 10, height: 10)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(.white, lineWidth: 1.5)
+                                    )
+                                Text("Total")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
                         }
-                        Text("Tip: Blue area = allocated windows, Green area = used windows, Red area = overdraft")
+                        Text("Total = Used + Overdraft")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
+                            .foregroundColor(.purple)
+                            .fontWeight(.medium)
                         
                         // Show aggregation mode
                         Text(aggregationModeDescription)
@@ -578,6 +606,15 @@ struct ActivityWindowChartView: View {
                         Text("\(totalOverdraft)")
                             .fontWeight(.semibold)
                     }
+                }
+                
+                HStack {
+                    Label("Total (Used + Overdraft)", systemImage: "diamond.fill")
+                        .foregroundColor(.purple)
+                    Spacer()
+                    Text("\(totalUsed + totalOverdraft)")
+                        .fontWeight(.bold)
+                        .foregroundColor(.purple)
                 }
                 
                 Divider()
@@ -640,6 +677,10 @@ struct DailyWindowData: Identifiable {
     let used: Int
     let overdraft: Int
     let label: String
+    
+    var total: Int {
+        return used + overdraft
+    }
 }
 
 enum AggregationMode {

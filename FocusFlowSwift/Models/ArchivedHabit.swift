@@ -24,11 +24,30 @@ class ArchivedHabit {
     // Additional statistics
     var totalTasks: Int // Total number of habit tasks created
     
-    @Attribute(.transformable(by: "NSSecureUnarchiveFromData"))
-    var weeklyCompletionRates: [Double] // Weekly completion rates throughout the habit's life
+    // Store as JSON Data to avoid transformer issues with corrupted data
+    var weeklyCompletionRatesData: Data? // Weekly completion rates as JSON
+    var monthlyCompletionRatesData: Data? // Monthly completion rates as JSON
     
-    @Attribute(.transformable(by: "NSSecureUnarchiveFromData"))
-    var monthlyCompletionRates: [Double] // Monthly completion rates
+    // Computed properties for easy access
+    var weeklyCompletionRates: [Double] {
+        get {
+            guard let data = weeklyCompletionRatesData else { return [] }
+            return (try? JSONDecoder().decode([Double].self, from: data)) ?? []
+        }
+        set {
+            weeklyCompletionRatesData = try? JSONEncoder().encode(newValue)
+        }
+    }
+    
+    var monthlyCompletionRates: [Double] {
+        get {
+            guard let data = monthlyCompletionRatesData else { return [] }
+            return (try? JSONDecoder().decode([Double].self, from: data)) ?? []
+        }
+        set {
+            monthlyCompletionRatesData = try? JSONEncoder().encode(newValue)
+        }
+    }
     
     var bestWeekCompletions: Int // Most completions in a single week
     var worstWeekCompletions: Int // Least completions in a single week
@@ -75,8 +94,8 @@ class ArchivedHabit {
         self.lastCompletionDate = lastCompletionDate
         self.archivedDate = Date()
         self.totalTasks = totalTasks
-        self.weeklyCompletionRates = weeklyCompletionRates
-        self.monthlyCompletionRates = monthlyCompletionRates
+        self.weeklyCompletionRatesData = try? JSONEncoder().encode(weeklyCompletionRates)
+        self.monthlyCompletionRatesData = try? JSONEncoder().encode(monthlyCompletionRates)
         self.bestWeekCompletions = bestWeekCompletions
         self.worstWeekCompletions = worstWeekCompletions
         self.averageDaysBetweenCompletions = averageDaysBetweenCompletions

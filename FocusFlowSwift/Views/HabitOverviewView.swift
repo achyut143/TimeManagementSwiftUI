@@ -833,14 +833,11 @@ struct HabitOverviewView: View {
                                     saveDateSettings()
                                 }
                             
-                            HStack {
-                                Text("End Date: Today")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Text(toDate, style: .date)
-                                    .font(.subheadline)
-                            }
+                            DatePicker("End Date", selection: $toDate, displayedComponents: .date)
+                                .datePickerStyle(.compact)
+                                .onChange(of: toDate) { _, newValue in
+                                    saveDateSettings()
+                                }
                         }
                     }
                     
@@ -1132,9 +1129,6 @@ struct HabitOverviewView: View {
     }
     
     private func saveDateSettings() {
-        // Always set toDate to today (not stored, just updated in state)
-        toDate = Date()
-        
         if let settings = habitSettings {
             settings.updateFromDate(fromDate, context: modelContext)
         } else {
