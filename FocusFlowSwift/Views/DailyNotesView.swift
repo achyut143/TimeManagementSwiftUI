@@ -267,9 +267,23 @@ struct DailyNotesView: View {
                 }
                 
                 Section("Daily Notes") {
-                    RichTextEditor(text: $notesText)
-                        .frame(height: 300)
-                        .id(editorKey)
+                    VStack(spacing: 8) {
+                        RichTextEditor(text: $notesText)
+                            .frame(height: 300)
+                            .id(editorKey)
+                        
+                        Button(action: {
+                            hideKeyboard()
+                        }) {
+                            HStack {
+                                Image(systemName: "keyboard.chevron.compact.down")
+                                Text("Done Editing")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     
                     // AI Tags Help
                     VStack(alignment: .leading, spacing: 8) {
@@ -498,8 +512,25 @@ struct DailyNotesView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .principal) {
+                    Button(action: {
+                        saveNotes()
+                        // If cycles are enabled, restart them with updated notes
+                        DispatchQueue.main.async {
+                            if self.useCycles {
+                                self.startSmartCycles()
+                            }
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Save")
+                        }
+                        .font(.headline)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button("Done") {
                         saveNotes()
                         // If cycles are enabled, restart them with updated notes
                         DispatchQueue.main.async {
@@ -515,10 +546,6 @@ struct DailyNotesView: View {
                         hideKeyboard()
                     }
                 }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                hideKeyboard()
             }
             .onAppear {
                 loadNotesForDate(selectedDate)
@@ -743,17 +770,23 @@ struct DailyNotesView: View {
                 }
             }
             
-            // Smart Pause button (separate from regular pause)
-            if settings.isPlaying {
-                Button(pausedAt != nil ? "Smart Resume" : "Smart Pause") {
-                    DispatchQueue.main.async {
-                        self.handleSmartPause()
-                    }
+            // Smart Pause button (separate from regular pause) - ALWAYS VISIBLE FOR DEBUG
+            Button(action: {
+                print("🔘 Smart Pause button ACTION triggered")
+                print("🔘 settings.isPlaying: \(settings.isPlaying)")
+                print("🔘 pausedAt: \(pausedAt?.description ?? "nil")")
+                if settings.isPlaying {
+                    handleSmartPause()
+                } else {
+                    print("⚠️ Cannot use Smart Pause - no cycle is running")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(pausedAt != nil ? .green : .orange)
-                .frame(maxWidth: .infinity)
+            }) {
+                Text(pausedAt != nil ? "Smart Resume" : "Smart Pause")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(pausedAt != nil ? .green : (settings.isPlaying ? .orange : .gray))
+            .disabled(!settings.isPlaying)
             
             // Show pause duration if smart paused
             if pausedAt != nil, let pausedAtTime = pausedAt {
@@ -1058,11 +1091,15 @@ struct DailyNotesView: View {
     // MARK: - Smart Pause/Resume Logic
     
     private func handleSmartPause() {
+        print("🔘 Smart Pause button clicked, pausedAt: \(pausedAt?.description ?? "nil")")
+        
         if pausedAt != nil {
             // Resume - calculate pause duration and adjust schedule
+            print("▶️ Resuming from smart pause")
             resumeWithScheduleAdjustment()
         } else {
             // Pause - record the pause time AND pause the timer
+            print("⏸️ Starting smart pause")
             pausedAt = Date()
             savePauseState()
             
@@ -1072,7 +1109,7 @@ struct DailyNotesView: View {
             let announcement = "Smart pause activated. Schedule will adjust on resume."
             speechManager.speak(announcement)
             
-            print("⏸️ Smart Paused at \(currentTimeString)")
+            print("⏸️ Smart Paused at \(currentTimeString), pausedAt now: \(pausedAt?.description ?? "nil")")
         }
     }
     
