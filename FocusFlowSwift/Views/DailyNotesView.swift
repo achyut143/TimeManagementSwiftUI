@@ -118,7 +118,6 @@ struct DailyNotesView: View {
     @State private var scheduleGap: String = ""
     @State private var scheduleTaskName: String = ""
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
-    @State private var lastReminderTime: Date?
     @State private var reminderTimer: Timer?
     @State private var showMotivation = false
     @State private var motivationText = ""
@@ -2230,8 +2229,8 @@ struct DailyNotesView: View {
             return
         }
         
-        // Reset last reminder time
-        lastReminderTime = Date()
+        // Track the last minute we gave a reminder for (to avoid duplicates)
+        var lastReminderMinute: Int? = nil
         
         // Create a timer that checks every second
         reminderTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -2241,16 +2240,23 @@ struct DailyNotesView: View {
                 return
             }
             
-            // Check if it's time for a reminder
-            if let lastReminder = self.lastReminderTime {
-                let timeSinceLastReminder = Date().timeIntervalSince(lastReminder)
-                let intervalSeconds = TimeInterval(intervalMinutes * 60)
-                
-                if timeSinceLastReminder >= intervalSeconds {
-                    // Time for a reminder
-                    self.giveTimeReminder()
-                    self.lastReminderTime = Date()
-                }
+            // Calculate remaining time
+            let remaining = self.settings.nextAlertDate.timeIntervalSinceNow
+            guard remaining > 0 else {
+                return
+            }
+            
+            let remainingMinutes = Int(ceil(remaining / 60.0))
+            
+            // Check if this is an aligned reminder time (multiple of interval)
+            let isAlignedReminder = remainingMinutes % intervalMinutes == 0
+            
+            // Only give reminder if:
+            // 1. It's an aligned time (e.g., 25, 20, 15, 10, 5 for 5-min interval)
+            // 2. We haven't already given a reminder for this minute
+            if isAlignedReminder && lastReminderMinute != remainingMinutes {
+                self.giveTimeReminder()
+                lastReminderMinute = remainingMinutes
             }
         }
         
@@ -2260,7 +2266,6 @@ struct DailyNotesView: View {
     private func stopReminderTimer() {
         reminderTimer?.invalidate()
         reminderTimer = nil
-        lastReminderTime = nil
     }
     
     private func giveTimeReminder() {
@@ -2272,6 +2277,20 @@ struct DailyNotesView: View {
         }
         
         let remainingMinutes = Int(ceil(remaining / 60.0))
+        
+        // Check if reminder interval is set
+        guard let intervalMinutes = Int(reminderInterval), intervalMinutes > 0 else {
+            return
+        }
+        
+        // Only give reminder if remaining time is a multiple of the interval
+        // This ensures reminders happen at 25, 20, 15, 10, 5, 0 for a 5-minute interval
+        let isAlignedReminder = remainingMinutes % intervalMinutes == 0
+        
+        guard isAlignedReminder else {
+            // Not an aligned reminder time, skip
+            return
+        }
         
         // Create reminder message
         let message: String
