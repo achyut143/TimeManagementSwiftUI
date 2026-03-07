@@ -37,6 +37,7 @@ struct TasksCalendarView: View {
     @State private var showQuickTaskInput = false
     @State private var quickTaskInput = ""
     @State private var showUntimedTasks = false
+    @State private var showMarkAllNotCompletedConfirmation = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     var body: some View {
@@ -90,7 +91,7 @@ struct TasksCalendarView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack {
                     Button {
-                        markAllTasksAsNotCompleted()
+                        showMarkAllNotCompletedConfirmation = true
                     } label: {
                         Image(systemName: "xmark.circle")
                             .foregroundColor(.red)
@@ -131,6 +132,19 @@ struct TasksCalendarView: View {
             }
         } message: {
             Text("Are you sure you want to delete this task?")
+        }
+        .alert("Mark All as Not Completed", isPresented: $showMarkAllNotCompletedConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Mark All", role: .destructive) {
+                markAllTasksAsNotCompleted()
+            }
+        } message: {
+            let count = tasks.filter { task in
+                guard let taskDate = task.date else { return false }
+                let isSameDay = Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+                return isSameDay && !task.completed && !task.notCompleted
+            }.count
+            Text("This will mark \(count) task(s) as not completed for \(selectedDate.formatted(date: .abbreviated, time: .omitted)). Continue?")
         }
         .sheet(isPresented: $showTaskActions) {
             if let task = selectedTaskForActions {
