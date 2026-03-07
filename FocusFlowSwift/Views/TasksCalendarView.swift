@@ -88,8 +88,17 @@ struct TasksCalendarView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: TaskTableView()) {
-                    Image(systemName: "list.bullet")
+                HStack {
+                    Button {
+                        markAllTasksAsNotCompleted()
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                            .foregroundColor(.red)
+                    }
+                    
+                    NavigationLink(destination: TaskTableView()) {
+                        Image(systemName: "list.bullet")
+                    }
                 }
             }
         }
@@ -129,6 +138,7 @@ struct TasksCalendarView: View {
                     .presentationDetents([.medium])
             }
         }
+        .environment(\.isTaskFormPresented, showTaskCreation)
 
     }
     
@@ -1021,6 +1031,31 @@ struct TasksCalendarView: View {
         updateQuery()
     }
     
+    private func markAllTasksAsNotCompleted() {
+        // Filter tasks for the current selected date that are not already marked as completed or not completed
+        let tasksToMark = tasks.filter { task in
+            guard let taskDate = task.date else { return false }
+            let isSameDay = Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+            return isSameDay && !task.completed && !task.notCompleted
+        }
+        
+        // Mark each task as not completed using the existing logic
+        for task in tasksToMark {
+            task.notCompleted = true
+            
+            if !task.reassign {
+                createRepeatTask(from: task)
+            }
+            
+            if task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1) {
+                createIncompleteTask(from: task)
+            }
+        }
+        
+        try? modelContext.save()
+        updateQuery()
+    }
+    
     private func createTaskFromSeparateFields() {
         guard !taskTitle.isEmpty else { return }
         
@@ -1221,6 +1256,54 @@ struct TasksCalendarView: View {
                 copySubtaskRecursively(childSubtask, to: task, parentSubtask: newSubtask)
             }
         }
+    }
+    
+    private func createIncompleteTask(from task: Task) {
+        guard let currentDate = task.date else { return }
+        
+        let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        
+        // Check if task already exists
+        let descriptor = FetchDescriptor<Task>()
+        do {
+            let existingTasks = try modelContext.fetch(descriptor)
+            let taskExists = existingTasks.contains { existingTask in
+                guard let existingDate = existingTask.date else { return false }
+                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
+                       existingTask.startTime == task.startTime &&
+                       existingTask.endTime == task.endTime &&
+                       existingTask.title == task.title
+            }
+            if taskExists { return }
+        } catch { return }
+        
+        let newTask = Task(
+            title: task.title,
+            taskDescription: task.taskDescription,
+            startTime: task.startTime,
+            endTime: task.endTime,
+            reassign: true,
+            weight: task.weight,
+            persistentNotes: task.persistentNotes,
+            date: nextDate,
+            repeatAgain: task.repeatAgain,
+            priority: task.priority,
+            elapsedTime: task.elapsedTime,
+            copySubtasks: task.copySubtasks,
+            whyStatement: task.whyStatement,
+            whyStatementPinned: task.whyStatementPinned
+        )
+        
+        modelContext.insert(newTask)
+        
+        // Copy subtasks if the toggle is enabled
+        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
+            for subtask in subtasks {
+                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
+            }
+        }
+        
+        try? modelContext.save()
     }
     
     private func updateTaskTime(_ task: Task, to slot: TimeSlot) {

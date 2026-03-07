@@ -266,23 +266,9 @@ struct DailyNotesView: View {
                 }
                 
                 Section("Daily Notes") {
-                    VStack(spacing: 8) {
-                        RichTextEditor(text: $notesText)
-                            .frame(height: 300)
-                            .id(editorKey)
-                        
-                        Button(action: {
-                            hideKeyboard()
-                        }) {
-                            HStack {
-                                Image(systemName: "keyboard.chevron.compact.down")
-                                Text("Done Editing")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                        }
-                        .buttonStyle(.bordered)
-                    }
+                    RichTextEditor(text: $notesText)
+                        .frame(height: 300)
+                        .id(editorKey)
                     
                     // AI Tags Help
                     VStack(alignment: .leading, spacing: 8) {
@@ -513,6 +499,7 @@ struct DailyNotesView: View {
                 }
                 ToolbarItem(placement: .principal) {
                     Button(action: {
+                        hideKeyboard()
                         saveNotes()
                         // If cycles are enabled, restart them with updated notes
                         DispatchQueue.main.async {
@@ -530,6 +517,7 @@ struct DailyNotesView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        hideKeyboard()
                         saveNotes()
                         // If cycles are enabled, restart them with updated notes
                         DispatchQueue.main.async {

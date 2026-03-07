@@ -3,6 +3,7 @@ import SwiftData
 
 struct QuickActivityButton: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.isTaskFormPresented) private var isTaskFormPresented
     @Query(filter: #Predicate<ScheduledActivity> { $0.isActive }, sort: \ScheduledActivity.createdAt, order: .reverse)
     private var activities: [ScheduledActivity]
     
@@ -51,8 +52,8 @@ struct QuickActivityButton: View {
                 Spacer()
                 
                 VStack(spacing: 12) {
-                    // Quick Activities List Button
-                    if !activities.isEmpty {
+                    // Quick Activities List Button - hide when task form is presented
+                    if !activities.isEmpty && !isTaskFormPresented {
                         Button {
                             // Force refresh the model context before opening
                             modelContext.processPendingChanges()
@@ -66,9 +67,17 @@ struct QuickActivityButton: View {
                                         .frame(width: 50, height: 50)
                                         .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
                                     
-                                    Image(systemName: hasActiveWindow ? "clock.badge.checkmark.fill" : "clock.fill")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white)
+                                    VStack(spacing: 2) {
+                                        Image(systemName: hasActiveWindow ? "clock.badge.checkmark.fill" : "clock.fill")
+                                            .font(.system(size: 16))
+                                            .foregroundColor(.white)
+                                        
+                                        if !hasActiveWindow {
+                                            Text("Low level")
+                                                .font(.system(size: 6, weight: .semibold))
+                                                .foregroundColor(.white.opacity(0.9))
+                                        }
+                                    }
                                 }
                                 
                                 // Notification badge for daily credits
@@ -110,7 +119,9 @@ struct QuickActivitiesListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     
-    let activities: [ScheduledActivity] // Passed from parent instead of querying
+    // Query directly instead of using passed activities
+    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive }, sort: \ScheduledActivity.createdAt, order: .reverse)
+    private var activities: [ScheduledActivity]
     
     @State private var currentTime = Date()
     @State private var selectedActivity: ScheduledActivity?
@@ -124,7 +135,7 @@ struct QuickActivitiesListView: View {
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     init(activities: [ScheduledActivity], refreshTrigger: UUID) {
-        self.activities = activities
+        // We ignore the passed activities and query directly
         _refreshTrigger = State(initialValue: refreshTrigger)
     }
     
@@ -295,7 +306,8 @@ struct QuickActivitiesListView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        // Just toggle refresh trigger - parent handles data refresh
+                        // Force refresh from database
+                        modelContext.processPendingChanges()
                         refreshTrigger = UUID()
                         forceRefresh.toggle()
                         currentTime = Date()
@@ -345,11 +357,13 @@ struct QuickActivitiesListView: View {
         }
         .onReceive(timer) { _ in
             currentTime = Date()
-            // No need to process pending changes here since we're using parent's data
+            // Process pending changes to pick up database updates
+            modelContext.processPendingChanges()
             forceRefresh.toggle()
         }
         .onAppear {
-            // No need to process pending changes here since we're using parent's data
+            // Refresh data when view appears
+            modelContext.processPendingChanges()
             forceRefresh.toggle()
         }
     }
@@ -399,112 +413,13 @@ struct QuickActivityRowView: View {
     let onUseCredits: () -> Void
     
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(activity.name)
-                        .font(.headline)
-                    
-                    Spacer()
-                }
+        HStack(spacing: 12) {
+            // Left side: Button and activity info
+            VStack(alignment: .leading, spacing: 8) {
+                Text(activity.name)
+                    .font(.headline)
                 
-                // Make countdown more prominent with red color
-                if activity.isInActiveWindow() {
-                    if let windowEnd = activity.currentWindowEndTime() {
-                        let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
-                        HStack(spacing: 6) {
-                            Image(systemName: "timer")
-                                .font(.title3)
-                                .foregroundColor(.red)
-                            Text(timeString(from: remaining))
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.red)
-                                .monospacedDigit()
-                            Text("left")
-                                .font(.subheadline)
-                                .foregroundColor(.red)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                } else if let nextTime = activity.nextScheduledTime() {
-                    let timeUntilNext = nextTime.timeIntervalSince(currentTime)
-                    HStack(spacing: 6) {
-                        Image(systemName: "clock")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                        Text("Next in")
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                        Text(timeString(from: timeUntilNext))
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.blue)
-                            .monospacedDigit()
-                    }
-                }
-                
-                // Put reward and task metrics below countdown
-                HStack(spacing: 8) {
-                    // Show reward count if there are accumulated credits
-                    if activity.accumulatedWindowCredits > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "gift.fill")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                            Text("\(activity.accumulatedWindowCredits)")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.orange)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(4)
-                    }
-                    
-                    // Show attached reward if configured
-                    if activity.hasRewardAttachment {
-                        HStack(spacing: 4) {
-                            Image(systemName: activity.effectiveRewardBurnType.icon)
-                                .font(.caption)
-                                .foregroundColor(.purple)
-                            Text(activity.formattedBurnAmount())
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.purple)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.purple.opacity(0.1))
-                        .cornerRadius(4)
-                    }
-                    
-                    // Show attached task if configured
-                    if activity.hasTaskAttachment {
-                        HStack(spacing: 4) {
-                            Image(systemName: "clock.badge.plus.fill")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                            Text(activity.formattedTaskTime())
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.blue)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(4)
-                    }
-                    
-                    Spacer()
-                }
-            }
-            
-            Spacer()
-            
-            HStack(spacing: 8) {
-                // Always show a Use button - it opens the sheet with credits/overdraft options
+                // Button moved to left side
                 Button {
                     onUseCredits()
                 } label: {
@@ -539,19 +454,122 @@ struct QuickActivityRowView: View {
                     )
                     .cornerRadius(8)
                 }
+                
+                // Reward and task metrics
+                HStack(spacing: 8) {
+                    if activity.accumulatedWindowCredits > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "gift.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Text("\(activity.accumulatedWindowCredits)")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.orange)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                    
+                    if activity.hasRewardAttachment {
+                        HStack(spacing: 4) {
+                            Image(systemName: activity.effectiveRewardBurnType.icon)
+                                .font(.caption)
+                                .foregroundColor(.purple)
+                            Text(activity.formattedBurnAmount())
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.purple)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.purple.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                    
+                    if activity.hasTaskAttachment {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.badge.plus.fill")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                            Text(activity.formattedTaskTime())
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+                }
+            }
+            
+            Spacer()
+            
+            // Right side: Large prominent timer
+            if activity.isInActiveWindow() {
+                if let windowEnd = activity.currentWindowEndTime() {
+                    let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
+                    VStack(spacing: 4) {
+                        Text(timeString(from: remaining))
+                            .font(.system(size: 36, weight: .bold, design: .rounded))
+                            .foregroundColor(.red)
+                            .monospacedDigit()
+                        
+                        HStack(spacing: 4) {
+                            Image(systemName: "timer")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                            Text("left")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(12)
+                }
+            } else if let nextTime = activity.nextScheduledTime() {
+                let timeUntilNext = nextTime.timeIntervalSince(currentTime)
+                VStack(spacing: 4) {
+                    Text(timeString(from: timeUntilNext))
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundColor(.blue)
+                        .monospacedDigit()
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+                        Text("next")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(.blue)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(10)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
     }
     
     private func timeString(from interval: TimeInterval) -> String {
         let hours = Int(interval) / 3600
         let minutes = (Int(interval) % 3600) / 60
+        let seconds = Int(interval) % 60
         
         if hours > 0 {
-            return "\(hours)h \(minutes)m"
+            return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", seconds))"
         } else {
-            return "\(minutes)m"
+            return "\(minutes):\(String(format: "%02d", seconds))"
         }
     }
 }
@@ -856,6 +874,18 @@ struct CreditUseView: View {
         } else {
             return "\(minutes)m"
         }
+    }
+}
+
+// MARK: - Environment Key for Task Form Presentation
+private struct IsTaskFormPresentedKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+extension EnvironmentValues {
+    var isTaskFormPresented: Bool {
+        get { self[IsTaskFormPresentedKey.self] }
+        set { self[IsTaskFormPresentedKey.self] = newValue }
     }
 }
 

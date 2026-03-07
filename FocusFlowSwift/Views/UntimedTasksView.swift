@@ -82,6 +82,16 @@ struct UntimedTasksView: View {
         }
         .navigationTitle("Untimed Tasks")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    markAllTasksAsNotCompleted()
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .foregroundColor(.red)
+                }
+            }
+        }
         .onAppear {
             updateQuery()
         }
@@ -526,6 +536,31 @@ struct UntimedTasksView: View {
     
     private func deleteTask(_ task: Task) {
         modelContext.delete(task)
+        try? modelContext.save()
+        updateQuery()
+    }
+    
+    private func markAllTasksAsNotCompleted() {
+        // Filter tasks for the current selected date that are not already marked as completed or not completed
+        let tasksToMark = tasks.filter { task in
+            guard let taskDate = task.date else { return false }
+            let isSameDay = Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
+            return isSameDay && !task.completed && !task.notCompleted
+        }
+        
+        // Mark each task as not completed using the existing logic
+        for task in tasksToMark {
+            task.notCompleted = true
+            
+            if !task.reassign {
+                createRepeatTask(from: task)
+            }
+            
+            if task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1) {
+                createIncompleteTask(from: task)
+            }
+        }
+        
         try? modelContext.save()
         updateQuery()
     }
