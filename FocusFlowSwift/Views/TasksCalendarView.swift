@@ -34,7 +34,7 @@ struct TasksCalendarView: View {
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
     @State private var showTaskCreation = false
-    @State private var showQuickTaskInput = false
+    @State private var showQuickTaskInput = true
     @State private var quickTaskInput = ""
     @State private var showUntimedTasks = false
     @State private var showMarkAllNotCompletedConfirmation = false
@@ -47,6 +47,9 @@ struct TasksCalendarView: View {
             HStack {
                 Button(showTaskCreation ? "Close" : "Add Task") {
                     showTaskCreation.toggle()
+                    if !showTaskCreation {
+                        showQuickTaskInput = true // reset to Quick Task for next open
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 
@@ -157,24 +160,32 @@ struct TasksCalendarView: View {
     }
     
     private var quickTaskInputView: some View {
-        QuickTaskInputView(input: $quickTaskInput) { parsedTask in
+        QuickTaskInputView(input: $quickTaskInput, onSubmit: { parsedTask in
             createQuickTask(from: parsedTask)
-        }
+        }, onOpenFullForm: {
+            showQuickTaskInput = false
+        })
     }
     
     private var taskCreationHeader: some View {
         VStack(spacing: 12) {
             HStack {
+                Button(action: { showQuickTaskInput = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.caption)
+                        Text("Quick")
+                            .font(.subheadline)
+                    }
+                    .foregroundStyle(.indigo)
+                }
+
                 Text("Create New Task")
                     .font(.title3)
                     .fontWeight(.medium)
                     .foregroundStyle(.primary)
-                
+
                 Spacer()
-                
-                Toggle("Quick", isOn: $showQuickTaskInput)
-                    .toggleStyle(.button)
-                    .buttonStyle(.bordered)
             }
             
             VStack(spacing: 8) {

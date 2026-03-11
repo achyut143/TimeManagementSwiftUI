@@ -132,15 +132,21 @@ struct BookDetailView: View {
         _Concurrency.Task {
             do {
                 let service = BookQuoteService()
-                let newTexts = try await service.generateQuotes(
+                let generatedQuotes = try await service.generateQuotes(
                     bookTitle: bookTitle,
                     author: author,
                     existingQuotes: existingTexts
                 )
 
                 await MainActor.run {
-                    for text in newTexts {
-                        let quote = BookQuote(text: text, source: .ai, book: book)
+                    for generated in generatedQuotes {
+                        let quote = BookQuote(
+                            text: generated.text,
+                            source: .ai,
+                            chapterNumber: generated.chapterNumber,
+                            chapterName: generated.chapterName,
+                            book: book
+                        )
                         modelContext.insert(quote)
                     }
                     try? modelContext.save()
@@ -182,6 +188,15 @@ struct QuoteRow: View {
                     .background(quote.source == .ai ? Color.blue.opacity(0.15) : Color.green.opacity(0.15))
                     .foregroundColor(quote.source == .ai ? .blue : .green)
                     .cornerRadius(4)
+
+                if let chNum = quote.chapterNumber {
+                    let chLabel = quote.chapterName.map { "Ch.\(chNum) · \($0)" } ?? "Ch.\(chNum)"
+                    Text(chLabel)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
 
                 Text(quote.createdAt.formatted(date: .abbreviated, time: .omitted))
                     .font(.caption2)

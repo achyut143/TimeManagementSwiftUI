@@ -3,8 +3,9 @@ import SwiftUI
 struct QuickTaskInputView: View {
     @Binding var input: String
     let onSubmit: (QuickTaskParser.ParsedTask) -> Void
+    var onOpenFullForm: (() -> Void)? = nil
     @State private var showHelp = false
-    
+
     var body: some View {
         VStack(spacing: 16) {
             HStack {
@@ -16,11 +17,23 @@ struct QuickTaskInputView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.primary)
                 Spacer()
-                
+
                 Button(action: { showHelp.toggle() }) {
                     Image(systemName: showHelp ? "questionmark.circle.fill" : "questionmark.circle")
                         .font(.title3)
                         .foregroundStyle(.blue)
+                }
+
+                if let openFull = onOpenFullForm {
+                    Button(action: openFull) {
+                        HStack(spacing: 4) {
+                            Text("Full Form")
+                                .font(.subheadline)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.indigo)
+                    }
                 }
             }
             

@@ -6,7 +6,7 @@ struct BookQuoteDisplayView: View {
 
     @State private var currentIndex: Int = 0
     @State private var showQuote: Bool = true
-    @State private var quotePool: [(text: String, bookTitle: String, author: String)] = []
+    @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
     @State private var cycleTimer: Timer?
 
     var body: some View {
@@ -52,12 +52,21 @@ struct BookQuoteDisplayView: View {
                             )
                             .id("quote-\(currentIndex)")
 
-                        Text("— \(quote.author), \(quote.bookTitle)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .italic()
-                            .transition(.opacity)
-                            .id("attr-\(currentIndex)")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("— \(quote.author), \(quote.bookTitle)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .italic()
+
+                            if let chNum = quote.chapterNumber {
+                                let chLabel = quote.chapterName.map { "Chapter \(chNum): \($0)" } ?? "Chapter \(chNum)"
+                                Text(chLabel)
+                                    .font(.caption2)
+                                    .foregroundColor(.indigo.opacity(0.7))
+                            }
+                        }
+                        .transition(.opacity)
+                        .id("attr-\(currentIndex)")
                     }
                 }
                 .padding(12)
@@ -83,10 +92,10 @@ struct BookQuoteDisplayView: View {
     }
 
     private func buildQuotePool() {
-        var pool: [(text: String, bookTitle: String, author: String)] = []
+        var pool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
         for book in activeBooks {
             for quote in book.quotes ?? [] {
-                pool.append((text: quote.text, bookTitle: book.title, author: book.author))
+                pool.append((text: quote.text, bookTitle: book.title, author: book.author, chapterNumber: quote.chapterNumber, chapterName: quote.chapterName))
             }
         }
         quotePool = pool.shuffled()
