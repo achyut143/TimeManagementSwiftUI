@@ -1660,8 +1660,7 @@ struct TaskActionsView: View {
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
     @State private var showRewardWorkflows = false
-    @State private var isGeneratingWhy = false
-    @State private var whyGenerationError: String?
+    @State private var showBooksLibrary = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     private var subtaskCount: Int {
@@ -1762,83 +1761,20 @@ struct TaskActionsView: View {
                                 .foregroundStyle(.secondary)
                         }
                         
-                        // Why Statement Section
-                        VStack(spacing: 8) {
-                            if let whyStatement = task.whyStatement {
-                                VStack(spacing: 8) {
-                                    HStack(alignment: .top, spacing: 8) {
-                                        Image(systemName: "lightbulb.fill")
-                                            .foregroundColor(.yellow)
-                                            .font(.caption)
-                                        
-                                        Text(whyStatement)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .multilineTextAlignment(.leading)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                        
-                                        Spacer()
-                                        
-                                        Button(action: {
-                                            task.whyStatementPinned.toggle()
-                                            try? modelContext.save()
-                                        }) {
-                                            Image(systemName: task.whyStatementPinned ? "pin.fill" : "pin.slash")
-                                                .foregroundColor(task.whyStatementPinned ? .blue : .gray)
-                                                .font(.caption)
-                                        }
-                                    }
-                                    
-                                    if !task.whyStatementPinned {
-                                        Button(action: {
-                                            task.whyStatement = nil
-                                            generateWhyStatement()
-                                        }) {
-                                            HStack(spacing: 4) {
-                                                Image(systemName: "arrow.clockwise")
-                                                    .font(.caption2)
-                                                Text("Regenerate")
-                                                    .font(.caption2)
-                                            }
-                                            .foregroundColor(.blue)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .trailing)
-                                    }
-                                }
-                                .padding(12)
-                                .background(Color.yellow.opacity(0.1))
-                                .cornerRadius(8)
-                            } else if isGeneratingWhy {
-                                HStack {
-                                    ProgressView()
-                                        .scaleEffect(0.8)
-                                    Text("Generating your why...")
+                        // Books Quotes Section
+                        VStack(spacing: 6) {
+                            HStack {
+                                Label("Books", systemImage: "books.vertical.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.indigo)
+                                Spacer()
+                                Button(action: { showBooksLibrary = true }) {
+                                    Text("Manage")
                                         .font(.caption)
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(.indigo)
                                 }
-                                .padding(12)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(8)
-                            } else {
-                                // Show placeholder when no why statement exists
-                                HStack {
-                                    Image(systemName: "lightbulb")
-                                        .foregroundColor(.gray)
-                                        .font(.caption)
-                                    Text("Why statement will generate automatically...")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(12)
-                                .background(Color.gray.opacity(0.05))
-                                .cornerRadius(8)
                             }
-                            
-                            if let error = whyGenerationError {
-                                Text(error)
-                                    .font(.caption2)
-                                    .foregroundColor(.red)
-                            }
+                            BookQuoteDisplayView()
                         }
                         .padding(.horizontal)
                     }
@@ -1960,8 +1896,8 @@ struct TaskActionsView: View {
             })
             .presentationDetents([.medium, .large])
         }
-        .onAppear {
-            generateWhyStatement()
+        .sheet(isPresented: $showBooksLibrary) {
+            BooksView()
         }
     }
     
@@ -2182,57 +2118,6 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         modelContext.delete(task)
         try? modelContext.save()
         onTaskDeleted()
-    }
-    
-    private func generateWhyStatement() {
-        // Don't generate if currently generating
-        guard !isGeneratingWhy else {
-            print("⏳ Already generating why statement")
-            return
-        }
-        
-        // Don't regenerate if already exists and is pinned
-        if task.whyStatement != nil && task.whyStatementPinned {
-            print("📌 Why statement already exists and is pinned")
-            return
-        }
-        
-        // Don't generate if statement exists but not pinned (user unpinned it manually)
-        if task.whyStatement != nil && !task.whyStatementPinned {
-            print("🔓 Why statement exists but unpinned - ready to regenerate")
-            // Allow regeneration
-        }
-        
-        print("🚀 Starting why statement generation for: \(task.title)")
-        isGeneratingWhy = true
-        whyGenerationError = nil
-        
-        _Concurrency.Task {
-            do {
-                let openAIService = OpenAIService()
-                print("📡 Calling OpenAI API...")
-                let whyStatement = try await openAIService.generateWhyStatement(
-                    for: task.title,
-                    description: task.taskDescription,
-                    persistentNotes: task.persistentNotes,
-                    notes: task.notes
-                )
-                
-                await MainActor.run {
-                    print("✅ Why statement generated: \(whyStatement)")
-                    task.whyStatement = whyStatement
-                    task.whyStatementPinned = true // Automatically pin after generation
-                    try? modelContext.save()
-                    isGeneratingWhy = false
-                }
-            } catch {
-                await MainActor.run {
-                    whyGenerationError = "Failed to generate why statement: \(error.localizedDescription)"
-                    isGeneratingWhy = false
-                    print("❌ Error generating why statement: \(error)")
-                }
-            }
-        }
     }
     
     private func pasteTask() {

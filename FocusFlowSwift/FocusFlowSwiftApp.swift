@@ -59,10 +59,12 @@ struct FocusFlowSwiftApp: App {
                         backgroundCounter.handleAppDidBecomeActive()
                         // Clean up any delivered notifications when app becomes active
                         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+                        // Check for expired activity windows and award credits
+                        NotificationCenter.default.post(name: NSNotification.Name("CheckExpiredWindows"), object: nil)
                     }
             }
         }
-        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self])
+        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, Reward.self, RewardTransaction.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self, Book.self, BookQuote.self])
     }
     
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {

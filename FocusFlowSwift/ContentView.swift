@@ -4,8 +4,8 @@ import UIKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var showAlertView = false
     @State private var showAlertManager = false
+    @State private var showBooksLibrary = false
     @State private var showBackgroundCounter = false
     @State private var showDailyNotes = false
     @State private var showNewActivity = false
@@ -14,6 +14,13 @@ struct ContentView: View {
     @State private var habitSettings: HabitSettings?
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @ObservedObject private var counterManager = BackgroundCounterManager.shared
+    
+    // Timer for checking expired activity windows
+    let activityCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect() // Check every minute
+    
+    // Query for active activities
+    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
+    private var activeActivities: [ScheduledActivity]
     
     var body: some View {
         ZStack {
@@ -108,11 +115,12 @@ struct ContentView: View {
                                     Image(systemName: "clock.badge.plus")
                                         .foregroundColor(.purple)
                                 }
-                                
+
                                 Button {
-                                    showAlertView = true
+                                    showBooksLibrary = true
                                 } label: {
-                                    Image(systemName: "clock")
+                                    Image(systemName: "books.vertical")
+                                        .foregroundColor(.indigo)
                                 }
                             }
                         }
@@ -155,14 +163,14 @@ struct ContentView: View {
                     Text("Alerts")
                 }
             }
-            .sheet(isPresented: $showAlertView) {
-                AlertView()
-            }
             .sheet(isPresented: $showAlertManager) {
                 AlertManagerView()
             }
             .sheet(isPresented: $showDailyNotes) {
                 DailyNotesView(selectedDate: selectedDate)
+            }
+            .sheet(isPresented: $showBooksLibrary) {
+                BooksView()
             }
             .sheet(isPresented: $showNewActivity) {
                 NewScheduledActivityView()
@@ -171,6 +179,11 @@ struct ContentView: View {
             QuickAlertButton()
             
             QuickActivityButton()
+            
+            // Active timer button (iOS 16.1+)
+            if #available(iOS 16.1, *) {
+                ActiveTimerButton()
+            }
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
@@ -185,9 +198,57 @@ struct ContentView: View {
             if #available(iOS 16.1, *) {
                 AlertSettings.shared.forceRefreshLiveActivity()
             }
+            
+            // Check for expired windows on appear
+            checkForExpiredWindows()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
+        }
+        .onReceive(activityCheckTimer) { _ in
+            // Check for expired windows every minute
+            checkForExpiredWindows()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CheckExpiredWindows"))) { _ in
+            // Manual trigger for checking expired windows
+            checkForExpiredWindows()
+        }
+    }
+    
+    // MARK: - Activity Credit Management
+    
+    private func checkForExpiredWindows() {
+        for activity in activeActivities {
+            // Check and reset counters first
+            activity.checkAndResetCounters()
+            
+            // Get windows that have passed unused in the current period
+            let passedWindows = activity.getPassedUnusedWindows()
+            
+            // For recently edited activities, be more conservative about bulk marking
+            let expectedSkipped = passedWindows.count
+            
+            if activity.windowsSkippedInPeriod < expectedSkipped {
+                // Calculate how many new windows to mark as skipped
+                let newlySkipped = expectedSkipped - activity.windowsSkippedInPeriod
+                
+                // For recently edited activities, only mark 1 window at a time to prevent bulk marking
+                // For normal activities, allow up to 3 windows per cycle
+                let maxWindowsToSkip = activity.needsPostEditReset() ? 1 : min(newlySkipped, 3)
+                let windowsToSkip = min(newlySkipped, maxWindowsToSkip)
+                
+                if windowsToSkip > 0 {
+                    print("🔍 ContentView: Activity '\(activity.name)': Found \(newlySkipped) newly passed windows, marking \(windowsToSkip) as skipped (recently edited: \(activity.needsPostEditReset()))")
+                    
+                    for _ in 0..<windowsToSkip {
+                        activity.markWindowAsSkipped()
+                    }
+                    try? modelContext.save()
+                    
+                    // Notify other views to refresh
+                    NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+                }
+            }
         }
     }
 }

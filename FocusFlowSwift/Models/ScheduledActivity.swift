@@ -514,6 +514,9 @@ class ScheduledActivity {
         accumulatedWindowCredits += 1
         
         print("🎁 Window skipped for '\(name)'. Added 1 window credit. Total: \(accumulatedWindowCredits) windows")
+        
+        // Post notification to update UI
+        NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
     }
     
     // Use accumulated window credits (called when user wants to spend window credits)
@@ -553,6 +556,10 @@ class ScheduledActivity {
             context.insert(usage)
             
             print("⏰ Used \(credits) window credits for '\(name)'. Remaining: \(accumulatedWindowCredits) windows")
+            
+            // Post notification to update UI
+            NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+            
             return true
         } else {
             print("❌ Not enough window credits. Available: \(accumulatedWindowCredits), Requested: \(credits)")
@@ -597,6 +604,10 @@ class ScheduledActivity {
         context.insert(usage)
         
         print("📈 Used \(windows) overdraft windows for '\(name)'. Total overdraft: \(overdraftWindowsUsed) windows")
+        
+        // Post notification to update UI
+        NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+        
         return true
     }
     
@@ -621,6 +632,10 @@ class ScheduledActivity {
             context.insert(usage)
             
             print("🚫 Ignored \(credits) window credits for '\(name)'. Remaining: \(accumulatedWindowCredits) windows")
+            
+            // Post notification to update UI
+            NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+            
             return true
         } else {
             print("❌ Not enough window credits. Available: \(accumulatedWindowCredits), Requested: \(credits)")

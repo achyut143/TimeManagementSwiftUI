@@ -351,6 +351,7 @@ class AlertInstance: Identifiable {
     }
     
     private func playAlertSound() {
+        guard !SpeechManager.shared.isMuted else { return }
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         
@@ -391,6 +392,7 @@ class AlertInstance: Identifiable {
     }
     
     private func playWorkIntervalSound() {
+        guard !SpeechManager.shared.isMuted else { return }
         // Only speak if custom work text is provided
         guard !workIntervalText.trimmingCharacters(in: .whitespaces).isEmpty else {
             return
@@ -412,6 +414,7 @@ class AlertInstance: Identifiable {
     }
     
     private func playCompletionSound() {
+        guard !SpeechManager.shared.isMuted else { return }
         let message = "\(name) completed!"
         let utterance = AVSpeechUtterance(string: message)
         utterance.rate = 0.5

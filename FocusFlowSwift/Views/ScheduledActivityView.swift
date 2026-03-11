@@ -162,10 +162,11 @@ struct ScheduledActivityView: View {
         }
         .onReceive(timer) { _ in
             currentTime = Date()
-            checkForExpiredWindows()
+            // Credit checking now handled by ContentView
         }
-        .onAppear {
-            checkForExpiredWindows()
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ActivityUpdated"))) { _ in
+            // Refresh when activities are updated from ContentView
+            currentTime = Date()
         }
     }
     
@@ -250,38 +251,6 @@ struct ScheduledActivityView: View {
     private func deleteActivity(_ activity: ScheduledActivity) {
         modelContext.delete(activity)
         try? modelContext.save()
-    }
-    
-    private func checkForExpiredWindows() {
-        for activity in activeActivities {
-            // Check and reset counters first
-            activity.checkAndResetCounters()
-            
-            // Get windows that have passed unused in the current period
-            let passedWindows = activity.getPassedUnusedWindows()
-            
-            // For recently edited activities, be more conservative about bulk marking
-            let expectedSkipped = passedWindows.count
-            
-            if activity.windowsSkippedInPeriod < expectedSkipped {
-                // Calculate how many new windows to mark as skipped
-                let newlySkipped = expectedSkipped - activity.windowsSkippedInPeriod
-                
-                // For recently edited activities, only mark 1 window at a time to prevent bulk marking
-                // For normal activities, allow up to 3 windows per cycle
-                let maxWindowsToSkip = activity.needsPostEditReset() ? 1 : min(newlySkipped, 3)
-                let windowsToSkip = min(newlySkipped, maxWindowsToSkip)
-                
-                if windowsToSkip > 0 {
-                    print("🔍 Activity '\(activity.name)': Found \(newlySkipped) newly passed windows, marking \(windowsToSkip) as skipped (recently edited: \(activity.needsPostEditReset()))")
-                    
-                    for _ in 0..<windowsToSkip {
-                        activity.markWindowAsSkipped()
-                    }
-                    try? modelContext.save()
-                }
-            }
-        }
     }
 }
 

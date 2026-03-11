@@ -44,6 +44,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		2C688DB92F5C8F6800C02E20 /* Exceptions for "FocusFlowWidgets" folder in "FocusFlowSwift" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				ActivityTimerAttributes.swift,
+			);
+			target = 3B367BD82E3596600077030F /* FocusFlowSwift */;
+		};
 		3B367C182E380DD80077030F /* Exceptions for "FocusFlowSwift" folder in "FocusFlowSwift" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -80,6 +87,7 @@
 		3BA8F1342E8F0F8B00DF143F /* FocusFlowWidgets */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
+				2C688DB92F5C8F6800C02E20 /* Exceptions for "FocusFlowWidgets" folder in "FocusFlowSwift" target */,
 				3BA8F1482E8F0F8D00DF143F /* Exceptions for "FocusFlowWidgets" folder in "FocusFlowWidgetsExtension" target */,
 			);
 			path = FocusFlowWidgets;

@@ -5,102 +5,97 @@ import WidgetKit
 @available(iOS 16.1, *)
 struct FocusLiveActivityView: View {
     let context: ActivityViewContext<FocusActivityAttributes>
-    
+
+    var taskName: String {
+        context.state.currentCycleName ?? context.state.intervalName
+    }
+
+    var taskProgress: String? {
+        if let total = context.state.totalIntervals {
+            return "Task \(context.state.currentInterval) of \(total)"
+        }
+        return context.state.cycleProgress.map { "Task \($0)" }
+    }
+
     var body: some View {
-        VStack(spacing: 12) {
-            // Header with session info
+        VStack(spacing: 10) {
+            // Header
             HStack {
-                Image(systemName: "timer")
-                    .foregroundColor(.blue)
+                Image(systemName: "calendar.badge.clock")
+                    .foregroundColor(.indigo)
                     .font(.headline)
-                
-                Text("Focus Session")
+
+                Text("Auto Schedule")
                     .font(.headline)
                     .fontWeight(.semibold)
-                
+
                 Spacer()
-                
+
                 if context.state.isPaused {
-                    Image(systemName: "pause.circle.fill")
-                        .foregroundColor(.orange)
-                        .font(.subheadline)
+                    HStack(spacing: 4) {
+                        Image(systemName: "pause.circle.fill")
+                            .foregroundColor(.orange)
+                        Text("Paused")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
                 }
             }
-            
-            // Main content
-            HStack(spacing: 16) {
-                // Left side - Interval info
+
+            // Task name + progress
+            HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    if context.state.isInCycleMode {
-                        Text(context.state.currentCycleName ?? "Cycle")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.blue)
-                        
-                        if let cycleProgress = context.state.cycleProgress {
-                            Text("Cycle \(cycleProgress)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    HStack {
-                        Text("Interval")
+                    Text(taskName)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+
+                    if let progress = taskProgress {
+                        Text(progress)
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
-                        if let total = context.state.totalIntervals {
-                            Text("\(context.state.currentInterval)/\(total)")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.primary)
-                        } else {
-                            Text("\(context.state.currentInterval)")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.primary)
-                        }
                     }
                 }
-                
+
                 Spacer()
-                
-                // Right side - Time info
+
+                // Time info
                 VStack(alignment: .trailing, spacing: 4) {
-                    if !context.state.isPaused {
-                        Text("Next Alert")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        Text(context.state.nextAlertTime, style: .time)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.orange)
-                    } else {
+                    if context.state.isPaused {
                         Text("Paused")
                             .font(.subheadline)
                             .fontWeight(.medium)
                             .foregroundColor(.orange)
+                    } else {
+                        Text("Ends")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(context.state.nextAlertTime, style: .time)
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.indigo)
                     }
-                    
-                    Text("Started: \(context.attributes.startTime, style: .time)")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+
+                    Text("Started \(context.attributes.startTime, style: .time)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
-            
-            // Progress bar (if applicable)
+
+            // Progress bar
             if let total = context.state.totalIntervals, total > 0 {
-                ProgressView(
-                    value: Double(context.state.currentInterval),
-                    total: Double(total)
-                )
-                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
-                .scaleEffect(y: 0.8)
+                VStack(alignment: .leading, spacing: 2) {
+                    ProgressView(
+                        value: Double(context.state.currentInterval),
+                        total: Double(total)
+                    )
+                    .progressViewStyle(LinearProgressViewStyle(tint: .indigo))
+                    .scaleEffect(y: 0.8)
+                }
             }
         }
         .padding()
         .background(Color(.systemBackground))
     }
 }
-

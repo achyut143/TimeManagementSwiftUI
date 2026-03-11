@@ -8,30 +8,42 @@ import Combine
 class SpeechManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     static let shared = SpeechManager()
     private let synthesizer = AVSpeechSynthesizer()
-    
+    @Published var isMuted: Bool = UserDefaults.standard.bool(forKey: "SpeechManager.isMuted") {
+        didSet { UserDefaults.standard.set(isMuted, forKey: "SpeechManager.isMuted") }
+    }
+
     override init() {
         super.init()
         synthesizer.delegate = self
     }
-    
+
     func speak(_ text: String) {
+        guard !isMuted else { return }
+
         // Stop any ongoing speech
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
-        
+
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = 0.5 // Slightly slower for clarity
         utterance.volume = 1.0
-        
+
         synthesizer.speak(utterance)
         print("🔊 Speaking: \(text)")
     }
-    
+
     func stopSpeaking() {
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
+        }
+    }
+
+    func toggleMute() {
+        isMuted.toggle()
+        if isMuted {
+            stopSpeaking()
         }
     }
 }
@@ -119,9 +131,7 @@ struct DailyNotesView: View {
     @State private var scheduleTaskName: String = ""
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
     @State private var reminderTimer: Timer?
-    @State private var showMotivation = false
-    @State private var motivationText = ""
-    @State private var isGeneratingMotivation = false
+    @State private var showBooksLibrary = false
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -262,174 +272,30 @@ struct DailyNotesView: View {
                                 cycleStatusView
                             }
                         }
+
+                        // Books quotes — always visible alongside the scheduler
+                        Divider()
+
+                        HStack {
+                            Label("Books", systemImage: "books.vertical.fill")
+                                .font(.caption)
+                                .foregroundColor(.indigo)
+                            Spacer()
+                            Button(action: { showBooksLibrary = true }) {
+                                Text("Manage")
+                                    .font(.caption)
+                                    .foregroundColor(.indigo)
+                            }
+                        }
+
+                        BookQuoteDisplayView()
                     }
                 }
-                
+
                 Section("Daily Notes") {
                     RichTextEditor(text: $notesText)
                         .frame(height: 300)
                         .id(editorKey)
-                    
-                    // AI Tags Help
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("💡 AI Tags")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.blue)
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 4) {
-                                Text("\"motivate\"")
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.orange)
-                                    .cornerRadius(4)
-                                
-                                Text("or")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                
-                                Text("#motivate")
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.orange)
-                                    .cornerRadius(4)
-                                
-                                Text("→ Intense action-focused motivation")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            HStack(spacing: 4) {
-                                Text("\"end\"")
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.purple)
-                                    .cornerRadius(4)
-                                
-                                Text("or")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                
-                                Text("#end")
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.purple)
-                                    .cornerRadius(4)
-                                
-                                Text("→ End-of-day reflection & growth")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            Text("No tags → Standard motivational message")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .italic()
-                        }
-                    }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 12)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
-                }
-                
-                // Motivation Section
-                Section {
-                    VStack(spacing: 12) {
-                        Button(action: {
-                            generateMotivation()
-                        }) {
-                            HStack {
-                                Image(systemName: isGeneratingMotivation ? "hourglass" : "sparkles")
-                                    .foregroundColor(.white)
-                                Text(isGeneratingMotivation ? "Generating..." : "Generate Motivation")
-                                    .fontWeight(.semibold)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(
-                                LinearGradient(
-                                    colors: [Color.orange, Color.pink],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
-                        }
-                        .disabled(isGeneratingMotivation || currentTaskName.isEmpty)
-                        
-                        if currentTaskName.isEmpty {
-                            Text("Start a task cycle to generate motivation")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .italic()
-                        } else {
-                            Text("Current task: \(currentTaskName)")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                        
-                        if !motivationText.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Image(systemName: "quote.opening")
-                                        .foregroundColor(.orange)
-                                        .font(.caption)
-                                    Text("Your Motivation")
-                                        .font(.headline)
-                                        .foregroundColor(.orange)
-                                    Spacer()
-                                    Button(action: {
-                                        motivationText = ""
-                                    }) {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(.gray)
-                                    }
-                                }
-                                
-                                Text(motivationText)
-                                    .font(.body)
-                                    .foregroundColor(.primary)
-                                    .padding()
-                                    .background(
-                                        LinearGradient(
-                                            colors: [Color.orange.opacity(0.1), Color.pink.opacity(0.1)],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .cornerRadius(12)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(
-                                                LinearGradient(
-                                                    colors: [Color.orange.opacity(0.3), Color.pink.opacity(0.3)],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                ),
-                                                lineWidth: 2
-                                            )
-                                    )
-                            }
-                        }
-                    }
-                } header: {
-                    Label("Motivation", systemImage: "flame.fill")
-                        .foregroundColor(.orange)
                 }
                 
                 Section("Schedule Generator") {
@@ -528,6 +394,17 @@ struct DailyNotesView: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .bottomBar) {
+                    Button(action: {
+                        speechManager.toggleMute()
+                    }) {
+                        Label(
+                            speechManager.isMuted ? "Unmute" : "Mute",
+                            systemImage: speechManager.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                        )
+                        .foregroundColor(speechManager.isMuted ? .red : .primary)
+                    }
+                }
                 ToolbarItem(placement: .keyboard) {
                     Button("Done") {
                         hideKeyboard()
@@ -554,6 +431,9 @@ struct DailyNotesView: View {
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
+            }
+            .sheet(isPresented: $showBooksLibrary) {
+                BooksView()
             }
         }
     }
@@ -1391,40 +1271,6 @@ struct DailyNotesView: View {
         }
         
         try? modelContext.save()
-    }
-    
-    private func generateMotivation() {
-        guard !currentTaskName.isEmpty else { return }
-        
-        isGeneratingMotivation = true
-        
-        _Concurrency.Task {
-            do {
-                let openAI = OpenAIService()
-                
-                // Get persistent notes for context
-                let persistentNotes = todayNote?.content
-                
-                // Generate motivation using the standard prompt (no tags)
-                let motivation = try await openAI.generateWhyStatement(
-                    for: currentTaskName,
-                    description: "",
-                    persistentNotes: persistentNotes,
-                    notes: nil  // Don't pass current notes to avoid tag detection
-                )
-                
-                await MainActor.run {
-                    self.motivationText = motivation
-                    self.isGeneratingMotivation = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.motivationText = "Failed to generate motivation. Please check your API key and try again."
-                    self.isGeneratingMotivation = false
-                }
-                print("Error generating motivation: \(error)")
-            }
-        }
     }
     
     private func adjustTimesInNotes() {

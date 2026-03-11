@@ -10,38 +10,17 @@ struct QuickActivityButton: View {
     @State private var showActivitiesList = false
     @State private var currentTime = Date()
     @State private var refreshTrigger = UUID()
-    @State private var forceRefresh = false
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     var hasActiveWindow: Bool {
-        // Access forceRefresh to trigger recalculation
-        _ = forceRefresh
         return activities.contains { $0.isInActiveWindow() }
     }
     
     var totalDailyCredits: Int {
-        // Access forceRefresh to trigger recalculation
-        _ = forceRefresh
         return activities
             .filter { ($0.recurrenceType ?? .daily) == .daily }
             .reduce(0) { $0 + $1.accumulatedWindowCredits }
-    }
-    
-    var nextActivity: (activity: ScheduledActivity, nextTime: Date)? {
-        var nextActivityInfo: (activity: ScheduledActivity, nextTime: Date)?
-        var earliestTime: Date?
-        
-        for activity in activities {
-            if let nextTime = activity.nextScheduledTime() {
-                if earliestTime == nil || nextTime < earliestTime! {
-                    earliestTime = nextTime
-                    nextActivityInfo = (activity, nextTime)
-                }
-            }
-        }
-        
-        return nextActivityInfo
     }
     
     var body: some View {
@@ -55,9 +34,6 @@ struct QuickActivityButton: View {
                     // Quick Activities List Button - hide when task form is presented
                     if !activities.isEmpty && !isTaskFormPresented {
                         Button {
-                            // Force refresh the model context before opening
-                            modelContext.processPendingChanges()
-                            refreshTrigger = UUID()
                             showActivitiesList = true
                         } label: {
                             ZStack(alignment: .topTrailing) {
@@ -108,9 +84,10 @@ struct QuickActivityButton: View {
         }
         .onReceive(timer) { _ in
             currentTime = Date()
-            // Periodically refresh to pick up changes
-            modelContext.processPendingChanges()
-            forceRefresh.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ActivityUpdated"))) { _ in
+            // Refresh when activities are updated
+            refreshTrigger = UUID()
         }
     }
 }
@@ -583,6 +560,9 @@ struct CreditUseView: View {
     
     @State private var showOverdraftOption = false
     @State private var overdraftWindows = 1
+    @State private var showTimerConfirmation = false
+    @State private var pendingTimerMinutes: Double = 0
+    @State private var pendingAction: (() -> Void)?
     
     var body: some View {
         NavigationStack {
@@ -795,10 +775,7 @@ struct CreditUseView: View {
                             .cornerRadius(8)
                             
                             Button {
-                                if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
-                                    try? modelContext.save()
-                                }
-                                onCancel()
+                                handleOverdraftUse()
                             } label: {
                                 Text("Use \(overdraftWindows) Overdraft \(overdraftWindows == 1 ? "Window" : "Windows")")
                                     .font(.headline)
@@ -820,7 +797,7 @@ struct CreditUseView: View {
                 if activity.accumulatedWindowCredits > 0 && !activity.isInActiveWindow() {
                     VStack(spacing: 12) {
                         Button {
-                            onUse()
+                            handleCreditUse()
                         } label: {
                             Text("Use Credits")
                                 .font(.headline)
@@ -862,6 +839,85 @@ struct CreditUseView: View {
             }
             .padding()
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .alert("Start Timer?", isPresented: $showTimerConfirmation) {
+            Button("Yes, Start Timer") {
+                if #available(iOS 16.1, *) {
+                    ActivityTimerManager.shared.startTimer(
+                        activityName: activity.name,
+                        durationMinutes: pendingTimerMinutes
+                    )
+                }
+                pendingAction?()
+            }
+            Button("No, Just Use") {
+                pendingAction?()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingAction = nil
+            }
+        } message: {
+            Text("Would you like to start a \(Int(pendingTimerMinutes)) minute timer in the Dynamic Island?")
+        }
+    }
+    
+    private func handleCreditUse() {
+        // Calculate timer duration based on reward and/or task attachment
+        var timerMinutes: Double = 0
+        
+        // Add reward time if available
+        if activity.hasRewardAttachment {
+            timerMinutes += activity.rewardBurnAmount * Double(creditsToUse)
+        }
+        
+        // Add task time if available
+        if activity.hasTaskAttachment {
+            timerMinutes += activity.taskTimeAmount * Double(creditsToUse)
+        }
+        
+        // Show timer confirmation if there's any time to track
+        if timerMinutes > 0 {
+            pendingTimerMinutes = timerMinutes
+            pendingAction = {
+                onUse()
+            }
+            showTimerConfirmation = true
+        } else {
+            // No time attachments, just use credits
+            onUse()
+        }
+    }
+    
+    private func handleOverdraftUse() {
+        // Calculate timer duration based on reward and/or task attachment
+        var timerMinutes: Double = 0
+        
+        // Add reward time if available
+        if activity.hasRewardAttachment {
+            timerMinutes += activity.rewardBurnAmount * Double(overdraftWindows)
+        }
+        
+        // Add task time if available
+        if activity.hasTaskAttachment {
+            timerMinutes += activity.taskTimeAmount * Double(overdraftWindows)
+        }
+        
+        // Show timer confirmation if there's any time to track
+        if timerMinutes > 0 {
+            pendingTimerMinutes = timerMinutes
+            pendingAction = {
+                if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
+                    try? modelContext.save()
+                }
+                onCancel()
+            }
+            showTimerConfirmation = true
+        } else {
+            // No time attachments, just use overdraft
+            if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
+                try? modelContext.save()
+            }
+            onCancel()
         }
     }
     
