@@ -58,45 +58,72 @@ class HabitNotesPDFGenerator {
             yPosition += 30
             
             // Notes
+            let notesFont = UIFont.systemFont(ofSize: 12)
+            let notesAttributes: [NSAttributedString.Key: Any] = [
+                .font: notesFont,
+                .foregroundColor: UIColor.darkGray
+            ]
+            let dateHeaderAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: 14),
+                .foregroundColor: UIColor.black
+            ]
+
             for task in filteredTasks {
                 guard let notes = task.notes, !notes.isEmpty else { continue }
-                
-                // Check if we need a new page
+
+                // Check if we need a new page before drawing the date header
                 if yPosition > pageHeight - 100 {
                     context.beginPage()
                     yPosition = 60
                 }
-                
+
                 // Date header
                 if let taskDate = task.date {
-                    let dateHeaderAttributes: [NSAttributedString.Key: Any] = [
-                        .font: UIFont.boldSystemFont(ofSize: 14),
-                        .foregroundColor: UIColor.black
-                    ]
                     let dateHeader = dateFormatter.string(from: taskDate)
                     dateHeader.draw(at: CGPoint(x: margin, y: yPosition), withAttributes: dateHeaderAttributes)
                     yPosition += 25
                 }
-                
-                // Notes content
-                let notesAttributes: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: 12),
-                    .foregroundColor: UIColor.darkGray
-                ]
-                
-                let notesRect = CGRect(x: margin, y: yPosition, width: contentWidth, height: pageHeight - yPosition - margin)
-                let notesSize = notes.boundingRect(
-                    with: CGSize(width: contentWidth, height: .greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: notesAttributes,
-                    context: nil
-                )
-                
-                notes.draw(in: notesRect, withAttributes: notesAttributes)
-                yPosition += notesSize.height + 20
-                
+
+                // Multi-page notes drawing using NSLayoutManager
+                let attrString = NSAttributedString(string: notes, attributes: notesAttributes)
+                let textStorage = NSTextStorage(attributedString: attrString)
+                let layoutManager = NSLayoutManager()
+                textStorage.addLayoutManager(layoutManager)
+
+                var charIndex = 0
+                let totalChars = notes.utf16.count
+
+                while charIndex < totalChars {
+                    let availableHeight = pageHeight - yPosition - margin
+                    let textContainer = NSTextContainer(size: CGSize(width: contentWidth, height: availableHeight))
+                    textContainer.lineFragmentPadding = 0
+                    layoutManager.addTextContainer(textContainer)
+
+                    layoutManager.ensureLayout(for: textContainer)
+
+                    let glyphRange = layoutManager.glyphRange(for: textContainer)
+                    let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+
+                    // Draw this slice of text
+                    layoutManager.drawBackground(forGlyphRange: glyphRange, at: CGPoint(x: margin, y: yPosition))
+                    layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: CGPoint(x: margin, y: yPosition))
+
+                    let usedRect = layoutManager.usedRect(for: textContainer)
+                    yPosition += usedRect.height + 4
+
+                    charIndex += charRange.length
+
+                    // If there's more text, start a new page
+                    if charIndex < totalChars {
+                        context.beginPage()
+                        yPosition = 60
+                    }
+                }
+
+                yPosition += 16
+
                 // Separator
-                if yPosition < pageHeight - 100 {
+                if yPosition < pageHeight - 60 {
                     let separatorPath = UIBezierPath()
                     separatorPath.move(to: CGPoint(x: margin, y: yPosition))
                     separatorPath.addLine(to: CGPoint(x: pageWidth - margin, y: yPosition))
