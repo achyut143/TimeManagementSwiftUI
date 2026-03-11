@@ -42,8 +42,8 @@ struct TasksCalendarView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            pointsIndicator
-            
+            PointsIndicatorView(tasks: getAllTasksForDate())
+
             HStack {
                 Button(showTaskCreation ? "Close" : "Add Task") {
                     showTaskCreation.toggle()
@@ -1346,36 +1346,6 @@ struct TasksCalendarView: View {
         
         scheduleTaskNotifications(for: task)
         try? modelContext.save()
-    }
-    
-    private var pointsIndicator: some View {
-        // Get all tasks for the selected date (both timed and untimed)
-        let allTasksForDate = getAllTasksForDate()
-        let totalPoints = allTasksForDate.reduce(0) { $0 + $1.weight }
-        let completedPoints = allTasksForDate.filter { $0.completed }.reduce(0) { $0 + $1.effectiveWeight }
-        let percentage = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0
-        
-        return VStack(spacing: 4) {
-            HStack {
-                Text("Points: \(String(format: "%.1f", completedPoints))/\(Int(totalPoints))")
-                    .font(.headline)
-                    .fontWeight(.bold)
-                
-                Text("(\(Int(percentage))%)")
-                    .font(.subheadline)
-            }
-            .foregroundColor(pointsColor(percentage))
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal)
-        .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial)
-    }
-    
-    private func pointsColor(_ percentage: Double) -> Color {
-        if percentage >= 80 { return .green }
-        if percentage >= 50 { return .orange }
-        return .red
     }
     
     private func scheduleTaskNotifications(for task: Task) {

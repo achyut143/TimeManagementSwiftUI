@@ -37,6 +37,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AA00CF01AA00CF01AA00CF01 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Config.xcconfig; path = FocusFlowSwift/Config.xcconfig; sourceTree = SOURCE_ROOT; };
 		3B367BD92E3596600077030F /* FocusFlowSwift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FocusFlowSwift.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3BA8F12E2E8F0F8B00DF143F /* FocusFlowWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FocusFlowWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3BA8F1302E8F0F8B00DF143F /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
@@ -118,6 +119,7 @@
 		3B367BD02E3596600077030F = {
 			isa = PBXGroup;
 			children = (
+				AA00CF01AA00CF01AA00CF01 /* Config.xcconfig */,
 				3B367BDB2E3596600077030F /* FocusFlowSwift */,
 				3BA8F1342E8F0F8B00DF143F /* FocusFlowWidgets */,
 				3BA8F12F2E8F0F8B00DF143F /* Frameworks */,
@@ -396,6 +398,7 @@
 		};
 		3B367BE52E3596620077030F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA00CF01AA00CF01AA00CF01 /* Config.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -429,6 +432,7 @@
 		};
 		3B367BE62E3596620077030F /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA00CF01AA00CF01AA00CF01 /* Config.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

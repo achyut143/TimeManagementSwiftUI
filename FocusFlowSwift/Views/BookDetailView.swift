@@ -8,6 +8,8 @@ struct BookDetailView: View {
     @State private var isGenerating = false
     @State private var generationError: String?
     @State private var showAddManualQuote = false
+    @State private var showBulkImport = false
+    @State private var generateCount: Int = 25
 
     var sortedQuotes: [BookQuote] {
         (book.quotes ?? []).sorted { $0.createdAt > $1.createdAt }
@@ -73,16 +75,29 @@ struct BookDetailView: View {
 
             // Actions
             Section("Add Quotes") {
+                Stepper(value: $generateCount, in: 5...100, step: 5) {
+                    HStack {
+                        Text("Generate")
+                            .foregroundColor(.secondary)
+                        Text("\(generateCount)")
+                            .fontWeight(.semibold)
+                            .foregroundColor(.indigo)
+                        Text("quotes")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .disabled(isGenerating)
+
                 Button(action: generateQuotes) {
                     HStack {
                         if isGenerating {
                             ProgressView()
                                 .scaleEffect(0.8)
-                            Text("Generating quotes...")
+                            Text("Generating \(generateCount) quotes...")
                                 .foregroundColor(.secondary)
                         } else {
                             Image(systemName: "sparkles")
-                            Text(sortedQuotes.isEmpty ? "Generate 25 Quotes" : "Generate 25 More")
+                            Text(sortedQuotes.isEmpty ? "Generate \(generateCount) Quotes" : "Generate \(generateCount) More")
                         }
                     }
                     .foregroundColor(isGenerating ? .secondary : .indigo)
@@ -95,6 +110,15 @@ struct BookDetailView: View {
                         Text("Add My Own Quote")
                     }
                     .foregroundColor(.green)
+                }
+                .disabled(isGenerating)
+
+                Button(action: { showBulkImport = true }) {
+                    HStack {
+                        Image(systemName: "doc.on.clipboard")
+                        Text("Paste & Extract Quotes")
+                    }
+                    .foregroundColor(.orange)
                 }
                 .disabled(isGenerating)
 
@@ -120,6 +144,9 @@ struct BookDetailView: View {
         .sheet(isPresented: $showAddManualQuote) {
             AddManualQuoteView(book: book)
         }
+        .sheet(isPresented: $showBulkImport) {
+            BulkQuoteImportView(book: book)
+        }
     }
 
     private func generateQuotes() {
@@ -135,7 +162,8 @@ struct BookDetailView: View {
                 let generatedQuotes = try await service.generateQuotes(
                     bookTitle: bookTitle,
                     author: author,
-                    existingQuotes: existingTexts
+                    existingQuotes: existingTexts,
+                    count: generateCount
                 )
 
                 await MainActor.run {
@@ -154,7 +182,7 @@ struct BookDetailView: View {
                 }
             } catch {
                 await MainActor.run {
-                    generationError = "Failed to generate quotes. Check your API key and try again."
+                    generationError = error.localizedDescription
                     isGenerating = false
                 }
             }

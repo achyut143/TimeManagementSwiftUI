@@ -4,12 +4,16 @@ import SwiftData
 struct BookQuoteDisplayView: View {
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
 
+    @AppStorage("display.quotesVisible") private var isVisible: Bool = true
+    @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
+
     @State private var currentIndex: Int = 0
     @State private var showQuote: Bool = true
     @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
     @State private var cycleTimer: Timer?
 
     var body: some View {
+        if isVisible {
         VStack(alignment: .leading, spacing: 0) {
             if quotePool.isEmpty {
                 HStack(spacing: 8) {
@@ -79,15 +83,16 @@ struct BookQuoteDisplayView: View {
                 )
             }
         }
-        .onAppear {
-            buildQuotePool()
-            startCycling()
-        }
-        .onDisappear {
-            stopCycling()
-        }
-        .onChange(of: activeBooks.count) { _, _ in
-            buildQuotePool()
+            .onAppear {
+                buildQuotePool()
+                startCycling()
+            }
+            .onDisappear {
+                stopCycling()
+            }
+            .onChange(of: activeBooks.count) { _, _ in
+                buildQuotePool()
+            }
         }
     }
 
@@ -104,7 +109,7 @@ struct BookQuoteDisplayView: View {
 
     private func startCycling() {
         guard cycleTimer == nil else { return }
-        cycleTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+        cycleTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(intervalSeconds), repeats: true) { _ in
             advanceQuote()
         }
     }

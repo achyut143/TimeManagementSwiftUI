@@ -11,14 +11,7 @@ class BookQuoteService {
     private let baseURL = "https://api.openai.com/v1/chat/completions"
 
     init() {
-        if let path = Bundle.main.path(forResource: "Config", ofType: "xcconfig"),
-           let contents = try? String(contentsOfFile: path),
-           let keyLine = contents.components(separatedBy: .newlines).first(where: { $0.contains("OPENAI_API_KEY") }) {
-            let key = keyLine.components(separatedBy: "=").last?.trimmingCharacters(in: .whitespaces) ?? ""
-            self.apiKey = key
-        } else {
-            self.apiKey = ""
-        }
+        self.apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String ?? ""
     }
 
     func generateQuotes(bookTitle: String, author: String, existingQuotes: [String], count: Int = 25) async throws -> [GeneratedQuote] {
@@ -27,22 +20,21 @@ class BookQuoteService {
             : existingQuotes.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
 
         let systemPrompt = """
-        You are a literary quote expert. Generate exactly \(count) meaningful, inspiring quotes from the book "\(bookTitle)" by \(author).
+        You are a book insights expert. For the book "\(bookTitle)" by \(author), generate exactly \(count) key ideas and insights paraphrased in the author's voice and style. These should faithfully represent the book's actual arguments, lessons, and themes — not invented content.
 
         Rules:
-        - Return ONLY a valid JSON array of objects, nothing else — no explanation, no preamble
+        - Return ONLY a valid JSON array of objects, nothing else — no explanation, no preamble, no markdown fences
         - Each object must have exactly these keys: "text", "chapterNumber", "chapterName"
-        - "text": the quote (1–3 sentences, do NOT include attribution)
-        - "chapterNumber": the integer chapter number where this quote appears (e.g. 3)
+        - "text": a single concise sentence (max 20 words) capturing one key idea from the book (do NOT include attribution)
+        - "chapterNumber": the integer chapter number this idea comes from (e.g. 3)
         - "chapterName": the name of that chapter as a string (e.g. "The Road Ahead")
-        - Quotes should be insightful, authentic to the book's themes and style
-        - Do NOT repeat any of the existing quotes listed below
-        - Spread quotes across different chapters
+        - Ideas should be accurate to the book's actual content and spread across different chapters
+        - Do NOT repeat any of the existing entries listed below
 
-        Existing quotes to avoid repeating:
+        Existing entries to avoid repeating:
         \(existingList)
 
-        Return format (JSON array of objects only):
+        Return format (JSON array only, no other text):
         [{"text": "...", "chapterNumber": 1, "chapterName": "..."}, ...]
         """
 
@@ -66,10 +58,79 @@ class BookQuoteService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+        let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let content = response.choices.first?.message.content else {
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let body = String(data: data, encoding: .utf8) ?? "no body"
+            print("❌ BookQuoteService HTTP \(httpResponse.statusCode): \(body)")
+            throw NSError(domain: "BookQuoteService", code: httpResponse.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode): \(body)"])
+        }
+
+        let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+
+        guard let content = decoded.choices.first?.message.content else {
+            throw OpenAIError.noResponse
+        }
+
+        return try parseQuotesArray(from: content, existingQuotes: existingQuotes)
+    }
+
+    func extractQuotes(from text: String, bookTitle: String, author: String, existingQuotes: [String]) async throws -> [GeneratedQuote] {
+        let existingList = existingQuotes.isEmpty
+            ? "None"
+            : existingQuotes.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+
+        let systemPrompt = """
+        You are a quote extraction expert. The user has pasted raw text containing quotes or insights from the book "\(bookTitle)" by \(author). Extract each individual quote or insight as a separate entry.
+
+        Rules:
+        - Return ONLY a valid JSON array of objects, nothing else — no explanation, no preamble, no markdown fences
+        - Each object must have exactly these keys: "text", "chapterNumber", "chapterName"
+        - "text": one clean, concise quote or insight (max 20 words, do NOT include attribution or chapter labels)
+        - "chapterNumber": integer chapter number if detectable from context, otherwise null
+        - "chapterName": chapter name string if detectable from context, otherwise null
+        - Remove duplicates and skip any entries that match the existing quotes below
+        - If the pasted text contains attribution markers like "—", "-", or "Ch." treat them as metadata, not part of the quote text
+
+        Existing quotes to skip:
+        \(existingList)
+
+        Return format (JSON array only):
+        [{"text": "...", "chapterNumber": 1, "chapterName": "..."}, ...]
+        """
+
+        let messages: [[String: String]] = [
+            ["role": "system", "content": systemPrompt],
+            ["role": "user", "content": "Extract all quotes from this text:\n\n\(text)"]
+        ]
+
+        let requestBody: [String: Any] = [
+            "model": "gpt-4o",
+            "messages": messages,
+            "max_tokens": 3000,
+            "temperature": 0.0
+        ]
+
+        guard let url = URL(string: baseURL) else { throw OpenAIError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let body = String(data: data, encoding: .utf8) ?? "no body"
+            throw NSError(domain: "BookQuoteService", code: httpResponse.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode): \(body)"])
+        }
+
+        let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+
+        guard let content = decoded.choices.first?.message.content else {
             throw OpenAIError.noResponse
         }
 
@@ -77,12 +138,28 @@ class BookQuoteService {
     }
 
     private func parseQuotesArray(from text: String, existingQuotes: [String]) throws -> [GeneratedQuote] {
-        guard let startIdx = text.firstIndex(of: "["),
-              let endIdx = text.lastIndex(of: "]") else {
+        // Strip markdown code fences if present (gpt-4o often wraps JSON in ```json ... ```)
+        var cleaned = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```") {
+            cleaned = cleaned
+                .components(separatedBy: "\n")
+                .dropFirst()          // remove opening ```json line
+                .joined(separator: "\n")
+            if let fence = cleaned.range(of: "```") {
+                cleaned = String(cleaned[..<fence.lowerBound])
+            }
+        }
+
+        print("📖 BookQuoteService response content:\n\(cleaned.prefix(500))")
+
+        guard let startIdx = cleaned.firstIndex(of: "["),
+              let endIdx = cleaned.lastIndex(of: "]") else {
+            print("❌ No JSON array found in response")
             throw OpenAIError.invalidResponse
         }
 
-        let jsonString = String(text[startIdx...endIdx])
+        let jsonString = String(cleaned[startIdx...endIdx])
         guard let data = jsonString.data(using: .utf8) else {
             throw OpenAIError.invalidResponse
         }
@@ -106,6 +183,22 @@ class BookQuoteService {
             return GeneratedQuote(text: trimmed, chapterNumber: chapterNum, chapterName: chapterTitle)
         }
     }
+}
+
+struct OpenAIResponse: Codable {
+    let choices: [Choice]
+    struct Choice: Codable {
+        let message: Message
+        struct Message: Codable {
+            let content: String
+        }
+    }
+}
+
+enum OpenAIError: Error {
+    case invalidURL
+    case noResponse
+    case invalidResponse
 }
 
 // Minimal JSON value type for flexible decoding

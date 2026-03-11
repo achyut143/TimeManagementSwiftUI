@@ -8,6 +8,11 @@ struct BooksView: View {
     @State private var showAddBook = false
     @State private var tooManyActiveAlert = false
 
+    @AppStorage("display.quotesVisible") private var quotesVisible: Bool = true
+    @AppStorage("display.tasksVisible") private var tasksVisible: Bool = true
+    @AppStorage("display.quotesInterval") private var quotesInterval: Int = 10
+    @AppStorage("display.tasksInterval") private var tasksInterval: Int = 10
+
     var activeCount: Int { books.filter { $0.isActive }.count }
 
     var body: some View {
@@ -21,9 +26,49 @@ struct BooksView: View {
                     )
                 } else {
                     List {
+                        Section("Display Settings") {
+                            Toggle(isOn: $quotesVisible) {
+                                Label("Show Book Quotes", systemImage: "books.vertical.fill")
+                                    .foregroundColor(.indigo)
+                            }
+                            .tint(.indigo)
+
+                            if quotesVisible {
+                                Stepper(value: $quotesInterval, in: 5...60, step: 5) {
+                                    HStack(spacing: 4) {
+                                        Text("Quotes cycle every")
+                                            .foregroundColor(.secondary)
+                                        Text("\(quotesInterval)s")
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.indigo)
+                                    }
+                                    .font(.subheadline)
+                                }
+                            }
+
+                            Toggle(isOn: $tasksVisible) {
+                                Label("Show Pending Tasks", systemImage: "clock.badge.exclamationmark")
+                                    .foregroundColor(.orange)
+                            }
+                            .tint(.orange)
+
+                            if tasksVisible {
+                                Stepper(value: $tasksInterval, in: 5...60, step: 5) {
+                                    HStack(spacing: 4) {
+                                        Text("Tasks cycle every")
+                                            .foregroundColor(.secondary)
+                                        Text("\(tasksInterval)s")
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.orange)
+                                    }
+                                    .font(.subheadline)
+                                }
+                            }
+                        }
+
                         if activeCount > 0 {
                             Section {
-                                Text("Active books rotate their quotes every 10 seconds in your Daily Notes and task views.")
+                                Text("Active books rotate their quotes at the interval set above.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             } header: {

@@ -211,6 +211,11 @@ struct DailyNotesView: View {
                 // Simple Cycles Section
                 Section("Smart Cycles") {
                     VStack(spacing: 12) {
+                        // Pending tasks — shown before the auto scheduler
+                        PendingTasksDisplayView(selectedDate: selectedDate)
+
+                        Divider()
+
                         HStack {
                             Toggle(isOn: $useCycles) {
                                 Text("Auto-start cycles from schedule")

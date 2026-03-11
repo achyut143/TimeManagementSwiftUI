@@ -30,7 +30,7 @@ struct UntimedTasksView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            pointsIndicator
+            PointsIndicatorView(tasks: tasks)
             
             HStack {
                 Button(showTaskCreation ? "Close" : "Add Untimed Task") {
@@ -423,26 +423,6 @@ struct UntimedTasksView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
-            }
-        }
-        .padding()
-        .background(.ultraThinMaterial)
-    }
-    
-    private var pointsIndicator: some View {
-        let totalPoints = tasks.reduce(0) { $0 + $1.weight }
-        let completedPoints = tasks.filter { $0.completed }.reduce(0) { $0 + $1.effectiveWeight }
-        
-        return HStack {
-            Text("Points: \(String(format: "%.1f", completedPoints))/\(Int(totalPoints))")
-                .font(.headline)
-                .fontWeight(.semibold)
-            
-            Spacer()
-            
-            if totalPoints > 0 {
-                ProgressView(value: completedPoints / totalPoints)
-                    .frame(width: 100)
             }
         }
         .padding()
