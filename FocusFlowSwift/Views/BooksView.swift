@@ -6,7 +6,6 @@ struct BooksView: View {
     @Query(sort: \Book.createdAt, order: .reverse) private var books: [Book]
 
     @State private var showAddBook = false
-    @State private var tooManyActiveAlert = false
 
     @AppStorage("display.quotesVisible") private var quotesVisible: Bool = true
     @AppStorage("display.tasksVisible") private var tasksVisible: Bool = true
@@ -72,7 +71,7 @@ struct BooksView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             } header: {
-                                Text("\(activeCount) of 5 books active")
+                                Text("\(activeCount) book\(activeCount == 1 ? "" : "s") active")
                             }
                         }
 
@@ -103,19 +102,10 @@ struct BooksView: View {
             .sheet(isPresented: $showAddBook) {
                 AddBookView()
             }
-            .alert("Too Many Active Books", isPresented: $tooManyActiveAlert) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("You can only activate 5 books at a time. Deactivate one first.")
-            }
         }
     }
 
     private func toggleActive(_ book: Book) {
-        if !book.isActive && activeCount >= 5 {
-            tooManyActiveAlert = true
-            return
-        }
         book.isActive.toggle()
         try? modelContext.save()
     }

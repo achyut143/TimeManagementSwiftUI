@@ -10,6 +10,7 @@ struct BookDetailView: View {
     @State private var showAddManualQuote = false
     @State private var showBulkImport = false
     @State private var generateCount: Int = 25
+    @State private var editingQuote: BookQuote?
 
     var sortedQuotes: [BookQuote] {
         (book.quotes ?? []).sorted { $0.createdAt > $1.createdAt }
@@ -134,6 +135,14 @@ struct BookDetailView: View {
                 Section("Saved Quotes (\(sortedQuotes.count))") {
                     ForEach(sortedQuotes) { quote in
                         QuoteRow(quote: quote)
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    editingQuote = quote
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.indigo)
+                            }
                     }
                     .onDelete(perform: deleteQuotes)
                 }
@@ -146,6 +155,9 @@ struct BookDetailView: View {
         }
         .sheet(isPresented: $showBulkImport) {
             BulkQuoteImportView(book: book)
+        }
+        .sheet(item: $editingQuote) { quote in
+            EditQuoteView(quote: quote)
         }
     }
 
