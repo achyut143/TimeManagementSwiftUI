@@ -422,10 +422,18 @@ struct DailyNotesView: View {
                 
                 // Load persistent pause state
                 loadPauseState()
-                
-                // If cycles were previously enabled, restart them
+
                 if useCycles {
-                    startSmartCycles()
+                    if pausedAt != nil {
+                        // Restore smart-paused state: timer off, Smart Resume button active
+                        settings.isPlaying = true
+                        settings.isPaused = true
+                    } else {
+                        // Mirror the toggle: full reset then clean start so stale
+                        // AlertSettings state (counter, isPlaying, isTransitioning) is cleared
+                        stopCycles()
+                        startSmartCycles()
+                    }
                 }
             }
             .onDisappear {
@@ -671,7 +679,7 @@ struct DailyNotesView: View {
                             .foregroundStyle(.orange)
                             .fontWeight(.medium)
                     }
-                    
+
                     Text("All following tasks will be adjusted when you resume")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -679,11 +687,24 @@ struct DailyNotesView: View {
                 }
                 .padding(.top, 8)
             }
+
+            // Strike out all time slots above the active one
+            Button(action: {
+                strikeOutPastTimeSlots()
+            }) {
+                Label("Strike Past Slots", systemImage: "text.badge.checkmark")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(.secondary)
         }
         .padding()
-        .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            (currentTaskName == "Rest up" ? Color.mint : Color.blue).opacity(0.1),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
     }
-    
+
     private func findConflictsAtCurrentTime() -> [TimeEntry] {
         let now = Date()
         let calendar = Calendar.current
@@ -815,11 +836,11 @@ struct DailyNotesView: View {
             } else if let nextEntry = self.findNextTask(after: currentMinutes, in: timeEntries) {
                 // In a gap before next task - start preparation/rest/Drink Water cycle
                 let gapMinutes = nextEntry.startMinutes - currentMinutes
-                self.currentTaskName = "Preparation/Rest/Drink Water"
+                self.currentTaskName = "Rest up"
                 self.currentCycleDuration = gapMinutes
                 
                 // Start preparation cycle
-                self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest/Drink Water")
+                self.startCycleWithDuration(gapMinutes, taskName: "Rest up")
                 
             } else {
                 // No more tasks today
@@ -924,7 +945,7 @@ struct DailyNotesView: View {
                 guard let settings = settings else { return }
                 
                 // Check if cycle just completed
-                if settings.isPlaying && !settings.isPaused {
+                if settings.isPlaying && !settings.isPaused && self.pausedAt == nil {
                     let timeRemaining = settings.nextAlertDate.timeIntervalSinceNow
                     
                     // If time is up or very close (within 1 second)
@@ -960,6 +981,64 @@ struct DailyNotesView: View {
         }
     }
     
+    // MARK: - Strike Past Slots
+
+    private func strikeOutPastTimeSlots() {
+        let now = Date()
+        let calendar = Calendar.current
+        let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+
+        // Identify the currently active time entry so we know the cutoff
+        let timeEntries = extractTimeEntriesFromNotes()
+        let activeEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries)
+
+        // A slot is "past" if it ended before the active slot starts (or before now if no active slot)
+        let cutoffMinutes = activeEntry?.startMinutes ?? currentMinutes
+
+        // Build a set of original lines that should be struck out
+        let pastOriginalLines = Set(
+            timeEntries
+                .filter { $0.endMinutes <= cutoffMinutes }
+                .map { $0.originalLine.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+
+        guard !pastOriginalLines.isEmpty else { return }
+
+        // Walk through the notes and wrap matching lines with ~~
+        var allLines = notesText.components(separatedBy: .newlines)
+
+        var startLineIndex: Int?
+        var endLineIndex: Int?
+        for (index, line) in allLines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "START" && startLineIndex == nil {
+                startLineIndex = index
+            } else if trimmed == "END" && startLineIndex != nil && endLineIndex == nil {
+                endLineIndex = index
+                break
+            }
+        }
+
+        guard let startIdx = startLineIndex, let endIdx = endLineIndex, startIdx < endIdx else { return }
+
+        for lineIdx in (startIdx + 1)..<endIdx {
+            let line = allLines[lineIdx]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Skip already struck-through or empty lines
+            guard !trimmed.isEmpty,
+                  !(trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")) else { continue }
+
+            if pastOriginalLines.contains(trimmed) {
+                allLines[lineIdx] = "~~\(trimmed)~~"
+            }
+        }
+
+        notesText = allLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+    }
+
     // MARK: - Smart Pause/Resume Logic
     
     private func handleSmartPause() {
@@ -974,8 +1053,13 @@ struct DailyNotesView: View {
             print("⏸️ Starting smart pause")
             pausedAt = Date()
             savePauseState()
-            
-            // Pause the timer (but keep isPlaying true)
+
+            // Cancel the AlertSettings internal timer so handleAlertFire() never fires
+            // while paused (stopTimer does NOT touch isPlaying, UI stays in Stop state)
+            settings.stopTimer()
+            if #available(iOS 16.1, *) {
+                LiveActivityManager.shared.pauseFocusActivity()
+            }
             settings.isPaused = true
             
             let announcement = "Smart pause activated. Schedule will adjust on resume."
@@ -1864,20 +1948,43 @@ struct DailyNotesView: View {
         }
         
         print("📝 Generated \(scheduleLines.count) schedule blocks")
-        
-        // Append to notes
+
         let generatedSchedule = scheduleLines.joined(separator: "\n")
         print("📋 Current notes length: \(notesText.count)")
-        
-        if notesText.isEmpty {
-            notesText = generatedSchedule
-        } else {
-            notesText += "\n" + generatedSchedule
+
+        // Insert inside the START/END block if it exists; otherwise create one
+        let allLines = notesText.components(separatedBy: .newlines)
+        var startLineIndex: Int?
+        var endLineIndex: Int?
+
+        for (index, line) in allLines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "START" && startLineIndex == nil {
+                startLineIndex = index
+            } else if trimmed == "END" && startLineIndex != nil && endLineIndex == nil {
+                endLineIndex = index
+                break
+            }
         }
-        
+
+        if let endIdx = endLineIndex {
+            // Insert the generated lines just before the END tag
+            var newLines = allLines
+            newLines.insert(contentsOf: scheduleLines, at: endIdx)
+            notesText = newLines.joined(separator: "\n")
+        } else {
+            // No START/END block found — wrap the generated schedule in one and append
+            let block = "\nSTART\n\(generatedSchedule)\nEND"
+            if notesText.isEmpty {
+                notesText = "START\n\(generatedSchedule)\nEND"
+            } else {
+                notesText += block
+            }
+        }
+
         print("📋 New notes length: \(notesText.count)")
         print("📋 First 100 chars: \(String(notesText.prefix(100)))")
-        
+
         // Force refresh editor
         DispatchQueue.main.async {
             self.editorKey = UUID()
@@ -1996,14 +2103,14 @@ struct DailyNotesView: View {
                     print("📍 Found next task: \(nextEntry.description) starting at \(safeMinutesToTime(nextEntry.startMinutes))")
                     print("   Gap duration: \(gapMinutes) minutes")
                     
-                    currentTaskName = "Preparation/Rest/Drink Water"
+                    currentTaskName = "Rest up"
                     currentCycleDuration = gapMinutes
                     
                     if gapMinutes > 0 {
                         print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
                         // Small delay to ensure clean state transition
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest/Drink Water")
+                            self.startCycleWithDuration(gapMinutes, taskName: "Rest up")
                             self.isTransitioning = false
                         }
                     } else {
@@ -2029,14 +2136,14 @@ struct DailyNotesView: View {
             print("📍 Currently in gap. Next task: \(nextEntry.description) at \(safeMinutesToTime(nextEntry.startMinutes))")
             print("   Gap duration: \(gapMinutes) minutes")
             
-            currentTaskName = "Preparation/Rest/Drink Water"
+            currentTaskName = "Rest up"
             currentCycleDuration = gapMinutes
             
             if gapMinutes > 0 {
                 print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
                 // Small delay to ensure clean state transition
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.startCycleWithDuration(gapMinutes, taskName: "Preparation/Rest/Drink Water")
+                    self.startCycleWithDuration(gapMinutes, taskName: "Rest up")
                     self.isTransitioning = false
                 }
             } else {

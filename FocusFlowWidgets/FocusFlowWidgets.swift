@@ -26,148 +26,54 @@ struct FocusActivityWidget: Widget {
             FocusLiveActivityView(context: context)
         } dynamicIsland: { (context: ActivityViewContext<FocusActivityAttributes>) in
             DynamicIsland {
-                // Expanded UI
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "calendar.badge.clock")
-                                .foregroundColor(.indigo)
-                                .font(.caption)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("Schedule")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                if let total = context.state.totalIntervals {
-                                    Text("Task \(context.state.currentInterval)/\(total)")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.primary)
-                                } else {
-                                    Text("Task \(context.state.currentInterval)")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.primary)
-                                }
-                            }
-                        }
-
-                        // Countdown to task end
-                        if !context.state.isPaused {
-                            let timeRemaining = context.state.nextAlertTime.timeIntervalSinceNow
-                            if timeRemaining > 0 {
-                                HStack(spacing: 2) {
-                                    Image(systemName: "hourglass")
-                                        .foregroundColor(.indigo)
-                                        .font(.caption2)
-                                    Text(context.state.nextAlertTime, style: .timer)
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.indigo)
-                                        .monospacedDigit()
-                                }
-                            } else {
-                                HStack(spacing: 2) {
-                                    Image(systemName: "arrow.clockwise")
-                                        .foregroundColor(.indigo)
-                                        .font(.caption2)
-                                    Text("Updating...")
-                                        .font(.caption2)
-                                        .foregroundColor(.indigo)
-                                }
-                            }
-                        }
-                    }
-                    .id("expanded-\(context.state.updateCounter)")
-                }
-
-                DynamicIslandExpandedRegion(.trailing) {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        if context.state.isPaused {
-                            HStack(spacing: 2) {
-                                Image(systemName: "pause.circle.fill")
-                                    .foregroundColor(.orange)
-                                    .font(.caption2)
-                                Text("Paused")
-                                    .font(.caption2)
-                                    .foregroundColor(.orange)
-                            }
-                        } else {
-                            Text("Ends")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            Text(context.state.nextAlertTime, style: .time)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundColor(.indigo)
-                        }
-                    }
-                }
-
-                DynamicIslandExpandedRegion(.bottom) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(context.state.currentCycleName ?? context.state.intervalName)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .lineLimit(1)
-                            if let cycleProgress = context.state.cycleProgress {
-                                Text("Task \(cycleProgress)")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-
-                        Spacer()
-
-                        Text("Started \(context.attributes.startTime, style: .time)")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(context.state.currentCycleName ?? context.state.intervalName)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                        Text("Interval \(context.state.currentInterval)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
-                    .padding(.horizontal, 4)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    if context.state.isPaused {
+                        Text("Paused")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.orange)
+                    } else {
+                        Text(context.state.nextAlertTime, style: .timer)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.indigo)
+                            .monospacedDigit()
+                    }
                 }
             } compactLeading: {
-                Image(systemName: "calendar.badge.clock")
-                    .foregroundColor(.indigo)
+                Text("\(context.state.currentInterval)")
                     .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.indigo)
             } compactTrailing: {
                 if context.state.isPaused {
                     Image(systemName: "pause.circle.fill")
                         .foregroundColor(.orange)
                         .font(.caption)
                 } else {
-                    let timeRemaining = context.state.nextAlertTime.timeIntervalSinceNow
-                    if timeRemaining > 0 {
-                        Text(context.state.nextAlertTime, style: .timer)
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.indigo)
-                            .monospacedDigit()
-                            .id("timer-\(context.state.updateCounter)")
-                    } else {
-                        HStack(spacing: 2) {
-                            Text("\(context.state.currentInterval)")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.indigo)
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 8))
-                                .foregroundColor(.indigo)
-                        }
-                        .id("pending-\(context.state.updateCounter)")
-                    }
+                    Text(context.state.nextAlertTime, style: .timer)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.indigo)
+                        .monospacedDigit()
                 }
             } minimal: {
-                if context.state.isPaused {
-                    Image(systemName: "pause.circle.fill")
-                        .foregroundColor(.orange)
-                        .font(.caption2)
-                } else {
-                    Text("\(context.state.currentInterval)")
-                        .font(.system(size: 12))
-                        .fontWeight(.bold)
-                        .foregroundColor(.indigo)
-                        .id("minimal-\(context.state.updateCounter)")
-                }
+                Text("\(context.state.currentInterval)")
+                    .font(.system(size: 12))
+                    .fontWeight(.bold)
+                    .foregroundColor(.indigo)
             }
         }
     }

@@ -75,7 +75,7 @@ class LiveActivityManager: ObservableObject {
         do {
             let activity = try Activity<FocusActivityAttributes>.request(
                 attributes: attributes,
-                content: .init(state: contentState, staleDate: nil),
+                content: .init(state: contentState, staleDate: nextAlertTime),
                 pushType: nil
             )
             
@@ -203,7 +203,7 @@ class LiveActivityManager: ObservableObject {
                 )
                 
                 do {
-                    await activity.update(.init(state: attemptState, staleDate: nil))
+                    await activity.update(.init(state: attemptState, staleDate: nextAlertTime))
                     self.logger.info("✅ Live Activity updated (attempt \(attemptCount)) - Interval: \(currentInterval)")
                     print("✅ Dynamic Island updated: Interval \(currentInterval) (attempt \(attemptCount))")
                     updateSuccessful = true
@@ -259,16 +259,17 @@ class LiveActivityManager: ObservableObject {
             updateCounter: currentState.updateCounter + 1000 // Force different value
         )
         
+        let staleDate = currentState.nextAlertTime
         ConcurrencyTask {
-            await activity.update(.init(state: pausedState, staleDate: nil))
+            await activity.update(.init(state: pausedState, staleDate: staleDate))
             logger.info("⏸️ Paused Live Activity")
             WidgetCenter.shared.reloadAllTimelines()
         }
     }
-    
+
     func resumeFocusActivity(nextAlertTime: Date) {
         guard let activity = currentActivity else { return }
-        
+
         let currentState = activity.content.state
         let resumedState = FocusActivityAttributes.ContentState(
             currentInterval: currentState.currentInterval,
@@ -283,9 +284,9 @@ class LiveActivityManager: ObservableObject {
             updateTimestamp: Date().timeIntervalSince1970,
             updateCounter: currentState.updateCounter + 2000 // Force different value
         )
-        
+
         ConcurrencyTask {
-            await activity.update(.init(state: resumedState, staleDate: nil))
+            await activity.update(.init(state: resumedState, staleDate: nextAlertTime))
             logger.info("▶️ Resumed Live Activity")
             WidgetCenter.shared.reloadAllTimelines()
         }
