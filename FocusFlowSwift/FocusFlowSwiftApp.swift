@@ -31,6 +31,7 @@ struct MigrationWrapper<Content: View>: View {
 struct FocusFlowSwiftApp: App {
     @StateObject private var alertManager = AlertManager()
     @StateObject private var backgroundCounter = BackgroundCounterManager.shared
+    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     
     init() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.focusflow.refresh", using: nil) { task in
@@ -48,6 +49,7 @@ struct FocusFlowSwiftApp: App {
         WindowGroup {
             MigrationWrapper {
                 ContentView()
+                    .preferredColorScheme(isDarkMode ? .dark : .light)
                     .environmentObject(alertManager)
                     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                         alertManager.handleAppLifecycleChange(isActive: false)

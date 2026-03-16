@@ -35,12 +35,17 @@ struct FocusLiveActivityView: View {
                     .font(.title3)
                     .fontWeight(.bold)
                     .foregroundColor(.orange)
-            } else {
+            } else if context.state.nextAlertTime.timeIntervalSinceNow > 0 {
                 Text(context.state.nextAlertTime, style: .timer)
                     .font(.title3)
                     .fontWeight(.bold)
                     .foregroundColor(.indigo)
                     .monospacedDigit()
+            } else {
+                Text("Done")
+                    .font(.title3)
+                    .fontWeight(.bold)
+                    .foregroundColor(.green)
             }
         }
         .padding()

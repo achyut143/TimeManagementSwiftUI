@@ -360,11 +360,10 @@ class LiveActivityManager: ObservableObject {
         )
         
         ConcurrencyTask {
-            await activity.update(.init(state: completionState, staleDate: nil))
-            
-            // End after a brief delay to show completion
+            // Update to show "Done" state then dismiss immediately
+            await activity.update(.init(state: completionState, staleDate: Date()))
             try? await ConcurrencyTask.sleep(for: .seconds(2))
-            await activity.end(nil, dismissalPolicy: .default)
+            await activity.end(nil, dismissalPolicy: .immediate)
             logger.info("Ended Live Activity with completion: \(activity.id)")
         }
         

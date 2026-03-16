@@ -88,9 +88,19 @@ struct TasksCalendarView: View {
                 timelineView
             }
         }
-        .navigationTitle("Tasks")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("4")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.indigo, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack {
                     Button {

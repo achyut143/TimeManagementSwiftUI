@@ -132,6 +132,7 @@ struct DailyNotesView: View {
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
     @State private var reminderTimer: Timer?
     @State private var showBooksLibrary = false
+    @State private var isFocusMode = false
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -400,14 +401,19 @@ struct DailyNotesView: View {
                     }
                 }
                 ToolbarItem(placement: .bottomBar) {
-                    Button(action: {
-                        speechManager.toggleMute()
-                    }) {
-                        Label(
-                            speechManager.isMuted ? "Unmute" : "Mute",
-                            systemImage: speechManager.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-                        )
-                        .foregroundColor(speechManager.isMuted ? .red : .primary)
+                    HStack {
+                        Button(action: { speechManager.toggleMute() }) {
+                            Label(
+                                speechManager.isMuted ? "Unmute" : "Mute",
+                                systemImage: speechManager.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                            )
+                            .foregroundColor(speechManager.isMuted ? .red : .primary)
+                        }
+                        Spacer()
+                        Button(action: { isFocusMode = true }) {
+                            Label("Focus", systemImage: "sparkles")
+                                .foregroundColor(.indigo)
+                        }
                     }
                 }
                 ToolbarItem(placement: .keyboard) {
@@ -447,6 +453,16 @@ struct DailyNotesView: View {
             }
             .sheet(isPresented: $showBooksLibrary) {
                 BooksView()
+            }
+            .fullScreenCover(isPresented: $isFocusMode) {
+                FocusModeView(
+                    isPresented: $isFocusMode,
+                    currentTaskName: currentTaskName,
+                    timeRemaining: timeRemaining,
+                    currentCycleDuration: currentCycleDuration,
+                    isTransitioning: isTransitioning,
+                    settings: settings
+                )
             }
         }
     }
@@ -2254,6 +2270,206 @@ struct DailyNotesView: View {
     
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+}
+
+// MARK: - Focus Mode View
+
+struct FocusModeView: View {
+    @Binding var isPresented: Bool
+    let currentTaskName: String
+    let timeRemaining: TimeInterval
+    let currentCycleDuration: Int
+    let isTransitioning: Bool
+    @ObservedObject var settings: AlertSettings
+
+    @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
+    @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
+
+    @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
+    @State private var currentIndex: Int = 0
+    @State private var showQuote: Bool = true
+    @State private var cycleTimer: Timer?
+    @State private var currentTime: Date = Date()
+    @State private var clockTimer: Timer?
+
+    private var timeRemainingFormatted: String {
+        let minutes = Int(timeRemaining) / 60
+        let seconds = Int(timeRemaining) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Top bar
+                HStack {
+                    Button(action: { isPresented = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    Spacer()
+                    Text(currentTime, style: .time)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+
+                Spacer()
+
+                // Large quote
+                if quotePool.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "books.vertical")
+                            .font(.largeTitle)
+                            .foregroundColor(.indigo.opacity(0.4))
+                        Text("Activate a book in the Books library\nto see quotes here")
+                            .font(.title3)
+                            .foregroundColor(.white.opacity(0.3))
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                } else {
+                    let quote = quotePool[currentIndex]
+                    VStack(spacing: 24) {
+                        Image(systemName: "quote.opening")
+                            .font(.title)
+                            .foregroundColor(.indigo.opacity(0.6))
+
+                        if showQuote {
+                            Text(quote.text)
+                                .font(.title2)
+                                .fontWeight(.medium)
+                                .foregroundColor(.white)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                                        removal: .move(edge: .leading).combined(with: .opacity)
+                                    )
+                                )
+                                .id("fq-\(currentIndex)")
+
+                            VStack(spacing: 4) {
+                                Text("— \(quote.author)")
+                                    .font(.callout)
+                                    .italic()
+                                    .foregroundColor(.white.opacity(0.55))
+                                Text(quote.bookTitle)
+                                    .font(.caption)
+                                    .foregroundColor(.indigo.opacity(0.8))
+                                if let chNum = quote.chapterNumber {
+                                    let label = quote.chapterName.map { "Chapter \(chNum): \($0)" } ?? "Chapter \(chNum)"
+                                    Text(label)
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                            }
+                            .transition(.opacity)
+                            .id("fa-\(currentIndex)")
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                Spacer()
+
+                // Cycle status strip
+                if settings.isPlaying || settings.isPaused {
+                    VStack(spacing: 8) {
+                        Divider()
+                            .background(Color.white.opacity(0.15))
+                        HStack(spacing: 12) {
+                            Image(systemName: settings.isPaused ? "pause.circle.fill" : "play.circle.fill")
+                                .foregroundColor(settings.isPaused ? .orange : .green)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(isTransitioning ? "Transitioning..." : currentTaskName.isEmpty ? "Cycle running" : currentTaskName)
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.8))
+                                if currentCycleDuration > 0 && !isTransitioning {
+                                    Text("\(currentCycleDuration) min block")
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.4))
+                                }
+                            }
+
+                            Spacer()
+
+                            if settings.isPlaying && !settings.isPaused {
+                                Text(timeRemainingFormatted)
+                                    .font(.system(.title3, design: .monospaced))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(timeRemaining <= 30 ? .red : .green)
+                            } else if settings.isPaused {
+                                Text("Paused")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 20)
+                    }
+                } else {
+                    // Minimal bottom padding when no cycle
+                    Color.clear.frame(height: 32)
+                }
+            }
+        }
+        .onAppear {
+            buildQuotePool()
+            startCycling()
+            clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                currentTime = Date()
+            }
+        }
+        .onDisappear {
+            stopCycling()
+            clockTimer?.invalidate()
+            clockTimer = nil
+        }
+        .onChange(of: activeBooks.count) { _, _ in
+            buildQuotePool()
+        }
+    }
+
+    private func buildQuotePool() {
+        var pool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
+        for book in activeBooks {
+            for quote in book.quotes ?? [] {
+                pool.append((text: quote.text, bookTitle: book.title, author: book.author,
+                             chapterNumber: quote.chapterNumber, chapterName: quote.chapterName))
+            }
+        }
+        quotePool = pool.shuffled()
+        currentIndex = 0
+    }
+
+    private func startCycling() {
+        guard cycleTimer == nil else { return }
+        cycleTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(intervalSeconds), repeats: true) { _ in
+            advanceQuote()
+        }
+    }
+
+    private func stopCycling() {
+        cycleTimer?.invalidate()
+        cycleTimer = nil
+    }
+
+    private func advanceQuote() {
+        guard quotePool.count > 1 else { return }
+        withAnimation(.easeInOut(duration: 0.4)) { showQuote = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            currentIndex = (currentIndex + 1) % quotePool.count
+            withAnimation(.easeInOut(duration: 0.4)) { showQuote = true }
+        }
     }
 }
 

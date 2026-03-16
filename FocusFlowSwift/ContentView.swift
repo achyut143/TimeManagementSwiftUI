@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var selectedDate = Date()
     @State private var habitSettings: HabitSettings?
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
+    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     @ObservedObject private var counterManager = BackgroundCounterManager.shared
     
     // Timer for checking expired activity windows
@@ -39,7 +40,7 @@ struct ContentView: View {
                     }
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {
-                            HStack {
+                            HStack(spacing: 12) {
                                 Button {
                                     withAnimation {
                                         showBackgroundCounter.toggle()
@@ -53,14 +54,14 @@ struct ContentView: View {
                                         .background(Color.blue.opacity(0.1))
                                         .cornerRadius(6)
                                 }
-                                
+
                                 Button {
                                     showDailyNotes = true
                                 } label: {
                                     Image(systemName: "note.text")
                                         .foregroundColor(.green)
                                 }
-                                
+
                                 Button {
                                     showMetricsSettings = true
                                 } label: {
@@ -76,11 +77,11 @@ struct ContentView: View {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Text("Metrics Period")
                                             .font(.headline)
-                                        
+
                                         Text("Show completion rate and streak for:")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
-                                        
+
                                         ForEach([7, 15, 30, 45, 60], id: \.self) { days in
                                             Button(action: {
                                                 metricDays = days
@@ -108,20 +109,26 @@ struct ContentView: View {
                             }
                         }
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            HStack {
+                            Menu {
                                 Button {
                                     showNewActivity = true
                                 } label: {
-                                    Image(systemName: "clock.badge.plus")
-                                        .foregroundColor(.purple)
+                                    Label("New Activity", systemImage: "clock.badge.plus")
                                 }
-
                                 Button {
                                     showBooksLibrary = true
                                 } label: {
-                                    Image(systemName: "books.vertical")
-                                        .foregroundColor(.indigo)
+                                    Label("Books", systemImage: "books.vertical")
                                 }
+                                Divider()
+                                Button {
+                                    isDarkMode.toggle()
+                                } label: {
+                                    Label(isDarkMode ? "Switch to Light" : "Switch to Dark",
+                                          systemImage: isDarkMode ? "sun.max.fill" : "moon.fill")
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
                             }
                         }
                     }

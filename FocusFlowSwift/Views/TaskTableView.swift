@@ -35,31 +35,67 @@ struct TaskTableView: View {
     @State private var showBulkDeleteConfirmation = false
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
-    
+    @State private var statusFilter: StatusFilter = .all
+
+    enum StatusFilter: String, CaseIterable {
+        case all = "All"
+        case pending = "Pending"
+        case completed = "Completed"
+        case notCompleted = "Not Completed"
+    }
+
     var allTags: [String] {
-        var tags = Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } })).sorted()
+        var tagSet = Set<String>()
+        for task in tasks {
+            let parts = task.taskDescription.split(separator: ",")
+            for part in parts {
+                tagSet.insert(part.trimmingCharacters(in: .whitespaces).lowercased())
+            }
+        }
+        var tags = tagSet.sorted()
         tags.insert("No Tag", at: 0)
         return tags
     }
-    
+
+    private func taskMatchesStatus(completed: Bool, notCompleted: Bool) -> Bool {
+        switch statusFilter {
+        case .all: return true
+        case .pending: return !completed && !notCompleted
+        case .completed: return completed
+        case .notCompleted: return notCompleted
+        }
+    }
+
+    private func taskMatchesTags(description: String) -> Bool {
+        guard !selectedTags.isEmpty else { return true }
+        let taskTags = Set(description.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
+        let hasNoTag = description.trimmingCharacters(in: .whitespaces).isEmpty
+        return !taskTags.isDisjoint(with: selectedTags) || (selectedTags.contains("No Tag") && hasNoTag)
+    }
+
     var filteredTasks: [Task] {
-        tasks.filter { task in
+        let calendar = Calendar.current
+        let rangeStart = calendar.startOfDay(for: startDate)
+        let rangeEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+
+        return tasks.filter { task in
             guard let taskDate = task.date else { return false }
-            
-            let dateInRange = taskDate >= startDate && taskDate <= endDate
-            let matchesSearch = searchText.isEmpty || task.title.localizedCaseInsensitiveContains(searchText)
-            let hasNotesFilter = !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty)
-            let hasAttachmentsFilter = !showOnlyWithAttachments || (task.attachments != nil && !task.attachments!.isEmpty)
-            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
-            let hasNoTag = task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty
-            let matchesTags = selectedTags.isEmpty || 
-                             (!taskTags.isDisjoint(with: selectedTags)) ||
-                             (selectedTags.contains("No Tag") && hasNoTag)
-            
-            return dateInRange && matchesSearch && hasNotesFilter && hasAttachmentsFilter && matchesTags
-        }.sorted { $0.date ?? Date() > $1.date ?? Date() }
+            guard taskDate >= rangeStart && taskDate < rangeEnd else { return false }
+            guard searchText.isEmpty || task.title.localizedCaseInsensitiveContains(searchText) else { return false }
+            guard !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty) else { return false }
+            guard !showOnlyWithAttachments || (task.attachments != nil && !task.attachments!.isEmpty) else { return false }
+            guard taskMatchesStatus(completed: task.completed, notCompleted: task.notCompleted) else { return false }
+            guard taskMatchesTags(description: task.taskDescription) else { return false }
+            return true
+        }.sorted { ($0.date ?? Date()) > ($1.date ?? Date()) }
     }
     
+    private func taskRowBackground(_ task: Task) -> Color {
+        if task.completed { return .green.opacity(0.3) }
+        if task.notCompleted { return .red.opacity(0.3) }
+        return .clear
+    }
+
     var body: some View {
         VStack {
             filterSection
@@ -95,6 +131,7 @@ struct TaskTableView: View {
                         }
                     }, isSelectionMode: isSelectionMode)
                 }
+                .listRowBackground(taskRowBackground(task))
                 .swipeActions {
                     Button("Delete", role: .destructive) {
                         taskToDelete = task
@@ -258,6 +295,13 @@ struct TaskTableView: View {
                 DatePicker("To", selection: $endDate, displayedComponents: .date)
             }
             
+            Picker("Status", selection: $statusFilter) {
+                ForEach(StatusFilter.allCases, id: \.self) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Toggle("Only tasks with notes", isOn: $showOnlyWithNotes)
             
             Toggle("Only tasks with attachments", isOn: $showOnlyWithAttachments)
@@ -355,14 +399,6 @@ struct TaskRowView: View {
             }
             
             HStack {
-                if task.completed {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                if task.notCompleted {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                }
                 if task.notes != nil && !task.notes!.isEmpty {
                     Button(action: onNotesAction) {
                         Image(systemName: "note.text")

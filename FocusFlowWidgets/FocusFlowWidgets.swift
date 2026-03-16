@@ -44,12 +44,17 @@ struct FocusActivityWidget: Widget {
                             .font(.caption)
                             .fontWeight(.bold)
                             .foregroundColor(.orange)
-                    } else {
+                    } else if context.state.nextAlertTime.timeIntervalSinceNow > 0 {
                         Text(context.state.nextAlertTime, style: .timer)
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundColor(.indigo)
                             .monospacedDigit()
+                    } else {
+                        Text("Done")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.green)
                     }
                 }
             } compactLeading: {
@@ -62,12 +67,16 @@ struct FocusActivityWidget: Widget {
                     Image(systemName: "pause.circle.fill")
                         .foregroundColor(.orange)
                         .font(.caption)
-                } else {
+                } else if context.state.nextAlertTime.timeIntervalSinceNow > 0 {
                     Text(context.state.nextAlertTime, style: .timer)
                         .font(.caption2)
                         .fontWeight(.semibold)
                         .foregroundColor(.indigo)
                         .monospacedDigit()
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.caption)
                 }
             } minimal: {
                 Text("\(context.state.currentInterval)")
@@ -226,22 +235,27 @@ struct ActivityTimerWidget: Widget {
                         }
                         
                         // Countdown timer
-                        if !context.state.isPaused {
+                        if !context.state.isPaused && context.state.endTime.timeIntervalSinceNow > 0 {
                             Text(context.state.endTime, style: .timer)
                                 .font(.title3)
                                 .fontWeight(.bold)
                                 .foregroundColor(.orange)
                                 .monospacedDigit()
-                        } else {
+                        } else if context.state.isPaused {
                             Text(formattedTime(context.state.remainingSeconds))
                                 .font(.title3)
                                 .fontWeight(.bold)
                                 .foregroundColor(.yellow)
                                 .monospacedDigit()
+                        } else {
+                            Text("Done")
+                                .font(.title3)
+                                .fontWeight(.bold)
+                                .foregroundColor(.green)
                         }
                     }
                 }
-                
+
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 4) {
                         if context.state.isPaused {
