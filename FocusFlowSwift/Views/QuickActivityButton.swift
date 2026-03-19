@@ -100,6 +100,8 @@ struct QuickActivitiesListView: View {
     @Query(filter: #Predicate<ScheduledActivity> { $0.isActive }, sort: \ScheduledActivity.createdAt, order: .reverse)
     private var activities: [ScheduledActivity]
     
+    @AppStorage("quickActivities_groupByRecurrence") private var groupByRecurrence = false
+
     @State private var currentTime = Date()
     @State private var selectedActivity: ScheduledActivity?
     @State private var showActivityWindow = false
@@ -116,30 +118,30 @@ struct QuickActivitiesListView: View {
         _refreshTrigger = State(initialValue: refreshTrigger)
     }
     
-    // Sort activities by time remaining (least time first)
     var sortedActivities: [ScheduledActivity] {
-        // Force a refresh by accessing forceRefresh
         _ = forceRefresh
-        
-        return activities.sorted { activity1, activity2 in
-            let time1 = timeUntilNext(for: activity1)
-            let time2 = timeUntilNext(for: activity2)
-            
-            // Activities in active window come first (negative time)
-            if time1 < 0 && time2 >= 0 {
-                return true
-            } else if time1 >= 0 && time2 < 0 {
-                return false
-            } else if time1 < 0 && time2 < 0 {
-                // Both in active window, sort by remaining window time (descending)
-                return time1 > time2
-            } else {
-                // Both not in active window, sort by next time (ascending)
-                return time1 < time2
-            }
+        return activities.sorted { sortPriority(for: $0) < sortPriority(for: $1) }
+    }
+
+    // Priority tuple: (group 0-3, tiebreak time)
+    // 0 = active window (least time remaining first)
+    // 1 = credits available, not in window (soonest next window first)
+    // 2 = upcoming window (soonest first)
+    // 3 = no upcoming window
+    private func sortPriority(for activity: ScheduledActivity) -> (Int, TimeInterval) {
+        if activity.isInActiveWindow() {
+            let remaining = activity.currentWindowEndTime()?.timeIntervalSince(currentTime) ?? 0
+            return (0, remaining)
+        } else if activity.accumulatedWindowCredits > 0 {
+            let next = activity.nextScheduledTime()?.timeIntervalSince(currentTime) ?? .greatestFiniteMagnitude
+            return (1, next)
+        } else if let next = activity.nextScheduledTime() {
+            return (2, next.timeIntervalSince(currentTime))
+        } else {
+            return (3, .greatestFiniteMagnitude)
         }
     }
-    
+
     // Group activities by recurrence type
     var dailyActivities: [ScheduledActivity] {
         sortedActivities.filter { ($0.recurrenceType ?? .daily) == .daily }
@@ -157,147 +159,86 @@ struct QuickActivitiesListView: View {
         sortedActivities.filter { ($0.recurrenceType ?? .daily) == .quarterly }
     }
     
-    private func timeUntilNext(for activity: ScheduledActivity) -> TimeInterval {
-        if activity.isInActiveWindow() {
-            // Return negative value for active windows (window end time - current time)
-            if let windowEnd = activity.currentWindowEndTime() {
-                return windowEnd.timeIntervalSince(currentTime)
-            }
-            return -1
-        } else if let nextTime = activity.nextScheduledTime() {
-            return nextTime.timeIntervalSince(currentTime)
-        }
-        return TimeInterval.greatestFiniteMagnitude // Activities with no next time go to the end
-    }
-    
     var body: some View {
         NavigationStack {
             List {
-                // Daily Activities Section
-                if !dailyActivities.isEmpty {
-                    Section(header: HStack {
-                        Image(systemName: "calendar")
-                            .foregroundColor(.blue)
-                        Text("Daily")
-                            .font(.headline)
-                    }) {
-                        ForEach(dailyActivities, id: \.name) { activity in
-                            QuickActivityRowView(
-                                activity: activity,
-                                currentTime: currentTime,
-                                onUseWindow: {
-                                    selectedActivity = activity
-                                    showActivityWindow = true
-                                },
-                                onUseCredits: {
-                                    selectedActivity = activity
-                                    creditsToUse = 1
-                                    showCreditUseSheet = true
-                                }
-                            )
+                if groupByRecurrence {
+                    // Grouped by recurrence type
+                    if !dailyActivities.isEmpty {
+                        Section(header: HStack {
+                            Image(systemName: "calendar").foregroundColor(.blue)
+                            Text("Daily").font(.headline)
+                        }) {
+                            ForEach(dailyActivities, id: \.name) { activity in
+                                rowView(for: activity)
+                            }
                         }
                     }
-                }
-                
-                // Weekly Activities Section
-                if !weeklyActivities.isEmpty {
-                    Section(header: HStack {
-                        Image(systemName: "calendar.badge.clock")
-                            .foregroundColor(.green)
-                        Text("Weekly")
-                            .font(.headline)
-                    }) {
-                        ForEach(weeklyActivities, id: \.name) { activity in
-                            QuickActivityRowView(
-                                activity: activity,
-                                currentTime: currentTime,
-                                onUseWindow: {
-                                    selectedActivity = activity
-                                    showActivityWindow = true
-                                },
-                                onUseCredits: {
-                                    selectedActivity = activity
-                                    creditsToUse = 1
-                                    showCreditUseSheet = true
-                                }
-                            )
+                    if !weeklyActivities.isEmpty {
+                        Section(header: HStack {
+                            Image(systemName: "calendar.badge.clock").foregroundColor(.green)
+                            Text("Weekly").font(.headline)
+                        }) {
+                            ForEach(weeklyActivities, id: \.name) { activity in
+                                rowView(for: activity)
+                            }
                         }
                     }
-                }
-                
-                // Monthly Activities Section
-                if !monthlyActivities.isEmpty {
-                    Section(header: HStack {
-                        Image(systemName: "calendar.circle")
-                            .foregroundColor(.orange)
-                        Text("Monthly")
-                            .font(.headline)
-                    }) {
-                        ForEach(monthlyActivities, id: \.name) { activity in
-                            QuickActivityRowView(
-                                activity: activity,
-                                currentTime: currentTime,
-                                onUseWindow: {
-                                    selectedActivity = activity
-                                    showActivityWindow = true
-                                },
-                                onUseCredits: {
-                                    selectedActivity = activity
-                                    creditsToUse = 1
-                                    showCreditUseSheet = true
-                                }
-                            )
+                    if !monthlyActivities.isEmpty {
+                        Section(header: HStack {
+                            Image(systemName: "calendar.circle").foregroundColor(.orange)
+                            Text("Monthly").font(.headline)
+                        }) {
+                            ForEach(monthlyActivities, id: \.name) { activity in
+                                rowView(for: activity)
+                            }
                         }
                     }
-                }
-                
-                // Quarterly Activities Section
-                if !quarterlyActivities.isEmpty {
-                    Section(header: HStack {
-                        Image(systemName: "calendar.badge.plus")
-                            .foregroundColor(.purple)
-                        Text("Quarterly")
-                            .font(.headline)
-                    }) {
-                        ForEach(quarterlyActivities, id: \.name) { activity in
-                            QuickActivityRowView(
-                                activity: activity,
-                                currentTime: currentTime,
-                                onUseWindow: {
-                                    selectedActivity = activity
-                                    showActivityWindow = true
-                                },
-                                onUseCredits: {
-                                    selectedActivity = activity
-                                    creditsToUse = 1
-                                    showCreditUseSheet = true
-                                }
-                            )
+                    if !quarterlyActivities.isEmpty {
+                        Section(header: HStack {
+                            Image(systemName: "calendar.badge.plus").foregroundColor(.purple)
+                            Text("Quarterly").font(.headline)
+                        }) {
+                            ForEach(quarterlyActivities, id: \.name) { activity in
+                                rowView(for: activity)
+                            }
                         }
+                    }
+                } else {
+                    // Flat sorted list
+                    ForEach(sortedActivities, id: \.name) { activity in
+                        rowView(for: activity)
                     }
                 }
             }
-            .id(refreshTrigger) // Force list refresh when trigger changes
+            .id(refreshTrigger)
             .navigationTitle("Quick Activities")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        // Force refresh from database
                         modelContext.processPendingChanges()
                         refreshTrigger = UUID()
                         forceRefresh.toggle()
                         currentTime = Date()
                     } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundColor(.blue)
+                        Image(systemName: "arrow.clockwise").foregroundColor(.blue)
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
+
+                ToolbarItem(placement: .principal) {
+                    Toggle(isOn: $groupByRecurrence) {
+                        Text("Group")
+                            .font(.caption)
                     }
+                    .toggleStyle(.button)
+                    .tint(.blue)
+                    .font(.caption)
+                    .controlSize(.mini)
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
                 }
             }
         }
@@ -345,6 +286,23 @@ struct QuickActivitiesListView: View {
         }
     }
     
+    @ViewBuilder
+    private func rowView(for activity: ScheduledActivity) -> some View {
+        QuickActivityRowView(
+            activity: activity,
+            currentTime: currentTime,
+            onUseWindow: {
+                selectedActivity = activity
+                showActivityWindow = true
+            },
+            onUseCredits: {
+                selectedActivity = activity
+                creditsToUse = 1
+                showCreditUseSheet = true
+            }
+        )
+    }
+
     private func recordActivityUsage(activity: ScheduledActivity) {
         print("🚀 DEBUG: recordActivityUsage called for activity: '\(activity.name)'")
         let now = Date()

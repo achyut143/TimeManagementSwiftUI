@@ -17,41 +17,37 @@ struct ScheduledActivityView: View {
     @State private var activityToEdit: ScheduledActivity?
     @State private var showDeleteConfirmation = false
     @State private var activityToDelete: ScheduledActivity?
-    
+    @State private var searchText = ""
+
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    
+
     var activeActivities: [ScheduledActivity] {
-        let filtered = activities.filter { $0.isActive }
-        return filtered.sorted { activity1, activity2 in
-            let time1 = timeUntilNext(for: activity1)
-            let time2 = timeUntilNext(for: activity2)
-            
-            // Activities in active window come first (negative time)
-            if time1 < 0 && time2 >= 0 {
-                return true
-            } else if time1 >= 0 && time2 < 0 {
-                return false
-            } else if time1 < 0 && time2 < 0 {
-                // Both in active window, sort by remaining window time (descending)
-                return time1 > time2
-            } else {
-                // Both not in active window, sort by next time (ascending)
-                return time1 < time2
-            }
+        let filtered = activities.filter { activity in
+            guard activity.isActive else { return false }
+            guard !searchText.isEmpty else { return true }
+            return activity.name.localizedCaseInsensitiveContains(searchText) ||
+                   activity.effectiveRecurrenceType.displayName.localizedCaseInsensitiveContains(searchText)
         }
+        return filtered.sorted { sortPriority(for: $0) < sortPriority(for: $1) }
     }
-    
-    private func timeUntilNext(for activity: ScheduledActivity) -> TimeInterval {
+
+    // Priority tuple: (group 0-3, tiebreak time)
+    // 0 = active window (least time remaining first)
+    // 1 = credits available, not in window (soonest next window first)
+    // 2 = upcoming window (soonest first)
+    // 3 = no upcoming window
+    private func sortPriority(for activity: ScheduledActivity) -> (Int, TimeInterval) {
         if activity.isInActiveWindow() {
-            // Return negative value for active windows (window end time - current time)
-            if let windowEnd = activity.currentWindowEndTime() {
-                return windowEnd.timeIntervalSince(currentTime)
-            }
-            return -1
-        } else if let nextTime = activity.nextScheduledTime() {
-            return nextTime.timeIntervalSince(currentTime)
+            let remaining = activity.currentWindowEndTime()?.timeIntervalSince(currentTime) ?? 0
+            return (0, remaining)
+        } else if activity.accumulatedWindowCredits > 0 {
+            let next = activity.nextScheduledTime()?.timeIntervalSince(currentTime) ?? .greatestFiniteMagnitude
+            return (1, next)
+        } else if let next = activity.nextScheduledTime() {
+            return (2, next.timeIntervalSince(currentTime))
+        } else {
+            return (3, .greatestFiniteMagnitude)
         }
-        return TimeInterval.greatestFiniteMagnitude // Activities with no next time go to the end
     }
     
     var body: some View {
@@ -59,11 +55,21 @@ struct ScheduledActivityView: View {
             Color(.systemGroupedBackground).ignoresSafeArea()
             
             VStack(spacing: 20) {
-                if activeActivities.isEmpty {
+                if activities.filter({ $0.isActive }).isEmpty {
                     noActivitiesView
+                } else if activeActivities.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("No results for \"\(searchText)\"")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 16) {
+                        LazyVStack(spacing: 8) {
                             ForEach(activeActivities, id: \.name) { activity in
                                 ActivityCardView(
                                     activity: activity,
@@ -86,11 +92,12 @@ struct ScheduledActivityView: View {
                         .padding()
                     }
                 }
-                
+
                 Spacer()
             }
         }
         .navigationTitle("Scheduled Activities")
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search activities")
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 HStack {
@@ -264,371 +271,195 @@ struct ActivityCardView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showChart = false
     
+    var isActive: Bool { activity.isInActiveWindow() }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(activity.name)
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    HStack {
-                        Image(systemName: activity.effectiveRecurrenceType.icon)
-                            .foregroundColor(.blue)
-                            .font(.caption)
-                        Text(activity.effectiveRecurrenceType.displayName)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
+        VStack(alignment: .leading, spacing: 5) {
+
+            // Row 1: Name + badges + chart + menu
+            HStack(spacing: 6) {
+                Image(systemName: activity.effectiveRecurrenceType.icon)
+                    .font(.caption2)
+                    .foregroundColor(.blue)
+
+                Text(activity.name)
+                    .font(.headline)
+                    .lineLimit(1)
+
                 Spacer()
-                
-                HStack(spacing: 12) {
-                    if activity.isInActiveWindow() {
-                        Text("ACTIVE")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.green)
-                            .cornerRadius(6)
-                    }
-                    
-                    Menu {
-                        Button {
-                            onEdit()
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        
-                        Button(role: .destructive) {
-                            onDelete()
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.title3)
-                            .foregroundColor(.secondary)
-                    }
+
+                if isActive {
+                    Text("LIVE")
+                        .font(.caption2).fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Color.green).cornerRadius(4)
+                }
+
+                if activity.accumulatedWindowCredits > 0 {
+                    Label("\(activity.accumulatedWindowCredits)", systemImage: "gift.fill")
+                        .font(.caption2).foregroundColor(.orange)
+                }
+
+                if activity.overdraftWindowsUsed > 0 {
+                    Label("\(activity.overdraftWindowsUsed)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundColor(.red)
+                }
+
+                Button { showChart = true } label: {
+                    Image(systemName: "chart.bar")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+
+                Menu {
+                    Button { onEdit() } label: { Label("Edit", systemImage: "pencil") }
+                    Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.caption).foregroundColor(.secondary)
                 }
             }
-            
-            // Scheduled Times
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Scheduled Times:")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 8) {
-                    ForEach(activity.scheduledTimes.indices, id: \.self) { index in
-                        let time = activity.scheduledTimes[index]
-                        Text(time, style: .time)
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(.secondarySystemGroupedBackground))
-                            .cornerRadius(6)
+
+            // Row 2: Time pills + duration
+            HStack(spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(activity.scheduledTimes.indices, id: \.self) { i in
+                            Text(activity.scheduledTimes[i], style: .time)
+                                .font(.caption2)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(Color(.tertiarySystemFill)).cornerRadius(4)
+                        }
                     }
                 }
+                HStack(spacing: 2) {
+                    Image(systemName: "timer").font(.caption2)
+                    Text(durationString(from: activity.windowDuration)).font(.caption2)
+                }
+                .foregroundColor(.secondary)
             }
-            
-            // Recurrence Days Display
+
+            // Row 3: Recurrence days (non-daily)
             if activity.effectiveRecurrenceType != .daily {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Recurrence Days:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        
-                        Spacer()
-                        
-                        Text("(\(activity.effectiveRecurrenceType.displayName))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    let days = getRecurrenceDaysDisplay(for: activity)
-                    if !days.isEmpty {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 6) {
-                            ForEach(days, id: \.self) { dayText in
-                                Text(dayText)
-                                    .font(.caption)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
+                let days = getRecurrenceDaysDisplay(for: activity)
+                if !days.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(days, id: \.self) { day in
+                                Text(day)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 4).padding(.vertical, 2)
                                     .background(Color.blue.opacity(0.1))
-                                    .foregroundColor(.blue)
-                                    .cornerRadius(4)
+                                    .foregroundColor(.blue).cornerRadius(3)
                             }
                         }
-                    } else {
-                        Text("No days selected")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .italic()
                     }
+                } else {
+                    Text("No days selected")
+                        .font(.caption2).foregroundColor(.red).italic()
                 }
             }
-            
-            // Window Duration
-            HStack {
-                Text("Window Duration:")
-                Spacer()
-                Text(durationString(from: activity.windowDuration))
-            }
-            .font(.subheadline)
-            
-            // Window Credits Display
-            if activity.accumulatedWindowCredits > 0 {
-                HStack {
-                    Text("Window Credits:")
-                    Spacer()
-                    Text(activity.formattedWindowCredits())
-                        .fontWeight(.semibold)
-                        .foregroundColor(.orange)
-                }
-                .font(.subheadline)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(6)
-            }
-            
-            // Overdraft Display
-            if activity.overdraftWindowsUsed > 0 {
-                HStack {
-                    Text("Overdraft Used:")
-                    Spacer()
-                    Text("\(activity.overdraftWindowsUsed) \(activity.overdraftWindowsUsed == 1 ? "window" : "windows")")
-                        .fontWeight(.semibold)
-                        .foregroundColor(.red)
-                }
-                .font(.subheadline)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.red.opacity(0.1))
-                .cornerRadius(6)
-            }
-            
-            // Chart Button
-            Button {
-                showChart = true
-            } label: {
-                HStack {
-                    Image(systemName: "chart.bar.fill")
-                    Text("View Usage Chart")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(Color.blue.opacity(0.1))
-                .foregroundColor(.blue)
-                .cornerRadius(8)
-            }
-            
-            // Attached Reward Display
-            if activity.hasRewardAttachment {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Attached Reward:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Spacer()
-                        if let reward = activity.getAttachedReward(context: modelContext) {
-                            HStack(spacing: 4) {
-                                Image(systemName: reward.type.icon)
-                                    .font(.caption)
-                                Text(reward.name)
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                            }
-                            .foregroundColor(.purple)
-                        }
-                    }
-                    
-                    HStack {
-                        Text("Burns:")
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Image(systemName: activity.effectiveRewardBurnType.icon)
-                                .font(.caption)
-                            Text(activity.formattedBurnAmount())
-                                .fontWeight(.semibold)
-                        }
-                        .foregroundColor(.red)
-                    }
-                    .font(.caption)
-                    
-                    // Show if reward can afford the burn
-                    if let reward = activity.getAttachedReward(context: modelContext) {
-                        HStack {
-                            Text("Available:")
-                            Spacer()
-                            Text(reward.formattedAmount())
-                                .foregroundColor(activity.canBurnReward(context: modelContext) ? .green : .red)
-                        }
-                        .font(.caption)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(Color.purple.opacity(0.1))
-                .cornerRadius(6)
-            }
-            
-            // Attached Task Display
-            if activity.hasTaskAttachment {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Attached Task:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Spacer()
-                        if let task = activity.getAttachedTask(context: modelContext) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle")
-                                    .font(.caption)
-                                Text(task.title)
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .lineLimit(1)
-                            }
-                            .foregroundColor(.blue)
-                        }
-                    }
-                    
-                    HStack {
-                        Text("Adds:")
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Image(systemName: "clock.badge.plus.fill")
-                                .font(.caption)
-                            Text(activity.formattedTaskTime())
-                                .fontWeight(.semibold)
-                        }
-                        .foregroundColor(.green)
-                    }
-                    .font(.caption)
-                    
-                    // Show current task progress
-                    if let task = activity.getAttachedTask(context: modelContext) {
-                        HStack {
-                            Text("Current:")
-                            Spacer()
-                            let currentTime = task.timeSpent ?? 0.0
-                            let allocatedTime = task.allocatedTimeInMinutes
-                            if allocatedTime > 0 {
-                                let percentage = min(currentTime / allocatedTime, 1.0) * 100
-                                Text("\(Int(percentage))% (\(formatTaskTime(currentTime)))")
-                                    .foregroundColor(percentage >= 100 ? .green : .orange)
-                            } else {
-                                Text(formatTaskTime(currentTime))
-                                    .foregroundColor(.blue)
+
+            // Row 4: Attachments (reward + task inline)
+            if activity.hasRewardAttachment || activity.hasTaskAttachment {
+                HStack(spacing: 10) {
+                    if activity.hasRewardAttachment,
+                       let reward = activity.getAttachedReward(context: modelContext) {
+                        HStack(spacing: 3) {
+                            Image(systemName: reward.type.icon).font(.caption2)
+                            Text(reward.name).font(.caption2).lineLimit(1)
+                            Text("·").font(.caption2).foregroundColor(.secondary)
+                            Image(systemName: activity.effectiveRewardBurnType.icon).font(.caption2)
+                            Text(activity.formattedBurnAmount()).font(.caption2).fontWeight(.medium)
+                            if !activity.canBurnReward(context: modelContext) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .font(.caption2).foregroundColor(.red)
                             }
                         }
-                        .font(.caption)
+                        .foregroundColor(.purple)
                     }
+
+                    if activity.hasTaskAttachment,
+                       let task = activity.getAttachedTask(context: modelContext) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "checkmark.circle").font(.caption2)
+                            Text(task.title).font(.caption2).lineLimit(1)
+                            Text("+\(activity.formattedTaskTime())").font(.caption2).fontWeight(.medium)
+                        }
+                        .foregroundColor(.teal)
+                    }
+
+                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(6)
             }
-            
-            // Next Window or Current Status
-            if activity.isInActiveWindow() {
-                if let windowEnd = activity.currentWindowEndTime() {
+
+            // Row 5: Status + action buttons
+            HStack(spacing: 6) {
+                if isActive, let windowEnd = activity.currentWindowEndTime() {
                     let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
-                    
-                    VStack(spacing: 12) {
-                        HStack {
-                            Text("Window closes in:")
-                            Spacer()
-                            Text(timeString(from: remaining))
-                                .font(.system(.body, design: .monospaced))
-                                .fontWeight(.semibold)
-                                .foregroundColor(.red)
-                        }
-                        
-                        Button {
-                            onUseWindow()
-                        } label: {
-                            Label("Use Window", systemImage: "play.circle.fill")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.green)
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
-                        }
-                        
-                        // Use Window Credit Button
-                        if activity.accumulatedWindowCredits >= 1 {
-                            Button {
-                                if activity.useWindowCredits(1, context: modelContext) {
-                                    try? modelContext.save()
-                                }
-                            } label: {
-                                Label("Use 1 Window Credit", systemImage: "gift.fill")
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.orange)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(10)
-                            }
-                        }
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock.fill").font(.caption2).foregroundColor(.red)
+                        Text(timeString(from: remaining))
+                            .font(.caption2.monospacedDigit()).foregroundColor(.red)
                     }
-                }
-            } else if let nextTime = activity.nextScheduledTime() {
-                let timeUntilNext = nextTime.timeIntervalSince(currentTime)
-                
-                VStack(spacing: 8) {
-                    HStack {
-                        Text("Next window in:")
-                        Spacer()
-                        Text(timeString(from: timeUntilNext))
-                            .font(.system(.body, design: .monospaced))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.blue)
+
+                    Spacer()
+
+                    Button(action: onUseWindow) {
+                        Label("Use", systemImage: "play.fill")
+                            .font(.caption).fontWeight(.semibold)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Color.green).foregroundColor(.white).cornerRadius(7)
                     }
-                    
-                    // Use Window Credit Button (when not in active window)
+
                     if activity.accumulatedWindowCredits >= 1 {
                         Button {
-                            if activity.useWindowCredits(1, context: modelContext) {
-                                try? modelContext.save()
-                            }
+                            if activity.useWindowCredits(1, context: modelContext) { try? modelContext.save() }
                         } label: {
-                            Label("Use 1 Window Credit", systemImage: "gift.fill")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .background(Color.orange)
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
+                            Label("1cr", systemImage: "gift.fill")
+                                .font(.caption)
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .background(Color.orange).foregroundColor(.white).cornerRadius(7)
+                        }
+                    }
+
+                } else if let nextTime = activity.nextScheduledTime() {
+                    let timeUntil = nextTime.timeIntervalSince(currentTime)
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock").font(.caption2).foregroundColor(.blue)
+                        Text(timeString(from: timeUntil))
+                            .font(.caption2.monospacedDigit()).foregroundColor(.blue)
+                    }
+
+                    Spacer()
+
+                    if activity.accumulatedWindowCredits >= 1 {
+                        Button {
+                            if activity.useWindowCredits(1, context: modelContext) { try? modelContext.save() }
+                        } label: {
+                            Label("1cr", systemImage: "gift.fill")
+                                .font(.caption)
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .background(Color.orange).foregroundColor(.white).cornerRadius(7)
                         }
                     }
                 }
             }
         }
-        .padding()
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(Color(.secondarySystemGroupedBackground))
-        .cornerRadius(12)
+        .cornerRadius(10)
         .sheet(isPresented: $showChart) {
             NavigationStack {
-                ScrollView {
-                    ActivityWindowChartView(activity: activity)
-                }
-                .navigationTitle(activity.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Done") {
-                            showChart = false
+                ScrollView { ActivityWindowChartView(activity: activity) }
+                    .navigationTitle(activity.name)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") { showChart = false }
                         }
                     }
-                }
             }
         }
     }
@@ -676,7 +507,7 @@ struct ActivityCardView: View {
             
         case .weekly:
             let result = activity.selectedWeekdays.sorted().map { weekday in
-                Calendar.current.weekdaySymbols[weekday - 1]
+                Calendar.current.shortWeekdaySymbols[weekday - 1]
             }
             print("📅 Weekly display: \(result)")
             return result

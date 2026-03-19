@@ -693,10 +693,10 @@ class ScheduledActivity {
             }
             
         case .weekly:
-            // Check all valid days in current week
-            if let weekInterval = calendar.dateInterval(of: .weekOfYear, for: now) {
-                var date = weekInterval.start
-                while date < min(now, weekInterval.end) {
+            // Check all valid days in current month (reset period is monthly)
+            if let monthInterval = calendar.dateInterval(of: .month, for: now) {
+                var date = monthInterval.start
+                while date < min(now, monthInterval.end) {
                     if isValidDayForActivity(date: date) {
                         for windowTime in scheduledTimes {
                             if hasWindowPassedUnused(windowTime: windowTime, on: date) {

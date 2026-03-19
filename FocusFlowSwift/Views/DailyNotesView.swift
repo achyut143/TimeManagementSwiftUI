@@ -277,6 +277,13 @@ struct DailyNotesView: View {
                             if settings.isPlaying || settings.isPaused {
                                 cycleStatusView
                             }
+
+                            Button(action: { strikeOutPastTimeSlots() }) {
+                                Label("Strike Past Slots", systemImage: "text.badge.checkmark")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.secondary)
                         }
 
                         // Books quotes — always visible alongside the scheduler
@@ -325,27 +332,27 @@ struct DailyNotesView: View {
                         HStack {
                             Text("Interval:")
                                 .frame(width: 60, alignment: .leading)
-                            TextField("30", text: $scheduleInterval)
+                            TextField("25,20,10", text: $scheduleInterval)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.numberPad)
+                                .keyboardType(.numbersAndPunctuation)
                             Text("min")
                                 .foregroundColor(.secondary)
                         }
-                        
+
                         HStack {
                             Text("Gap:")
                                 .frame(width: 60, alignment: .leading)
-                            TextField("5", text: $scheduleGap)
+                            TextField("5,3,2", text: $scheduleGap)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.numberPad)
+                                .keyboardType(.numbersAndPunctuation)
                             Text("min")
                                 .foregroundColor(.secondary)
                         }
-                        
+
                         HStack {
                             Text("Task:")
                                 .frame(width: 60, alignment: .leading)
-                            TextField("work", text: $scheduleTaskName)
+                            TextField("work,implement,walk", text: $scheduleTaskName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                         }
                         
@@ -461,7 +468,11 @@ struct DailyNotesView: View {
                     timeRemaining: timeRemaining,
                     currentCycleDuration: currentCycleDuration,
                     isTransitioning: isTransitioning,
-                    settings: settings
+                    isSmartPaused: pausedAt != nil,
+                    notesText: notesText,
+                    settings: settings,
+                    onSmartPause: { handleSmartPause() },
+                    onStrikePast: { strikeOutPastTimeSlots() }
                 )
             }
         }
@@ -704,15 +715,6 @@ struct DailyNotesView: View {
                 .padding(.top, 8)
             }
 
-            // Strike out all time slots above the active one
-            Button(action: {
-                strikeOutPastTimeSlots()
-            }) {
-                Label("Strike Past Slots", systemImage: "text.badge.checkmark")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(.secondary)
         }
         .padding()
         .background(
@@ -1925,42 +1927,48 @@ struct DailyNotesView: View {
         print("   From: \(scheduleFrom), To: \(scheduleTo)")
         print("   Interval: \(scheduleInterval), Gap: \(scheduleGap)")
         print("   Task: \(scheduleTaskName)")
-        
-        guard let intervalMinutes = Int(scheduleInterval),
-              let gapMinutes = Int(scheduleGap),
+
+        // Parse comma-separated lists
+        let intervals: [Int] = scheduleInterval.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        let gaps: [Int] = scheduleGap.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        let tasks: [String] = scheduleTaskName.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+
+        guard !intervals.isEmpty, !gaps.isEmpty, !tasks.isEmpty,
               let fromMinutes = parseTimeToMinutes(scheduleFrom),
               var toMinutes = parseTimeToMinutes(scheduleTo) else {
             print("❌ Invalid input values")
-            print("   Interval parse: \(Int(scheduleInterval) != nil ? "✓" : "✗")")
-            print("   Gap parse: \(Int(scheduleGap) != nil ? "✓" : "✗")")
-            print("   From parse: \(parseTimeToMinutes(scheduleFrom) != nil ? "✓" : "✗")")
-            print("   To parse: \(parseTimeToMinutes(scheduleTo) != nil ? "✓" : "✗")")
             return
         }
-        
+
         // Adjust end time if it's before start time (assume PM)
         toMinutes = adjustEndTimeIfNeeded(startMinutes: fromMinutes, endMinutes: toMinutes)
-        
+
         print("✅ All inputs parsed successfully")
         print("   From minutes: \(fromMinutes), To minutes: \(toMinutes)")
-        
+
         var scheduleLines: [String] = []
         var currentStart = fromMinutes
         var taskNumber = 1
-        
+        var cycleIndex = 0
+
         while currentStart < toMinutes {
+            let intervalMinutes = intervals[cycleIndex % intervals.count]
+            let gapMinutes = gaps[cycleIndex % gaps.count]
+            let taskName = tasks[cycleIndex % tasks.count]
+
             let currentEnd = min(currentStart + intervalMinutes, toMinutes)
-            
+
             let startTime = formatMinutesToTime(currentStart)
             let endTime = formatMinutesToTime(currentEnd)
-            
-            let line = "\(taskNumber)) \(startTime) - \(endTime) - \(scheduleTaskName)"
+
+            let line = "\(taskNumber)) \(startTime) - \(endTime) - \(taskName)"
             scheduleLines.append(line)
             print("   Generated: \(line)")
-            
+
             // Move to next block (add interval + gap)
             currentStart = currentEnd + gapMinutes
             taskNumber += 1
+            cycleIndex += 1
         }
         
         print("📝 Generated \(scheduleLines.count) schedule blocks")
@@ -2060,9 +2068,11 @@ struct DailyNotesView: View {
     }
     
     private func formatMinutesToTime(_ minutes: Int) -> String {
-        let hours = minutes / 60
-        let mins = minutes % 60
-        return String(format: "%d:%02d", hours, mins)
+        let h = (minutes / 60) % 24
+        let m = minutes % 60
+        let suffix = h >= 12 ? "PM" : "AM"
+        let displayH = h == 0 ? 12 : (h > 12 ? h - 12 : h)
+        return String(format: "%d:%02d %@", displayH, m, suffix)
     }
     
     private func startNextCycle() {
@@ -2275,13 +2285,26 @@ struct DailyNotesView: View {
 
 // MARK: - Focus Mode View
 
+struct ScheduleEntry: Identifiable {
+    let id = UUID()
+    let raw: String
+    let startMinutes: Int?
+    let endMinutes: Int?
+    let task: String?
+    let isStruck: Bool
+}
+
 struct FocusModeView: View {
     @Binding var isPresented: Bool
     let currentTaskName: String
     let timeRemaining: TimeInterval
     let currentCycleDuration: Int
     let isTransitioning: Bool
+    let isSmartPaused: Bool
+    let notesText: String
     @ObservedObject var settings: AlertSettings
+    let onSmartPause: () -> Void
+    let onStrikePast: () -> Void
 
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
@@ -2292,11 +2315,67 @@ struct FocusModeView: View {
     @State private var cycleTimer: Timer?
     @State private var currentTime: Date = Date()
     @State private var clockTimer: Timer?
+    @State private var showSidebar = false
 
     private var timeRemainingFormatted: String {
         let minutes = Int(timeRemaining) / 60
         let seconds = Int(timeRemaining) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private var nowMinutes: Int {
+        let c = Calendar.current
+        return c.component(.hour, from: currentTime) * 60 + c.component(.minute, from: currentTime)
+    }
+
+    private var scheduleEntries: [ScheduleEntry] {
+        let lines = notesText.components(separatedBy: .newlines)
+        var inside = false
+        var result: [ScheduleEntry] = []
+        let pattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-?\s*(.+)"#
+        let regex = try? NSRegularExpression(pattern: pattern)
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "START" { inside = true; continue }
+            if trimmed == "END"   { inside = false; continue }
+            guard inside else { continue }
+
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let clean = trimmed
+                .replacingOccurrences(of: "~~", with: "")
+                .replacingOccurrences(of: #"^\d+\)\s*"#, with: "", options: .regularExpression)
+
+            var startMin: Int? = nil
+            var endMin: Int?   = nil
+            var task: String?  = nil
+
+            if let r = regex,
+               let m = r.firstMatch(in: clean, range: NSRange(clean.startIndex..., in: clean)),
+               let sr = Range(m.range(at: 1), in: clean),
+               let er = Range(m.range(at: 2), in: clean),
+               let tr = Range(m.range(at: 3), in: clean) {
+                startMin = focusModeTimeToMinutes(String(clean[sr]))
+                endMin   = focusModeTimeToMinutes(String(clean[er]))
+                task     = String(clean[tr]).trimmingCharacters(in: .whitespaces)
+            }
+
+            result.append(ScheduleEntry(raw: trimmed, startMinutes: startMin, endMinutes: endMin, task: task, isStruck: isStruck))
+        }
+        return result
+    }
+
+    private func focusModeTimeToMinutes(_ s: String) -> Int? {
+        let clean = s.trimmingCharacters(in: .whitespaces)
+        let isPM  = clean.lowercased().contains("pm")
+        let isAM  = clean.lowercased().contains("am")
+        let timeOnly = clean.replacingOccurrences(of: #"\s*[AaPp][Mm]"#, with: "", options: .regularExpression)
+        let parts = timeOnly.components(separatedBy: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+        var hour = h
+        if isPM && hour != 12 { hour += 12 }
+        if isAM && hour == 12 { hour = 0 }
+        return hour * 60 + m
     }
 
     var body: some View {
@@ -2315,11 +2394,67 @@ struct FocusModeView: View {
                     Text(currentTime, style: .time)
                         .font(.system(.callout, design: .monospaced))
                         .foregroundColor(.white.opacity(0.4))
+                    Spacer()
+                    HStack(spacing: 16) {
+                        // Strike past timeslots
+                        Button(action: onStrikePast) {
+                            Image(systemName: "text.badge.minus")
+                                .font(.title2)
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                        // Schedule sidebar toggle
+                        Button(action: { withAnimation(.easeInOut(duration: 0.25)) { showSidebar.toggle() } }) {
+                            Image(systemName: showSidebar ? "sidebar.right" : "list.bullet.rectangle")
+                                .font(.title2)
+                                .foregroundColor(showSidebar ? .indigo : .white.opacity(0.5))
+                        }
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
 
                 Spacer()
+
+                // Large timer + smart pause — shown above quotes when a cycle is active
+                if settings.isPlaying || settings.isPaused {
+                    VStack(spacing: 14) {
+                        // Task name
+                        Text(isTransitioning ? "Transitioning..." : currentTaskName.isEmpty ? "Cycle running" : currentTaskName)
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white.opacity(0.55))
+                            .tracking(1)
+
+                        // Big countdown
+                        Text(settings.isPaused ? "Paused" : timeRemainingFormatted)
+                            .font(.system(size: 88, weight: .bold, design: .monospaced))
+                            .foregroundColor(
+                                settings.isPaused ? .orange :
+                                timeRemaining <= 30 ? .red : .white
+                            )
+                            .contentTransition(.numericText())
+
+                        // Smart pause / resume button
+                        Button(action: onSmartPause) {
+                            HStack(spacing: 8) {
+                                Image(systemName: isSmartPaused ? "play.circle.fill" : "pause.circle.fill")
+                                    .font(.title2)
+                                Text(isSmartPaused ? "Smart Resume" : "Smart Pause")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                            .foregroundColor(isSmartPaused ? .green : .orange)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 10)
+                            .background(
+                                Capsule()
+                                    .fill((isSmartPaused ? Color.green : Color.orange).opacity(0.15))
+                            )
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 28)
+                }
 
                 // Large quote
                 if quotePool.isEmpty {
@@ -2380,46 +2515,97 @@ struct FocusModeView: View {
 
                 Spacer()
 
-                // Cycle status strip
-                if settings.isPlaying || settings.isPaused {
-                    VStack(spacing: 8) {
-                        Divider()
-                            .background(Color.white.opacity(0.15))
-                        HStack(spacing: 12) {
-                            Image(systemName: settings.isPaused ? "pause.circle.fill" : "play.circle.fill")
-                                .foregroundColor(settings.isPaused ? .orange : .green)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(isTransitioning ? "Transitioning..." : currentTaskName.isEmpty ? "Cycle running" : currentTaskName)
-                                    .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.8))
-                                if currentCycleDuration > 0 && !isTransitioning {
-                                    Text("\(currentCycleDuration) min block")
-                                        .font(.caption2)
-                                        .foregroundColor(.white.opacity(0.4))
-                                }
-                            }
-
-                            Spacer()
-
-                            if settings.isPlaying && !settings.isPaused {
-                                Text(timeRemainingFormatted)
-                                    .font(.system(.title3, design: .monospaced))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(timeRemaining <= 30 ? .red : .green)
-                            } else if settings.isPaused {
-                                Text("Paused")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                        }
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 20)
+                // Bottom strip — block duration hint
+                if (settings.isPlaying || settings.isPaused) && currentCycleDuration > 0 && !isTransitioning {
+                    VStack(spacing: 0) {
+                        Divider().background(Color.white.opacity(0.1))
+                        Text("\(currentCycleDuration) min block")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.3))
+                            .padding(.vertical, 10)
                     }
                 } else {
-                    // Minimal bottom padding when no cycle
                     Color.clear.frame(height: 32)
                 }
+            }
+
+            // Sidebar overlay
+            if showSidebar {
+                HStack(spacing: 0) {
+                    // Tap-outside-to-close
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }
+
+                    // Panel
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Header
+                        HStack {
+                            Text("Schedule")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Spacer()
+                            Button(action: { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }) {
+                                Image(systemName: "xmark")
+                                    .font(.callout)
+                                    .foregroundColor(.white.opacity(0.5))
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 56)
+                        .padding(.bottom, 12)
+
+                        Divider().background(Color.white.opacity(0.15))
+
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(scheduleEntries) { entry in
+                                    let sm = entry.startMinutes ?? -1
+                                    let em = entry.endMinutes ?? -1
+                                    let isPast    = em > 0 && em <= nowMinutes
+                                    let isCurrent = sm >= 0 && em > 0 && nowMinutes >= sm && nowMinutes < em
+                                    let isStruck  = entry.isStruck
+
+                                    HStack(alignment: .top, spacing: 10) {
+                                        // Status dot
+                                        Circle()
+                                            .fill(isCurrent ? Color.green : (isPast || isStruck ? Color.white.opacity(0.15) : Color.indigo.opacity(0.6)))
+                                            .frame(width: 7, height: 7)
+                                            .padding(.top, 5)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            if let task = entry.task {
+                                                Text(task)
+                                                    .font(.subheadline)
+                                                    .fontWeight(isCurrent ? .semibold : .regular)
+                                                    .foregroundColor(
+                                                        isCurrent ? .white :
+                                                        (isPast || isStruck) ? .white.opacity(0.25) : .white.opacity(0.7)
+                                                    )
+                                                    .strikethrough(isPast || isStruck, color: .white.opacity(0.25))
+                                            }
+                                            if sm >= 0 && em > 0 {
+                                                Text("\(formatSidebarMinutes(sm)) – \(formatSidebarMinutes(em))")
+                                                    .font(.caption2)
+                                                    .foregroundColor(
+                                                        isCurrent ? .green.opacity(0.8) :
+                                                        (isPast || isStruck) ? .white.opacity(0.15) : .white.opacity(0.35)
+                                                    )
+                                            }
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 9)
+                                    .background(isCurrent ? Color.green.opacity(0.08) : Color.clear)
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+                    .frame(width: 240)
+                    .background(Color(white: 0.08).ignoresSafeArea())
+                }
+                .transition(.move(edge: .trailing))
             }
         }
         .onAppear {
@@ -2470,6 +2656,14 @@ struct FocusModeView: View {
             currentIndex = (currentIndex + 1) % quotePool.count
             withAnimation(.easeInOut(duration: 0.4)) { showQuote = true }
         }
+    }
+
+    private func formatSidebarMinutes(_ minutes: Int) -> String {
+        let h = (minutes / 60) % 24
+        let m = minutes % 60
+        let suffix = h >= 12 ? "PM" : "AM"
+        let displayH = h == 0 ? 12 : (h > 12 ? h - 12 : h)
+        return String(format: "%d:%02d %@", displayH, m, suffix)
     }
 }
 
