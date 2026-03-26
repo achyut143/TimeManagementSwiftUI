@@ -53,6 +53,7 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
         // Text View
         let textView = UITextView()
         textView.font = UIFont.systemFont(ofSize: 16)
+        textView.textColor = .label
         textView.backgroundColor = .systemGroupedBackground
         textView.delegate = context.coordinator
         textView.translatesAutoresizingMaskIntoConstraints = false
@@ -122,9 +123,10 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
     private func markdownToAttributed(_ markdown: String) -> NSAttributedString {
         let attributed = NSMutableAttributedString(string: markdown)
         let fullRange = NSRange(location: 0, length: attributed.length)
-        
-        // Set base font
+
+        // Set base font and color (label adapts automatically to dark/light mode)
         attributed.addAttribute(.font, value: UIFont.systemFont(ofSize: 16), range: fullRange)
+        attributed.addAttribute(.foregroundColor, value: UIColor.label, range: fullRange)
         
         // Parse bold **text**
         let boldPattern = "\\*\\*(.+?)\\*\\*"
@@ -292,7 +294,7 @@ struct RichTextEditorRepresentable: UIViewRepresentable {
             let attributedText = NSMutableAttributedString(attributedString: textView.attributedText)
             
             let insertText = (selectedRange.location == 0 || (textView.text as NSString).character(at: max(0, selectedRange.location - 1)) == 10) ? text : "\n\(text)"
-            let insertAttributed = NSAttributedString(string: insertText, attributes: [.font: UIFont.systemFont(ofSize: 16)])
+            let insertAttributed = NSAttributedString(string: insertText, attributes: [.font: UIFont.systemFont(ofSize: 16), .foregroundColor: UIColor.label])
             
             attributedText.insert(insertAttributed, at: selectedRange.location)
             textView.attributedText = attributedText

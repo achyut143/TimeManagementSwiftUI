@@ -99,8 +99,9 @@ struct TimeEntry {
             return "Invalid Time"
         }
         
-        // Use safer string construction (24-hour format for TimeEntry)
-        return "\(hours):\(String(format: "%02d", mins))"
+        let displayHour = hours == 0 ? 12 : (hours > 12 ? hours - 12 : hours)
+        let ampm = hours < 12 ? "AM" : "PM"
+        return "\(displayHour):\(String(format: "%02d", mins)) \(ampm)"
     }
 }
 
@@ -316,7 +317,7 @@ struct DailyNotesView: View {
                         HStack {
                             Text("From:")
                                 .frame(width: 60, alignment: .leading)
-                            TextField("12:30", text: $scheduleFrom)
+                            TextField("10:00 AM", text: $scheduleFrom)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .keyboardType(.numbersAndPunctuation)
                         }
@@ -324,7 +325,7 @@ struct DailyNotesView: View {
                         HStack {
                             Text("To:")
                                 .frame(width: 60, alignment: .leading)
-                            TextField("5:30", text: $scheduleTo)
+                            TextField("5:00 PM", text: $scheduleTo)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .keyboardType(.numbersAndPunctuation)
                         }
@@ -2042,10 +2043,10 @@ struct DailyNotesView: View {
                 finalHours = 0  // Convert 12 AM to 0 (midnight)
             }
         } else {
-            // No AM/PM - use 24-hour format as-is
+            // No AM/PM typed — treat as 24-hour (use explicit AM/PM for ambiguous times)
             finalHours = hours
         }
-        
+
         return finalHours * 60 + mins
     }
     
@@ -2388,25 +2389,25 @@ struct FocusModeView: View {
                     Button(action: { isPresented = false }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title2)
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(.cyan)
                     }
                     Spacer()
                     Text(currentTime, style: .time)
                         .font(.system(.callout, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(.cyan)
                     Spacer()
                     HStack(spacing: 16) {
                         // Strike past timeslots
                         Button(action: onStrikePast) {
                             Image(systemName: "text.badge.minus")
                                 .font(.title2)
-                                .foregroundColor(.white.opacity(0.5))
+                                .foregroundColor(.yellow)
                         }
                         // Schedule sidebar toggle
                         Button(action: { withAnimation(.easeInOut(duration: 0.25)) { showSidebar.toggle() } }) {
                             Image(systemName: showSidebar ? "sidebar.right" : "list.bullet.rectangle")
                                 .font(.title2)
-                                .foregroundColor(showSidebar ? .indigo : .white.opacity(0.5))
+                                .foregroundColor(showSidebar ? .indigo : .mint)
                         }
                     }
                 }
@@ -2422,7 +2423,7 @@ struct FocusModeView: View {
                         Text(isTransitioning ? "Transitioning..." : currentTaskName.isEmpty ? "Cycle running" : currentTaskName)
                             .font(.title3)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white.opacity(0.55))
+                            .foregroundColor(.cyan)
                             .tracking(1)
 
                         // Big countdown
@@ -2461,10 +2462,10 @@ struct FocusModeView: View {
                     VStack(spacing: 16) {
                         Image(systemName: "books.vertical")
                             .font(.largeTitle)
-                            .foregroundColor(.indigo.opacity(0.4))
+                            .foregroundColor(.indigo)
                         Text("Activate a book in the Books library\nto see quotes here")
                             .font(.title3)
-                            .foregroundColor(.white.opacity(0.3))
+                            .foregroundColor(.cyan)
                             .multilineTextAlignment(.center)
                     }
                     .padding()
@@ -2495,15 +2496,15 @@ struct FocusModeView: View {
                                 Text("— \(quote.author)")
                                     .font(.callout)
                                     .italic()
-                                    .foregroundColor(.white.opacity(0.55))
+                                    .foregroundColor(.mint)
                                 Text(quote.bookTitle)
                                     .font(.caption)
-                                    .foregroundColor(.indigo.opacity(0.8))
+                                    .foregroundColor(.indigo)
                                 if let chNum = quote.chapterNumber {
                                     let label = quote.chapterName.map { "Chapter \(chNum): \($0)" } ?? "Chapter \(chNum)"
                                     Text(label)
                                         .font(.caption2)
-                                        .foregroundColor(.white.opacity(0.3))
+                                        .foregroundColor(.teal)
                                 }
                             }
                             .transition(.opacity)
@@ -2518,10 +2519,10 @@ struct FocusModeView: View {
                 // Bottom strip — block duration hint
                 if (settings.isPlaying || settings.isPaused) && currentCycleDuration > 0 && !isTransitioning {
                     VStack(spacing: 0) {
-                        Divider().background(Color.white.opacity(0.1))
+                        Divider().background(Color.teal.opacity(0.4))
                         Text("\(currentCycleDuration) min block")
                             .font(.caption2)
-                            .foregroundColor(.white.opacity(0.3))
+                            .foregroundColor(.teal)
                             .padding(.vertical, 10)
                     }
                 } else {
@@ -2548,14 +2549,14 @@ struct FocusModeView: View {
                             Button(action: { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }) {
                                 Image(systemName: "xmark")
                                     .font(.callout)
-                                    .foregroundColor(.white.opacity(0.5))
+                                    .foregroundColor(.cyan)
                             }
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 56)
                         .padding(.bottom, 12)
 
-                        Divider().background(Color.white.opacity(0.15))
+                        Divider().background(Color.cyan.opacity(0.3))
 
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
@@ -2569,7 +2570,7 @@ struct FocusModeView: View {
                                     HStack(alignment: .top, spacing: 10) {
                                         // Status dot
                                         Circle()
-                                            .fill(isCurrent ? Color.green : (isPast || isStruck ? Color.white.opacity(0.15) : Color.indigo.opacity(0.6)))
+                                            .fill(isCurrent ? Color.green : (isPast || isStruck ? Color.red.opacity(0.5) : Color.indigo))
                                             .frame(width: 7, height: 7)
                                             .padding(.top, 5)
 
@@ -2580,16 +2581,16 @@ struct FocusModeView: View {
                                                     .fontWeight(isCurrent ? .semibold : .regular)
                                                     .foregroundColor(
                                                         isCurrent ? .white :
-                                                        (isPast || isStruck) ? .white.opacity(0.25) : .white.opacity(0.7)
+                                                        (isPast || isStruck) ? .red.opacity(0.7) : .cyan
                                                     )
-                                                    .strikethrough(isPast || isStruck, color: .white.opacity(0.25))
+                                                    .strikethrough(isPast || isStruck, color: .red.opacity(0.7))
                                             }
                                             if sm >= 0 && em > 0 {
                                                 Text("\(formatSidebarMinutes(sm)) – \(formatSidebarMinutes(em))")
                                                     .font(.caption2)
                                                     .foregroundColor(
-                                                        isCurrent ? .green.opacity(0.8) :
-                                                        (isPast || isStruck) ? .white.opacity(0.15) : .white.opacity(0.35)
+                                                        isCurrent ? .green :
+                                                        (isPast || isStruck) ? .red.opacity(0.5) : .teal
                                                     )
                                             }
                                         }
