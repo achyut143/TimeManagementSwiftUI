@@ -130,6 +130,8 @@ struct DailyNotesView: View {
     @State private var scheduleInterval: String = ""
     @State private var scheduleGap: String = ""
     @State private var scheduleTaskName: String = ""
+    @State private var scheduleInsertAfter: String = ""
+    @State private var showFormattedSchedule: Bool = true
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
     @State private var reminderTimer: Timer?
     @State private var showBooksLibrary = false
@@ -275,7 +277,7 @@ struct DailyNotesView: View {
                             }
                             .padding(.top, 4)
                             
-                            if settings.isPlaying || settings.isPaused {
+                            if settings.isPlaying || settings.isPaused || isTransitioning || currentCycleDuration > 0 {
                                 cycleStatusView
                             }
 
@@ -307,9 +309,27 @@ struct DailyNotesView: View {
                 }
 
                 Section("Daily Notes") {
-                    RichTextEditor(text: $notesText)
-                        .frame(height: 300)
-                        .id(editorKey)
+                    if hasSchedule {
+                        HStack {
+                            Label(
+                                showFormattedSchedule ? "Schedule View" : "Raw Notes",
+                                systemImage: showFormattedSchedule ? "list.bullet.rectangle.portrait.fill" : "pencil.line"
+                            )
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            Spacer()
+                            Toggle("", isOn: $showFormattedSchedule)
+                                .labelsHidden()
+                        }
+                    }
+
+                    if showFormattedSchedule && hasSchedule {
+                        scheduleFormattedView
+                    } else {
+                        RichTextEditor(text: $notesText)
+                            .frame(height: 300)
+                            .id(editorKey)
+                    }
                 }
                 
                 Section("Schedule Generator") {
@@ -356,7 +376,19 @@ struct DailyNotesView: View {
                             TextField("work,implement,walk", text: $scheduleTaskName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                         }
-                        
+
+                        HStack {
+                            Text("Insert after #:")
+                                .frame(width: 90, alignment: .leading)
+                            TextField("optional", text: $scheduleInsertAfter)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                                .frame(width: 70)
+                            Text("(leave empty to append)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
                         Button("Generate Schedule") {
                             generateSchedule()
                         }
@@ -473,7 +505,10 @@ struct DailyNotesView: View {
                     notesText: notesText,
                     settings: settings,
                     onSmartPause: { handleSmartPause() },
-                    onStrikePast: { strikeOutPastTimeSlots() }
+                    onStrikePast: { strikeOutPastTimeSlots() },
+                    onExtendTask: { extendCurrentTask() },
+                    onInterrupt:  { insertInterruptTask() },
+                    onEndAndNew:  { endAndStartNewTask() }
                 )
             }
         }
@@ -662,7 +697,7 @@ struct DailyNotesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity)
-                
+
                 if settings.isPlaying {
                     Button(settings.isPaused ? "Resume" : "Pause") {
                         DispatchQueue.main.async {
@@ -675,6 +710,38 @@ struct DailyNotesView: View {
                     }
                     .buttonStyle(.bordered)
                     .frame(maxWidth: .infinity)
+                }
+            }
+
+            if settings.isPlaying && !isTransitioning &&
+               currentTaskName != "Rest up" && currentTaskName != "Free time" && !currentTaskName.isEmpty {
+                HStack(spacing: 10) {
+                    // +5 min
+                    Button(action: { extendCurrentTask() }) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title2)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                    .help("+5 min")
+
+                    // Interrupt
+                    Button(action: { insertInterruptTask() }) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title2)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .help("Interrupt")
+
+                    // End & New
+                    Button(action: { endAndStartNewTask() }) {
+                        Image(systemName: "arrow.trianglehead.turn.up.right.circle.fill")
+                            .font(.title2)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                    .help("End & New Task")
                 }
             }
             
@@ -844,7 +911,11 @@ struct DailyNotesView: View {
             if let currentEntry = self.findBestCurrentTask(at: currentMinutes, in: timeEntries) {
                 // Currently in a scheduled task
                 self.currentTaskName = currentEntry.description
-                let remainingMinutes = currentEntry.endMinutes - currentMinutes
+                // For midnight-crossing tasks endMinutes >= 1440; normalise currentMinutes
+                let adjustedCurrent = (currentEntry.endMinutes >= 1440 && currentMinutes < (currentEntry.endMinutes - 1440))
+                    ? currentMinutes + 1440
+                    : currentMinutes
+                let remainingMinutes = currentEntry.endMinutes - adjustedCurrent
                 // Store the ORIGINAL duration, not remaining time
                 let originalDuration = currentEntry.endMinutes - currentEntry.startMinutes
                 self.currentCycleDuration = originalDuration
@@ -872,7 +943,13 @@ struct DailyNotesView: View {
     private func findBestCurrentTask(at currentMinutes: Int, in timeEntries: [TimeEntry]) -> TimeEntry? {
         // Find all tasks that are currently active
         let activeTasks = timeEntries.filter { entry in
-            currentMinutes >= entry.startMinutes && currentMinutes < entry.endMinutes
+            if entry.endMinutes >= 1440 {
+                // Midnight-crossing task: active either before midnight (currentMinutes >= startMinutes)
+                // or after midnight (currentMinutes < endMinutes wrapped back into 0-based minutes)
+                return currentMinutes >= entry.startMinutes ||
+                       currentMinutes < (entry.endMinutes - 1440)
+            }
+            return currentMinutes >= entry.startMinutes && currentMinutes < entry.endMinutes
         }
         
         guard !activeTasks.isEmpty else { return nil }
@@ -954,26 +1031,21 @@ struct DailyNotesView: View {
     }
     
     private func setupCycleEndObserver() {
-        // Cancel any existing observer
         cycleEndObserver?.cancel()
-        
-        // Create a timer that checks more frequently for cycle completion
+
         cycleEndObserver = Timer.publish(every: 0.5, on: .main, in: .common)
             .autoconnect()
             .sink { [weak settings] _ in
                 guard let settings = settings else { return }
-                
-                // Check if cycle just completed
-                if settings.isPlaying && !settings.isPaused && self.pausedAt == nil {
-                    let timeRemaining = settings.nextAlertDate.timeIntervalSinceNow
-                    
-                    // If time is up or very close (within 1 second)
-                    if timeRemaining <= 1.0 && timeRemaining > -2.0 {
-                        // Trigger transition
-                        DispatchQueue.main.async {
-                            self.handleCycleCompletion()
-                        }
-                    }
+                // Don't gate on settings.isPlaying — AlertSettings can reset it to false
+                // before this 0.5 s tick fires, causing us to miss the completion entirely.
+                // Instead gate on our own state that only stopCycles() clears.
+                guard self.useCycles && !self.isTransitioning && self.pausedAt == nil else { return }
+                guard self.currentCycleDuration > 0 else { return }
+
+                let timeRemaining = settings.nextAlertDate.timeIntervalSinceNow
+                if timeRemaining <= 1.0 && timeRemaining > -5.0 {
+                    self.handleCycleCompletion()
                 }
             }
     }
@@ -1272,16 +1344,20 @@ struct DailyNotesView: View {
             print("⚠️ Already transitioning, skipping duplicate call")
             return
         }
-        
+
+        // Mark transitioning immediately so the block stays visible
+        // even if AlertSettings resets isPlaying during the 2-second gap
+        isTransitioning = true
+
         print("🔔 Cycle completed! Transitioning to next task...")
-        
+
         // Announce task completion
         let completionAnnouncement = "\(currentTaskName) completed"
         speechManager.speak(completionAnnouncement)
-        
+
         // Cancel the observer to prevent duplicate triggers
         cycleEndObserver?.cancel()
-        
+
         // Wait a moment for the announcement, then start next cycle
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             self.startNextCycle()
@@ -1368,6 +1444,7 @@ struct DailyNotesView: View {
             notesText = ""
         }
         editorKey = UUID()
+        showFormattedSchedule = hasSchedule
     }
     
     private func saveNotes() {
@@ -1598,13 +1675,17 @@ struct DailyNotesView: View {
         
         // Parse times sequentially (respecting chronological order)
         guard let startMinutes = timeToMinutesSequential(startTimeStr, previousEndMinutes: previousEndMinutes),
-              let endMinutes = timeToMinutesSequential(endTimeStr, previousEndMinutes: startMinutes) else {
+              let rawEndMinutes = timeToMinutesSequential(endTimeStr, previousEndMinutes: startMinutes) else {
             return nil
         }
-        
+
+        // Midnight crossing: end time parsed to an earlier minute-value than start
+        // (e.g. 11:40 PM = 1420 min, 12:00 AM = 0 min → add 1440 to end)
+        let endMinutes = rawEndMinutes < startMinutes ? rawEndMinutes + 1440 : rawEndMinutes
+
         // Check if it's a fixed task (marked with **text**)
         let isFixed = description.contains("**")
-        
+
         return TimeEntry(
             startMinutes: startMinutes,
             endMinutes: endMinutes,
@@ -1894,18 +1975,31 @@ struct DailyNotesView: View {
     private func updateTimeRemaining() {
         // Update current time to force UI refresh
         currentTime = Date()
-        
+
         if settings.isPlaying && !settings.isPaused {
             let newTimeRemaining = max(0, settings.nextAlertDate.timeIntervalSinceNow)
             previousTimeRemaining = timeRemaining
             timeRemaining = newTimeRemaining
         } else if settings.isPlaying && settings.isPaused {
-            // When paused, keep the timeRemaining value frozen (don't update it)
-            // This preserves the time that was remaining when we paused
+            // When paused, keep the timeRemaining value frozen
             previousTimeRemaining = timeRemaining
-            // Don't change timeRemaining - keep it at the paused value
         } else {
-            // When stopped completely
+            // isPlaying and isPaused are both false.
+            // If useCycles is on and a cycle was active, AlertSettings dropped isPlaying
+            // (line 194 or line 334 in AlertSettings_OrderFixed.swift).
+            if useCycles && currentCycleDuration > 0 && !isTransitioning && pausedAt == nil {
+                let remaining = settings.nextAlertDate.timeIntervalSinceNow
+                if remaining > 2.0 {
+                    // Significant time left — AlertSettings dropped isPlaying prematurely
+                    // (e.g. zero-duration guard). Re-arm the timer without restarting the cycle.
+                    settings.isPlaying = true
+                    settings.scheduleIntervalTimer()
+                } else if remaining <= 1.0 {
+                    // Timer has actually expired — advance to the next cycle.
+                    handleCycleCompletion()
+                }
+                // 1.0–2.0 s window: let the 0.5 s observer handle it cleanly.
+            }
             previousTimeRemaining = timeRemaining
             timeRemaining = 0
         }
@@ -1992,7 +2086,12 @@ struct DailyNotesView: View {
             }
         }
 
-        if let endIdx = endLineIndex {
+        let insertAfterTrimmed = scheduleInsertAfter.trimmingCharacters(in: .whitespaces)
+        if let insertNum = Int(insertAfterTrimmed), !insertAfterTrimmed.isEmpty {
+            // Insert after task #insertNum and shift subsequent tasks
+            let shiftMinutes = toMinutes - fromMinutes
+            insertGeneratedTasksAfter(taskNum: insertNum, scheduleLines: scheduleLines, shiftMinutes: shiftMinutes)
+        } else if let endIdx = endLineIndex {
             // Insert the generated lines just before the END tag
             var newLines = allLines
             newLines.insert(contentsOf: scheduleLines, at: endIdx)
@@ -2109,7 +2208,12 @@ struct DailyNotesView: View {
         if let currentEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries) {
             // Currently in a scheduled task
             currentTaskName = currentEntry.description
-            let remainingMinutes = currentEntry.endMinutes - currentMinutes
+            // For midnight-crossing tasks, currentMinutes may be small (e.g. 10 for 12:10 AM)
+            // while endMinutes is >1440. Normalise so subtraction gives the real remaining time.
+            let adjustedCurrent = (currentEntry.endMinutes >= 1440 && currentMinutes < (currentEntry.endMinutes - 1440))
+                ? currentMinutes + 1440
+                : currentMinutes
+            let remainingMinutes = currentEntry.endMinutes - adjustedCurrent
             // Store the ORIGINAL duration, not remaining time
             let originalDuration = currentEntry.endMinutes - currentEntry.startMinutes
             currentCycleDuration = originalDuration
@@ -2279,6 +2383,506 @@ struct DailyNotesView: View {
         print("🔔 Reminder: \(message) for task: \(currentTaskName)")
     }
     
+    // MARK: - Formatted Schedule View
+
+    private var hasSchedule: Bool {
+        let lines = notesText.components(separatedBy: .newlines)
+        var foundStart = false
+        for line in lines {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" { foundStart = true }
+            else if t == "END" && foundStart { return true }
+        }
+        return false
+    }
+
+    private func parseFormattedTaskItems() -> [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool)] {
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return [] }
+
+        var result: [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool)] = []
+        var prevEnd: Int? = nil
+
+        for line in allLines[(s + 1)..<e] {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+
+            // Extract task number from "N) ..." prefix
+            var num: Int? = nil
+            if let parenIdx = parseLine.firstIndex(of: ")") {
+                let prefix = String(parseLine[parseLine.startIndex..<parenIdx])
+                num = Int(prefix.trimmingCharacters(in: .whitespaces))
+            }
+
+            if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
+                result.append((num: num, start: entry.startMinutes, end: entry.endMinutes,
+                               desc: entry.description, struck: isStruck, fixed: entry.isFixed))
+                prevEnd = entry.endMinutes
+            }
+        }
+        return result
+    }
+
+    private var scheduleFormattedView: some View {
+        let nowMin = Calendar.current.component(.hour, from: currentTime) * 60
+                   + Calendar.current.component(.minute, from: currentTime)
+        let tasks = parseFormattedTaskItems()
+
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+
+        return VStack(alignment: .leading, spacing: 6) {
+            // Pre-schedule content
+            if let s = sIdx, s > 0 {
+                let preText = allLines[0..<s]
+                    .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    .joined(separator: "\n")
+                if !preText.isEmpty {
+                    Text(preText)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .padding(.bottom, 4)
+                }
+            }
+
+            // Task rows
+            ForEach(Array(tasks.enumerated()), id: \.offset) { _, task in
+                taskDisplayRow(num: task.num, startMin: task.start, endMin: task.end,
+                               desc: task.desc, struck: task.struck, fixed: task.fixed,
+                               nowMin: nowMin)
+            }
+
+            // Post-schedule content
+            if let e = eIdx, e + 1 < allLines.count {
+                let postText = allLines[(e + 1)...]
+                    .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    .joined(separator: "\n")
+                if !postText.isEmpty {
+                    Text(postText)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func taskDisplayRow(num: Int?, startMin: Int, endMin: Int, desc: String,
+                                struck: Bool, fixed: Bool, nowMin: Int) -> some View {
+        let isCurrent = !struck && nowMin >= startMin && nowMin < endMin
+        let isPastUnack = !struck && nowMin >= endMin
+        let accentColor: Color = struck ? .green : (isCurrent ? .blue : (isPastUnack ? .orange : .primary))
+        let duration = endMin - startMin
+
+        HStack(spacing: 12) {
+            // Number/status badge
+            ZStack {
+                Circle()
+                    .fill(accentColor.opacity(struck ? 0.2 : (isCurrent ? 0.18 : 0.1)))
+                    .frame(width: 34, height: 34)
+                if let n = num {
+                    Text("\(n)")
+                        .font(.caption.monospacedDigit().bold())
+                        .foregroundColor(accentColor)
+                } else {
+                    Image(systemName: struck ? "checkmark" : (isCurrent ? "play.fill" : "circle.fill"))
+                        .font(.system(size: 10))
+                        .foregroundColor(accentColor)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    if fixed {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.orange)
+                    }
+                    Text(desc)
+                        .font(.subheadline)
+                        .fontWeight(isCurrent ? .semibold : .regular)
+                        .foregroundColor(struck ? .secondary : .primary)
+                        .strikethrough(struck, color: .secondary)
+                        .lineLimit(2)
+                }
+                Text("\(safeMinutesToTime(startMin)) – \(safeMinutesToTime(endMin))")
+                    .font(.caption)
+                    .foregroundColor(accentColor.opacity(0.85))
+                    .monospacedDigit()
+            }
+
+            Spacer()
+
+            Text("\(duration)m")
+                .font(.caption2.monospacedDigit())
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(.secondary.opacity(0.1), in: Capsule())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isCurrent ? Color.blue.opacity(0.07) : Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(accentColor.opacity(isCurrent ? 0.45 : 0.15), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Interrupt Current Task
+
+    private func insertInterruptTask() {
+        let now = Date()
+        let cal = Calendar.current
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+
+        let timeEntries = extractTimeEntriesFromNotes()
+        guard let currentEntry = findBestCurrentTask(at: nowMin, in: timeEntries) else { return }
+
+        let remainingMin = currentEntry.endMinutes - nowMin
+        guard remainingMin > 0 else { return }
+
+        let interruptDuration = 5  // fixed 5-minute interrupt
+
+        // Live timer counts down the interrupt duration
+        settings.nextAlertDate = now.addingTimeInterval(TimeInterval(interruptDuration * 60))
+
+        guard let startTagRange = notesText.range(of: "START"),
+              let endTagRange   = notesText.range(of: "END") else { return }
+
+        let content = String(notesText[startTagRange.upperBound..<endTagRange.lowerBound])
+        let lines   = content.components(separatedBy: .newlines)
+        var result: [String] = []
+        var prevEnd: Int? = nil
+        var foundCurrent = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if (trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")) || trimmed.contains("~~") {
+                result.append(line)
+                continue
+            }
+
+            if let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) {
+                let isCurrentTask = entry.startMinutes == currentEntry.startMinutes &&
+                                    entry.endMinutes   == currentEntry.endMinutes &&
+                                    entry.description  == currentEntry.description
+
+                if isCurrentTask {
+                    foundCurrent = true
+
+                    // Extract existing number prefix
+                    var baseNum: Int? = nil
+                    if let pIdx = trimmed.firstIndex(of: ")") {
+                        baseNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces))
+                    }
+
+                    // Part 1 – already-elapsed portion of original task
+                    let part1Num = baseNum.map { "\($0)) " } ?? ""
+                    result.append("\(part1Num)\(safeMinutesToTime(entry.startMinutes)) - \(safeMinutesToTime(nowMin)) - \(entry.description)")
+
+                    // Part 2 – 5-minute interrupt
+                    let part2Num = baseNum.map { "\($0 + 1)) " } ?? ""
+                    result.append("\(part2Num)\(safeMinutesToTime(nowMin)) - \(safeMinutesToTime(nowMin + interruptDuration)) - interrupt")
+
+                    // Part 3 – resume original task for its full remaining duration
+                    let part3Num = baseNum.map { "\($0 + 2)) " } ?? ""
+                    result.append("\(part3Num)\(safeMinutesToTime(nowMin + interruptDuration)) - \(safeMinutesToTime(nowMin + interruptDuration + remainingMin)) - \(entry.description)")
+
+                    prevEnd = nowMin + interruptDuration + remainingMin
+
+                } else if foundCurrent && entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
+                    // Shift time forward by interruptDuration AND bump number by +2
+                    var shiftedNum: Int? = nil
+                    if let pIdx = trimmed.firstIndex(of: ")") {
+                        shiftedNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)).map { $0 + 2 }
+                    }
+                    let numStr   = shiftedNum.map { "\($0)) " } ?? ""
+                    let newStart = safeMinutesToTime(entry.startMinutes + interruptDuration)
+                    let newEnd   = safeMinutesToTime(entry.endMinutes   + interruptDuration)
+                    result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
+                    prevEnd = entry.endMinutes + interruptDuration
+
+                } else {
+                    result.append(line)
+                    prevEnd = entry.endMinutes
+                }
+            } else {
+                result.append(line)
+            }
+        }
+
+        let beforeStart = String(notesText[..<startTagRange.lowerBound])
+        let afterEnd    = String(notesText[endTagRange.upperBound...])
+        notesText = beforeStart + "START" + result.joined(separator: "\n") + "END" + afterEnd
+        editorKey = UUID()
+        saveNotes()
+
+        // Update running task name immediately
+        currentTaskName = "interrupt"
+        speechManager.speak("Interrupt added")
+    }
+
+    // MARK: - End Current Task and Start New
+
+    private func endAndStartNewTask() {
+        let now = Date()
+        let cal = Calendar.current
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+
+        let timeEntries = extractTimeEntriesFromNotes()
+        guard let currentEntry = findBestCurrentTask(at: nowMin, in: timeEntries) else { return }
+
+        let newTaskDuration = 5
+        // How much the following tasks need to shift:
+        // positive = they move later, negative = they move earlier (we finished early)
+        let shiftAmount = (nowMin + newTaskDuration) - currentEntry.endMinutes
+
+        // Timer counts down the new 5-minute task
+        settings.nextAlertDate = now.addingTimeInterval(TimeInterval(newTaskDuration * 60))
+
+        guard let startTagRange = notesText.range(of: "START"),
+              let endTagRange   = notesText.range(of: "END") else { return }
+
+        let content = String(notesText[startTagRange.upperBound..<endTagRange.lowerBound])
+        let lines   = content.components(separatedBy: .newlines)
+        var result: [String] = []
+        var prevEnd: Int? = nil
+        var foundCurrent = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if (trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")) || trimmed.contains("~~") {
+                result.append(line)
+                continue
+            }
+
+            if let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) {
+                let isCurrentTask = entry.startMinutes == currentEntry.startMinutes &&
+                                    entry.endMinutes   == currentEntry.endMinutes &&
+                                    entry.description  == currentEntry.description
+
+                if isCurrentTask {
+                    foundCurrent = true
+
+                    var baseNum: Int? = nil
+                    if let pIdx = trimmed.firstIndex(of: ")") {
+                        baseNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces))
+                    }
+
+                    // Truncated original task
+                    let part1Num = baseNum.map { "\($0)) " } ?? ""
+                    result.append("\(part1Num)\(safeMinutesToTime(entry.startMinutes)) - \(safeMinutesToTime(nowMin)) - \(entry.description)")
+
+                    // New 5-minute task
+                    let part2Num = baseNum.map { "\($0 + 1)) " } ?? ""
+                    result.append("\(part2Num)\(safeMinutesToTime(nowMin)) - \(safeMinutesToTime(nowMin + newTaskDuration)) - new task")
+
+                    prevEnd = nowMin + newTaskDuration
+
+                } else if foundCurrent && entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
+                    // Shift by shiftAmount and bump number by +1
+                    var shiftedNum: Int? = nil
+                    if let pIdx = trimmed.firstIndex(of: ")") {
+                        shiftedNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)).map { $0 + 1 }
+                    }
+                    let numStr   = shiftedNum.map { "\($0)) " } ?? ""
+                    let newStart = safeMinutesToTime(max(0, entry.startMinutes + shiftAmount))
+                    let newEnd   = safeMinutesToTime(max(0, entry.endMinutes   + shiftAmount))
+                    result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
+                    prevEnd = entry.endMinutes + shiftAmount
+
+                } else {
+                    result.append(line)
+                    prevEnd = entry.endMinutes
+                }
+            } else {
+                result.append(line)
+            }
+        }
+
+        let beforeStart = String(notesText[..<startTagRange.lowerBound])
+        let afterEnd    = String(notesText[endTagRange.upperBound...])
+        notesText = beforeStart + "START" + result.joined(separator: "\n") + "END" + afterEnd
+        editorKey = UUID()
+        saveNotes()
+
+        currentTaskName = "new task"
+        speechManager.speak("New task started")
+    }
+
+    // MARK: - Extend Current Task
+
+    private func extendCurrentTask(byMinutes minutes: Int = 5) {
+        let now = Date()
+        let calendar = Calendar.current
+        let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+
+        let timeEntries = extractTimeEntriesFromNotes()
+        guard let currentEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries) else { return }
+
+        // Push the live timer forward
+        settings.nextAlertDate = settings.nextAlertDate.addingTimeInterval(TimeInterval(minutes * 60))
+
+        // Update notes: extend current task end + shift subsequent tasks
+        guard let startTagRange = notesText.range(of: "START"),
+              let endTagRange = notesText.range(of: "END") else { return }
+
+        let content = String(notesText[startTagRange.upperBound..<endTagRange.lowerBound])
+        let lines = content.components(separatedBy: .newlines)
+        var result: [String] = []
+        var prevEnd: Int? = nil
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if (trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")) || trimmed.contains("~~") {
+                result.append(line)
+                continue
+            }
+            if let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) {
+                let isCurrentTask = entry.startMinutes == currentEntry.startMinutes &&
+                                    entry.endMinutes == currentEntry.endMinutes &&
+                                    entry.description == currentEntry.description
+                if isCurrentTask {
+                    let extended = TimeEntry(startMinutes: entry.startMinutes,
+                                            endMinutes: entry.endMinutes + minutes,
+                                            description: entry.description,
+                                            isFixed: entry.isFixed,
+                                            originalLine: entry.originalLine)
+                    result.append(extended.toLine())
+                    prevEnd = extended.endMinutes
+                } else if entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
+                    let shifted = TimeEntry(startMinutes: entry.startMinutes + minutes,
+                                           endMinutes: entry.endMinutes + minutes,
+                                           description: entry.description,
+                                           isFixed: entry.isFixed,
+                                           originalLine: entry.originalLine)
+                    result.append(shifted.toLine())
+                    prevEnd = shifted.endMinutes
+                } else {
+                    result.append(line)
+                    prevEnd = entry.endMinutes
+                }
+            } else {
+                result.append(line)
+            }
+        }
+
+        let beforeStart = String(notesText[..<startTagRange.lowerBound])
+        let afterEnd = String(notesText[endTagRange.upperBound...])
+        notesText = beforeStart + "START" + result.joined(separator: "\n") + "END" + afterEnd
+        editorKey = UUID()
+        saveNotes()
+        speechManager.speak("Extended by \(minutes) minutes")
+    }
+
+    // MARK: - Insert Generated Tasks at Position
+
+    private func insertGeneratedTasksAfter(taskNum: Int, scheduleLines: [String], shiftMinutes: Int) {
+        var allLines = notesText.components(separatedBy: .newlines)
+        var startIdx: Int?
+        var endIdx: Int?
+
+        for (i, line) in allLines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "START" && startIdx == nil { startIdx = i }
+            else if trimmed == "END" && startIdx != nil && endIdx == nil { endIdx = i; break }
+        }
+
+        // If no START/END block, wrap and append
+        guard let sIdx = startIdx, let eIdx = endIdx else {
+            let block = notesText.isEmpty
+                ? "START\n\(scheduleLines.joined(separator: "\n"))\nEND"
+                : notesText + "\nSTART\n\(scheduleLines.joined(separator: "\n"))\nEND"
+            notesText = block
+            editorKey = UUID()
+            return
+        }
+
+        // Find the line for task #taskNum
+        var insertAfterLine: Int = eIdx  // default: before END
+        for lineIdx in (sIdx + 1)..<eIdx {
+            let line = allLines[lineIdx]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clean = (trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~"))
+                ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            if clean.range(of: "^\(taskNum)\\)\\s", options: .regularExpression) != nil {
+                insertAfterLine = lineIdx
+                break
+            }
+        }
+
+        let newCount = scheduleLines.count
+        // Renumber generated lines to start from taskNum+1
+        let renumbered: [String] = scheduleLines.enumerated().map { (i, line) in
+            line.replacingOccurrences(of: #"^\d+\)\s*"#, with: "\(taskNum + 1 + i)) ", options: .regularExpression)
+        }
+
+        // Insert generated lines after the found position
+        allLines.insert(contentsOf: renumbered, at: insertAfterLine + 1)
+
+        // Renumber and shift lines that came after the insertion point
+        let shiftFrom = insertAfterLine + 1 + newCount
+        let newEndIdx = eIdx + newCount
+
+        for lineIdx in shiftFrom..<newEndIdx {
+            let line = allLines[lineIdx]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let workLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+
+            // Extract old number prefix
+            if let numRange = workLine.range(of: #"^\d+\)"#, options: .regularExpression) {
+                let numStr = String(workLine[numRange].dropLast())  // drop ")"
+                if let oldNum = Int(numStr) {
+                    let newNum = oldNum + newCount
+                    var updated = workLine.replacingOccurrences(
+                        of: #"^\d+\)\s*"#, with: "\(newNum)) ", options: .regularExpression)
+                    // Shift times if it's a time entry and not fixed
+                    if let entry = parseTimeEntry(updated), !entry.isFixed {
+                        let newStart = formatMinutesToTime(entry.startMinutes + shiftMinutes)
+                        let newEnd = formatMinutesToTime(entry.endMinutes + shiftMinutes)
+                        updated = "\(newNum)) \(newStart) - \(newEnd) - \(entry.description)"
+                    }
+                    allLines[lineIdx] = isStruck ? "~~\(updated)~~" : updated
+                }
+            } else if let entry = parseTimeEntry(workLine), !entry.isFixed {
+                let newStart = formatMinutesToTime(entry.startMinutes + shiftMinutes)
+                let newEnd = formatMinutesToTime(entry.endMinutes + shiftMinutes)
+                let updated = "\(newStart) - \(newEnd) - \(entry.description)"
+                allLines[lineIdx] = isStruck ? "~~\(updated)~~" : updated
+            }
+        }
+
+        notesText = allLines.joined(separator: "\n")
+        editorKey = UUID()
+    }
+
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
@@ -2306,6 +2910,9 @@ struct FocusModeView: View {
     @ObservedObject var settings: AlertSettings
     let onSmartPause: () -> Void
     let onStrikePast: () -> Void
+    let onExtendTask: () -> Void
+    let onInterrupt: () -> Void
+    let onEndAndNew: () -> Void
 
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
@@ -2435,22 +3042,55 @@ struct FocusModeView: View {
                             )
                             .contentTransition(.numericText())
 
-                        // Smart pause / resume button
-                        Button(action: onSmartPause) {
-                            HStack(spacing: 8) {
-                                Image(systemName: isSmartPaused ? "play.circle.fill" : "pause.circle.fill")
-                                    .font(.title2)
-                                Text(isSmartPaused ? "Smart Resume" : "Smart Pause")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
+                        // Smart pause / resume + extend row
+                        HStack(spacing: 12) {
+                            Button(action: onSmartPause) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: isSmartPaused ? "play.circle.fill" : "pause.circle.fill")
+                                        .font(.title2)
+                                    Text(isSmartPaused ? "Smart Resume" : "Smart Pause")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
+                                .foregroundColor(isSmartPaused ? .green : .orange)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 10)
+                                .background(
+                                    Capsule()
+                                        .fill((isSmartPaused ? Color.green : Color.orange).opacity(0.15))
+                                )
                             }
-                            .foregroundColor(isSmartPaused ? .green : .orange)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 10)
-                            .background(
-                                Capsule()
-                                    .fill((isSmartPaused ? Color.green : Color.orange).opacity(0.15))
-                            )
+
+                            if !isTransitioning && currentTaskName != "Rest up" && currentTaskName != "Free time" && !currentTaskName.isEmpty {
+                                HStack(spacing: 14) {
+                                    // +5 min
+                                    Button(action: onExtendTask) {
+                                        Image(systemName: "plus.circle.fill")
+                                            .font(.title)
+                                            .foregroundColor(.green)
+                                    }
+                                    .padding(10)
+                                    .background(Capsule().fill(Color.green.opacity(0.15)))
+
+                                    // Interrupt
+                                    Button(action: onInterrupt) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .font(.title)
+                                            .foregroundColor(.red)
+                                    }
+                                    .padding(10)
+                                    .background(Capsule().fill(Color.red.opacity(0.15)))
+
+                                    // End & New
+                                    Button(action: onEndAndNew) {
+                                        Image(systemName: "arrow.trianglehead.turn.up.right.circle.fill")
+                                            .font(.title)
+                                            .foregroundColor(.orange)
+                                    }
+                                    .padding(10)
+                                    .background(Capsule().fill(Color.orange.opacity(0.15)))
+                                }
+                            }
                         }
                     }
                     .padding(.top, 8)
