@@ -16,6 +16,7 @@ struct HabitOverviewView: View {
     @State private var showFilters = false
     @State private var selectedRepeatFilter: Int? = nil
     @State private var selectedTagsFilter: Set<String> = []
+    @State private var percentageFilter: String = "all" // "all", "above", "below"
     @State private var habitSettings: HabitSettings?
     @State private var showShareSheet = false
     @State private var pdfURL: URL?
@@ -613,6 +614,11 @@ struct HabitOverviewView: View {
                 return true
             }
             .filter { searchText.isEmpty || $0.localizedCaseInsensitiveContains(searchText) }
+            .filter { name in
+                if percentageFilter == "all" { return true }
+                let pct = calculateStatsForHabit(name).percentage
+                return percentageFilter == "above" ? pct >= 85 : pct < 85
+            }
     }
     
     private var dateRange: [Date] {
@@ -976,6 +982,40 @@ struct HabitOverviewView: View {
                             .padding(.horizontal, 16)
                         }
                     }
+
+                    // Success Rate Filter
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Success Rate")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+
+                            Spacer()
+
+                            if percentageFilter != "all" {
+                                Button("Clear") { percentageFilter = "all" }
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            ForEach([("all", "All", Color.blue), ("above", "≥ 85%", Color.green), ("below", "< 85%", Color.orange)], id: \.0) { value, label, color in
+                                let isSelected = percentageFilter == value
+                                Button(action: { percentageFilter = value }) {
+                                    Text(label)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(RoundedRectangle(cornerRadius: 8).fill(isSelected ? color : Color(.systemGray6)))
+                                        .foregroundColor(isSelected ? .white : .primary)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                            Spacer()
+                        }
+                    }
                 }
                 .padding(.vertical, 16)
                 .background(Color(.systemBackground))
@@ -1164,7 +1204,7 @@ struct HabitOverviewView: View {
     }
     
     private func hasActiveFilters() -> Bool {
-        return selectedRepeatFilter != nil || !searchText.isEmpty || !selectedTagsFilter.isEmpty
+        return selectedRepeatFilter != nil || !searchText.isEmpty || !selectedTagsFilter.isEmpty || percentageFilter != "all"
     }
     
     private func getAvailableHabitTags() -> [String] {
@@ -1221,7 +1261,11 @@ struct HabitOverviewView: View {
         if !searchText.isEmpty {
             filters.append("Search: \(searchText)")
         }
-        
+
+        if percentageFilter != "all" {
+            filters.append(percentageFilter == "above" ? "≥85%" : "<85%")
+        }
+
         return filters.joined(separator: ", ")
     }
     

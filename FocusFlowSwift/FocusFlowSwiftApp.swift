@@ -30,7 +30,6 @@ struct MigrationWrapper<Content: View>: View {
 @main
 struct FocusFlowSwiftApp: App {
     @StateObject private var alertManager = AlertManager()
-    @StateObject private var backgroundCounter = BackgroundCounterManager.shared
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     
     init() {
@@ -53,15 +52,11 @@ struct FocusFlowSwiftApp: App {
                     .environmentObject(alertManager)
                     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                         alertManager.handleAppLifecycleChange(isActive: false)
-                        backgroundCounter.handleAppDidEnterBackground()
                         Self.scheduleBackgroundTask()
                     }
                     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                         alertManager.handleAppLifecycleChange(isActive: true)
-                        backgroundCounter.handleAppDidBecomeActive()
-                        // Clean up any delivered notifications when app becomes active
                         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
-                        // Check for expired activity windows and award credits
                         NotificationCenter.default.post(name: NSNotification.Name("CheckExpiredWindows"), object: nil)
                     }
             }

@@ -33,7 +33,7 @@ struct FocusActivityWidget: Widget {
                             .fontWeight(.semibold)
                             .foregroundColor(.primary)
                             .lineLimit(1)
-                        Text("Interval \(context.state.currentInterval)")
+                        Text("Task #\(context.state.currentInterval + 1)")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -58,7 +58,7 @@ struct FocusActivityWidget: Widget {
                     }
                 }
             } compactLeading: {
-                Text("\(context.state.currentInterval)")
+                Text("#\(context.state.currentInterval + 1)")
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundColor(.indigo)
@@ -79,7 +79,7 @@ struct FocusActivityWidget: Widget {
                         .font(.caption)
                 }
             } minimal: {
-                Text("\(context.state.currentInterval)")
+                Text("#\(context.state.currentInterval + 1)")
                     .font(.system(size: 12))
                     .fontWeight(.bold)
                     .foregroundColor(.indigo)

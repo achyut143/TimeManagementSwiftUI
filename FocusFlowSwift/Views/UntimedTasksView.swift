@@ -27,6 +27,7 @@ struct UntimedTasksView: View {
     @State private var quickTaskInput = ""
     @State private var showMarkAllNotCompletedConfirmation = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
+    @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     
     var body: some View {
         VStack(spacing: 0) {
@@ -74,7 +75,7 @@ struct UntimedTasksView: View {
             
             ScrollView {
                 LazyVStack(spacing: 8) {
-                    ForEach(tasks) { task in
+                    ForEach(tasks.filter { passesPercentageFilter($0) }) { task in
                         untimedTaskRow(task: task)
                     }
                 }
@@ -559,6 +560,13 @@ struct UntimedTasksView: View {
         updateQuery()
     }
     
+    private func passesPercentageFilter(_ task: Task) -> Bool {
+        guard percentageFilter != "all" else { return true }
+        guard task.repeatAgain != nil else { return true }
+        let metrics = task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate)
+        return percentageFilter == "above" ? metrics.completionRate >= 85 : metrics.completionRate < 85
+    }
+
     private func taskBackgroundColor(_ task: Task) -> Color {
         if task.completed { return .green.opacity(0.3) }
         if task.notCompleted { return .red.opacity(0.3) }

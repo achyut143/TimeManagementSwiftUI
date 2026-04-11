@@ -36,6 +36,9 @@ struct TaskTableView: View {
     @State private var showTaskActions = false
     @State private var selectedTaskForActions: Task?
     @State private var statusFilter: StatusFilter = .all
+    @AppStorage("taskTableShowTodayOnly") private var showTodayOnly: Bool = false
+    @AppStorage("metricDays") private var metricDays: Int = 30
+    @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
 
     enum StatusFilter: String, CaseIterable {
         case all = "All"
@@ -75,8 +78,17 @@ struct TaskTableView: View {
 
     var filteredTasks: [Task] {
         let calendar = Calendar.current
-        let rangeStart = calendar.startOfDay(for: startDate)
-        let rangeEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+        let effectiveStart: Date
+        let effectiveEnd: Date
+        if showTodayOnly {
+            effectiveStart = calendar.startOfDay(for: Date())
+            effectiveEnd = calendar.date(byAdding: .day, value: 1, to: effectiveStart)!
+        } else {
+            effectiveStart = calendar.startOfDay(for: startDate)
+            effectiveEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+        }
+        let rangeStart = effectiveStart
+        let rangeEnd = effectiveEnd
 
         return tasks.filter { task in
             guard let taskDate = task.date else { return false }
@@ -86,6 +98,11 @@ struct TaskTableView: View {
             guard !showOnlyWithAttachments || (task.attachments != nil && !task.attachments!.isEmpty) else { return false }
             guard taskMatchesStatus(completed: task.completed, notCompleted: task.notCompleted) else { return false }
             guard taskMatchesTags(description: task.taskDescription) else { return false }
+            if percentageFilter != "all" && task.repeatAgain != nil {
+                let metrics = task.calculateMetrics(days: metricDays, allTasks: Array(tasks), referenceDate: task.date ?? Date())
+                if percentageFilter == "above" { guard metrics.completionRate >= 85 else { return false } }
+                else { guard metrics.completionRate < 85 else { return false } }
+            }
             return true
         }.sorted { ($0.date ?? Date()) > ($1.date ?? Date()) }
     }
@@ -93,6 +110,7 @@ struct TaskTableView: View {
     private func taskRowBackground(_ task: Task) -> Color {
         if task.completed { return .green.opacity(0.3) }
         if task.notCompleted { return .red.opacity(0.3) }
+        if (task.timeSpent ?? 0) > 0 { return .orange.opacity(0.3) }
         return .clear
     }
 
@@ -114,7 +132,7 @@ struct TaskTableView: View {
                                 .foregroundColor(selectedTasks.contains(task) ? .blue : .gray)
                         }
                     }
-                    TaskRowView(task: task, onNotesAction: {
+                    TaskRowView(task: task, allTasks: Array(tasks), metricDays: metricDays, onNotesAction: {
                         if !isSelectionMode {
                             selectedTask = task
                             showNotes = true
@@ -287,13 +305,26 @@ struct TaskTableView: View {
     
     private var filterSection: some View {
         VStack(spacing: 12) {
-            TextField("Search tasks...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-            
+            HStack {
+                TextField("Search tasks...", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+
+                Toggle(isOn: $showTodayOnly) {
+                    Label("Today", systemImage: "calendar.badge.clock")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                }
+                .toggleStyle(.button)
+                .buttonStyle(.bordered)
+                .tint(showTodayOnly ? .indigo : .gray)
+            }
+
             HStack {
                 DatePicker("From", selection: $startDate, displayedComponents: .date)
                 DatePicker("To", selection: $endDate, displayedComponents: .date)
             }
+            .disabled(showTodayOnly)
+            .opacity(showTodayOnly ? 0.4 : 1)
             
             Picker("Status", selection: $statusFilter) {
                 ForEach(StatusFilter.allCases, id: \.self) { filter in
@@ -335,12 +366,14 @@ struct TaskTableView: View {
 
 struct TaskRowView: View {
     let task: Task
+    var allTasks: [Task] = []
+    var metricDays: Int = 30
     let onNotesAction: () -> Void
     let onPersistentNotesAction: () -> Void
     var onTaskTap: (() -> Void)? = nil
     var isSelectionMode: Bool = false
     @State private var showTimeSpentEditor = false
-    
+
     private func priorityColor(_ priority: String) -> Color {
         switch priority {
         case "P1": return .red
@@ -350,7 +383,63 @@ struct TaskRowView: View {
         default: return .blue
         }
     }
-    
+
+    private func calculatePoints() -> (earned: Double, allocated: Double) {
+        let refDate = task.date ?? Date()
+        let calendar = Calendar.current
+        let end = calendar.startOfDay(for: refDate)
+        let start = calendar.date(byAdding: .day, value: -metricDays, to: end) ?? end
+        let habitTasks = allTasks.filter { $0.title == task.title && $0.repeatAgain != nil }
+        var earned = 0.0, allocated = 0.0
+        var day = start
+        while day <= end {
+            for t in habitTasks where calendar.isDate(t.date ?? .distantPast, inSameDayAs: day) {
+                allocated += t.weight
+                if t.completed { earned += t.effectiveWeight }
+            }
+            day = calendar.date(byAdding: .day, value: 1, to: day) ?? day
+        }
+        return (earned, allocated)
+    }
+
+    @ViewBuilder
+    private var metricsStrip: some View {
+        if task.repeatAgain != nil {
+            let metrics = task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: task.date ?? Date())
+            let points = calculatePoints()
+            let rateColor: Color = metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    metricBadge(label: "Score", value: metrics.formattedScore, color: .blue)
+                    metricBadge(label: "Rate", value: metrics.formattedCompletionRate, color: rateColor)
+                    metricBadge(label: "Points", value: "\(Int(points.earned))/\(Int(points.allocated))", color: .purple)
+                    if metrics.currentStreak > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "flame.fill").font(.caption2)
+                            Text("\(metrics.currentStreak)").font(.caption2).fontWeight(.bold)
+                        }
+                        .foregroundColor(.orange)
+                        .frame(width: 50, height: 28)
+                        .background(Color.orange.opacity(0.2))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+            .frame(height: 28)
+        }
+    }
+
+    private func metricBadge(label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 0) {
+            Text(value).font(.caption2).fontWeight(.bold).foregroundColor(color)
+            Text(label).font(.system(size: 8)).foregroundColor(.secondary)
+        }
+        .frame(width: 50, height: 28)
+        .background(color.opacity(0.2))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -361,6 +450,8 @@ struct TaskRowView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            metricsStrip
             
             HStack {
                 Text("\(task.startTime) - \(task.endTime)")

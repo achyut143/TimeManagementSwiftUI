@@ -6,15 +6,14 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showAlertManager = false
     @State private var showBooksLibrary = false
-    @State private var showBackgroundCounter = false
     @State private var showDailyNotes = false
     @State private var showNewActivity = false
     @State private var showMetricsSettings = false
     @State private var selectedDate = Date()
     @State private var habitSettings: HabitSettings?
-    @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
+    @AppStorage("metricDays") private var metricDays: Int = 30
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
-    @ObservedObject private var counterManager = BackgroundCounterManager.shared
+    @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     
     // Timer for checking expired activity windows
     let activityCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect() // Check every minute
@@ -27,34 +26,10 @@ struct ContentView: View {
         ZStack {
             TabView {
                 NavigationStack {
-                    VStack(spacing: 0) {
-                        // Background Counter at the top
-                        if showBackgroundCounter {
-                            BackgroundCounterView()
-                                .padding(.horizontal)
-                                .padding(.top, 8)
-                                .transition(.move(edge: .top).combined(with: .opacity))
-                        }
-                        
-                        TasksCalendarView(selectedDate: $selectedDate)
-                    }
+                    TasksCalendarView(selectedDate: $selectedDate)
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {
                             HStack(spacing: 12) {
-                                Button {
-                                    withAnimation {
-                                        showBackgroundCounter.toggle()
-                                    }
-                                } label: {
-                                    Text(counterManager.formattedTime(counterManager.totalBackgroundTime))
-                                        .font(.system(.caption, design: .monospaced))
-                                        .foregroundColor(.blue)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.blue.opacity(0.1))
-                                        .cornerRadius(6)
-                                }
-
                                 Button {
                                     showDailyNotes = true
                                 } label: {
@@ -70,6 +45,11 @@ struct ContentView: View {
                                             .font(.caption)
                                         Text("\(metricDays)d")
                                             .font(.caption2)
+                                        if percentageFilter != "all" {
+                                            Circle()
+                                                .fill(percentageFilter == "above" ? Color.green : Color.orange)
+                                                .frame(width: 6, height: 6)
+                                        }
                                     }
                                     .foregroundColor(.orange)
                                 }
@@ -102,9 +82,43 @@ struct ContentView: View {
                                             .buttonStyle(.plain)
                                             .padding(.vertical, 4)
                                         }
+
+                                        Divider()
+
+                                        Text("Completion Filter")
+                                            .font(.headline)
+
+                                        Text("Show repeat tasks matching:")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+
+                                        HStack(spacing: 8) {
+                                            ForEach([("all", "All", Color.blue), ("above", "≥85%", Color.green), ("below", "<85%", Color.orange)], id: \.0) { value, label, color in
+                                                Button(action: { percentageFilter = value }) {
+                                                    Text(label)
+                                                        .font(.caption)
+                                                        .fontWeight(.semibold)
+                                                        .foregroundColor(percentageFilter == value ? .white : color)
+                                                        .padding(.horizontal, 10)
+                                                        .padding(.vertical, 6)
+                                                        .background(
+                                                            RoundedRectangle(cornerRadius: 8)
+                                                                .fill(percentageFilter == value ? color : color.opacity(0.12))
+                                                        )
+                                                }
+                                                .buttonStyle(PlainButtonStyle())
+                                            }
+                                        }
                                     }
                                     .padding()
-                                    .frame(width: 200)
+                                    .frame(width: 220)
+                                }
+
+                                Button {
+                                    showBooksLibrary = true
+                                } label: {
+                                    Image(systemName: "books.vertical")
+                                        .foregroundColor(.indigo)
                                 }
                             }
                         }
@@ -114,11 +128,6 @@ struct ContentView: View {
                                     showNewActivity = true
                                 } label: {
                                     Label("New Activity", systemImage: "clock.badge.plus")
-                                }
-                                Button {
-                                    showBooksLibrary = true
-                                } label: {
-                                    Label("Books", systemImage: "books.vertical")
                                 }
                                 Divider()
                                 Button {
@@ -183,10 +192,8 @@ struct ContentView: View {
                 NewScheduledActivityView()
             }
             
-            QuickAlertButton()
-            
             QuickActivityButton()
-            
+
             // Active timer button (iOS 16.1+)
             if #available(iOS 16.1, *) {
                 ActiveTimerButton()
@@ -194,7 +201,10 @@ struct ContentView: View {
         }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
-            
+
+            // Activate the UIWindow overlay (shown above sheets & popovers)
+            FloatingButtonsWindowManager.shared.show()
+
             // Load habit settings
             habitSettings = HabitSettings.getOrCreate(context: modelContext)
             if let settings = habitSettings {

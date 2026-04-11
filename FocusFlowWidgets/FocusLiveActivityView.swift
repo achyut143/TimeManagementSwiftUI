@@ -10,9 +10,11 @@ struct FocusLiveActivityView: View {
         context.state.currentCycleName ?? context.state.intervalName
     }
 
+    var taskSerial: Int { context.state.currentInterval + 1 }
+
     var taskProgress: String? {
         if let total = context.state.totalIntervals {
-            return "Task \(context.state.currentInterval) of \(total)"
+            return "Task #\(taskSerial) of \(total)"
         }
         return context.state.cycleProgress.map { "Task \($0)" }
     }
@@ -25,7 +27,7 @@ struct FocusLiveActivityView: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.primary)
                     .lineLimit(1)
-                Text("Interval \(context.state.currentInterval)")
+                Text("Task #\(taskSerial)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

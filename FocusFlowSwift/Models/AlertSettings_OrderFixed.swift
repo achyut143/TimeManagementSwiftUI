@@ -74,6 +74,9 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         didSet { logger.info("isMinimized changed: \(oldValue) -> \(self.isMinimized)") }
     }
     
+    // Active task name (set by DailyNotesView auto-scheduler, read by global banner)
+    @Published var activeTaskName: String = ""
+
     // Cycles functionality
     @Published var numberOfCycles: Int = 1 {
         didSet { 

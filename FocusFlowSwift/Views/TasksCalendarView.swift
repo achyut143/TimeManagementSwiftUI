@@ -39,6 +39,7 @@ struct TasksCalendarView: View {
     @State private var showUntimedTasks = false
     @State private var showMarkAllNotCompletedConfirmation = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
+    @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     
     var body: some View {
         VStack(spacing: 0) {
@@ -295,12 +296,20 @@ struct TasksCalendarView: View {
     private var untimedTasksList: some View {
         ScrollView {
             LazyVStack(spacing: 8) {
-                ForEach(tasks) { task in
+                ForEach(tasks.filter { passesPercentageFilter($0) }) { task in
                     untimedTaskRow(task: task)
                 }
             }
             .padding()
         }
+    }
+
+    private func passesPercentageFilter(_ task: Task) -> Bool {
+        guard percentageFilter != "all" else { return true }
+        guard task.repeatAgain != nil else { return true }
+        let metrics = task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate)
+        // completionRate is already 0-100
+        return percentageFilter == "above" ? metrics.completionRate >= 85 : metrics.completionRate < 85
     }
     
     private func untimedTaskRow(task: Task) -> some View {
@@ -835,7 +844,7 @@ struct TasksCalendarView: View {
         let slotMinutes = slot.hour * 60 + slot.minute
         let filteredTasks = tasks.filter { task in
             let startMinutes = timeToMinutes(task.startTime)
-            return slotMinutes == startMinutes
+            return slotMinutes == startMinutes && passesPercentageFilter(task)
         }
         if filteredTasks.count > 0 {
             print("Slot \(slot.hour):\(slot.minute) has \(filteredTasks.count) tasks")
@@ -963,6 +972,7 @@ struct TasksCalendarView: View {
     private func taskBackgroundColor(_ task: Task) -> Color {
         if task.completed { return .green.opacity(0.3) }
         if task.notCompleted { return .red.opacity(0.3) }
+        if (task.timeSpent ?? 0) > 0 { return .orange.opacity(0.3) }
         if task.five { return .blue.opacity(0.3) }
         return .gray.opacity(0.2)
     }
@@ -1652,15 +1662,89 @@ struct TaskActionsView: View {
     @State private var navigateToHabits = false
     @State private var showRewardWorkflows = false
     @State private var showBooksLibrary = false
+    @State private var showPartialTimeAlert = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     
     private var subtaskCount: Int {
-        return allSubtasks.filter { 
-            $0.parentTask?.persistentModelID == task.persistentModelID && 
-            $0.parentSubtask == nil 
+        return allSubtasks.filter {
+            $0.parentTask?.persistentModelID == task.persistentModelID &&
+            $0.parentSubtask == nil
         }.count
     }
-    
+
+    private func timeToMinutes(_ timeStr: String) -> Int {
+        let clean = timeStr.trimmingCharacters(in: .whitespaces)
+        let parts = clean.components(separatedBy: ":")
+        guard parts.count >= 2,
+              let h = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+              let m = Int(parts[1].trimmingCharacters(in: .whitespaces)) else { return 0 }
+        return h * 60 + m
+    }
+
+    private var allottedMinutes: Int {
+        timeToMinutes(task.endTime) - timeToMinutes(task.startTime)
+    }
+
+    private var partialTimeMessage: String {
+        let spent = Int(task.timeSpent ?? 0)
+        return "You've logged \(spent)m of \(allottedMinutes)m allotted. How would you like to complete this task?"
+    }
+
+    @ViewBuilder
+    private var repeatMetricsSection: some View {
+        if task.repeatAgain != nil {
+            let metrics = task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate)
+            let pointsStats = calculatePointsForTask(task)
+            let rateColor: Color = metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    VStack(spacing: 0) {
+                        Text(metrics.formattedScore)
+                            .font(.caption2).fontWeight(.bold).foregroundColor(.blue)
+                        Text("Score").font(.system(size: 8)).foregroundColor(.secondary)
+                    }
+                    .frame(width: 50, height: 35)
+                    .background(Color.blue.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    VStack(spacing: 0) {
+                        Text(metrics.formattedCompletionRate)
+                            .font(.caption2).fontWeight(.bold).foregroundColor(rateColor)
+                        Text("Rate").font(.system(size: 8)).foregroundColor(.secondary)
+                    }
+                    .frame(width: 50, height: 35)
+                    .background(rateColor.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    VStack(spacing: 0) {
+                        Text("\(Int(pointsStats.earned))/\(Int(pointsStats.allocated))")
+                            .font(.caption2).fontWeight(.bold).foregroundColor(.purple)
+                        Text("Points").font(.system(size: 8)).foregroundColor(.secondary)
+                    }
+                    .frame(width: 50, height: 35)
+                    .background(Color.purple.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    if metrics.currentStreak > 0 {
+                        VStack(spacing: 0) {
+                            HStack(spacing: 2) {
+                                Image(systemName: "flame.fill").font(.caption2)
+                                Text("\(metrics.currentStreak)").font(.caption2).fontWeight(.bold)
+                            }
+                            .foregroundColor(.orange)
+                            Text("Streak").font(.system(size: 8)).foregroundColor(.secondary)
+                        }
+                        .frame(width: 50, height: 35)
+                        .background(Color.orange.opacity(0.2))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+            .frame(height: 35)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -1672,78 +1756,7 @@ struct TaskActionsView: View {
                                 .fontWeight(.semibold)
                                 .multilineTextAlignment(.center)
                             
-                            // Show metrics for repeat tasks
-                            if task.repeatAgain != nil {
-                                let metrics = task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate)
-                                let pointsStats = calculatePointsForTask(task)
-                                
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 4) {
-                                        // Score
-                                        VStack(spacing: 0) {
-                                            Text(metrics.formattedScore)
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                                .foregroundColor(.blue)
-                                            Text("Score")
-                                                .font(.system(size: 8))
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .frame(width: 50, height: 35)
-                                        .background(Color.blue.opacity(0.2))
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                                        
-                                        // Completion rate
-                                        VStack(spacing: 0) {
-                                            Text(metrics.formattedCompletionRate)
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                                .foregroundColor(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red))
-                                            Text("Rate")
-                                                .font(.system(size: 8))
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .frame(width: 50, height: 35)
-                                        .background(Color(metrics.completionColor == "green" ? .green : (metrics.completionColor == "orange" ? .orange : .red)).opacity(0.2))
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                                        
-                                        // Points
-                                        VStack(spacing: 0) {
-                                            Text("\(Int(pointsStats.earned))/\(Int(pointsStats.allocated))")
-                                                .font(.caption2)
-                                                .fontWeight(.bold)
-                                                .foregroundColor(.purple)
-                                            Text("Points")
-                                                .font(.system(size: 8))
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .frame(width: 50, height: 35)
-                                        .background(Color.purple.opacity(0.2))
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                                        
-                                        // Streak
-                                        if metrics.currentStreak > 0 {
-                                            VStack(spacing: 0) {
-                                                HStack(spacing: 2) {
-                                                    Image(systemName: "flame.fill")
-                                                        .font(.caption2)
-                                                    Text("\(metrics.currentStreak)")
-                                                        .font(.caption2)
-                                                        .fontWeight(.bold)
-                                                }
-                                                .foregroundColor(.orange)
-                                                Text("Streak")
-                                                    .font(.system(size: 8))
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            .frame(width: 50, height: 35)
-                                            .background(Color.orange.opacity(0.2))
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                                        }
-                                    }
-                                }
-                                .frame(height: 35)
-                            }
+                            repeatMetricsSection
                         }
                         
                         if !task.startTime.isEmpty || !task.endTime.isEmpty {
@@ -1773,7 +1786,28 @@ struct TaskActionsView: View {
                     
                     VStack(spacing: 12) {
                         actionButton("Enjoyed it? Dedicated to God.", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
-                            toggleTaskCompletion()
+                            let spentMinutes = task.timeSpent ?? 0
+                            if !task.completed && spentMinutes > 0 && allottedMinutes > 0 && spentMinutes < Double(allottedMinutes) {
+                                showPartialTimeAlert = true
+                            } else {
+                                toggleTaskCompletion()
+                            }
+                        }
+                        .confirmationDialog(
+                            "Time Partially Logged",
+                            isPresented: $showPartialTimeAlert,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Complete — keep \(Int(task.timeSpent ?? 0))m logged") {
+                                toggleTaskCompletion()
+                            }
+                            Button("Complete — log full \(allottedMinutes)m") {
+                                task.timeSpent = Double(allottedMinutes)
+                                toggleTaskCompletion()
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(partialTimeMessage)
                         }
                         
                         actionButton("Mark Not Completed", systemImage: "xmark.circle", color: task.notCompleted ? .red : .gray) {

@@ -7,7 +7,8 @@ struct PointsIndicatorView: View {
     private var completedPoints: Double { tasks.filter { $0.completed }.reduce(0) { $0 + $1.effectiveWeight } }
     private var percentage: Double { totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0 }
 
-    private var pendingCount: Int { tasks.filter { !$0.completed && !$0.notCompleted }.count }
+    private var inProgressCount: Int { tasks.filter { ($0.timeSpent ?? 0) > 0 && !$0.completed && !$0.notCompleted }.count }
+    private var pendingCount: Int { tasks.filter { !$0.completed && !$0.notCompleted && ($0.timeSpent ?? 0) == 0 }.count }
     private var completedCount: Int { tasks.filter { $0.completed }.count }
     private var totalCount: Int { tasks.count }
 
@@ -21,9 +22,12 @@ struct PointsIndicatorView: View {
         HStack(spacing: 16) {
             // Task metrics — pending, completed, total (left side)
             HStack(spacing: 12) {
-                metricBadge(systemImage: "minus.circle", value: pendingCount, color: .orange)
+                metricBadge(systemImage: "minus.circle", value: pendingCount, color: .secondary)
+                if inProgressCount > 0 {
+                    metricBadge(systemImage: "clock.fill", value: inProgressCount, color: .orange)
+                }
                 metricBadge(systemImage: "checkmark.circle.fill", value: completedCount, color: .green)
-                metricBadge(systemImage: "tray.full", value: totalCount, color: .secondary)
+                metricBadge(systemImage: "tray.full", value: totalCount, color: .blue)
             }
 
             Divider()
