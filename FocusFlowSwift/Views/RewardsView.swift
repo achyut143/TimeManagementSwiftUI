@@ -1,5 +1,13 @@
 import SwiftUI
 import SwiftData
+import Charts
+
+private extension Calendar {
+    func startOfWeek(for date: Date) -> Date {
+        let comps = dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+        return self.date(from: comps) ?? startOfDay(for: date)
+    }
+}
 
 struct RewardsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -11,6 +19,9 @@ struct RewardsView: View {
     @State private var showGuiltOnly = false
     @State private var searchText = ""
     @State private var currentPage = 0
+    @State private var showChart = false
+    @State private var rewardToDelete: Reward? = nil
+    @State private var showDeleteConfirm = false
     let itemsPerPage = 10
     
     var filteredRewards: [Reward] {
@@ -116,8 +127,26 @@ struct RewardsView: View {
                             selectedReward = reward
                             showingManageReward = true
                         }
+                        .contextMenu {
+                            if reward.name != "Unclaimed Points" {
+                                Button(role: .destructive) {
+                                    rewardToDelete = reward
+                                    showDeleteConfirm = true
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                     }
-                    .onDelete(perform: deleteRewards)
+                    .onDelete { offsets in
+                        for index in offsets {
+                            let reward = paginatedRewards[index]
+                            if reward.name != "Unclaimed Points" {
+                                rewardToDelete = reward
+                                showDeleteConfirm = true
+                            }
+                        }
+                    }
                 }
                 
                 // Pagination Controls
@@ -155,11 +184,21 @@ struct RewardsView: View {
         }
         .navigationTitle("Rewards")
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarLeading) {
                 Button {
-                    showingAddReward = true
+                    showChart = true
                 } label: {
-                    Image(systemName: "plus")
+                    Image(systemName: "chart.bar.fill")
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 4) {
+                    EditButton()
+                    Button {
+                        showingAddReward = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
                 }
             }
         }
@@ -171,21 +210,26 @@ struct RewardsView: View {
                 ManageRewardView(reward: reward)
             }
         }
+        .sheet(isPresented: $showChart) {
+            NavigationView {
+                RewardChartView()
+            }
+        }
+        .confirmationDialog(
+            "Delete \"\(rewardToDelete?.name ?? "")\"?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let r = rewardToDelete {
+                    modelContext.delete(r)
+                    try? modelContext.save()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .onAppear {
             ensureUnclaimedPointsReward()
-        }
-    }
-    
-    private func deleteRewards(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                let reward = paginatedRewards[index]
-                // Prevent deletion of Unclaimed Points reward
-                if reward.name == "Unclaimed Points" {
-                    continue
-                }
-                modelContext.delete(reward)
-            }
         }
     }
     
@@ -1604,6 +1648,280 @@ struct TransactionHistoryView: View {
         let endText = formatter.string(from: range.end)
         
         return "\(startText) - \(endText)"
+    }
+}
+
+// MARK: - Reward Chart View
+
+struct RewardChartView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Query private var allTransactions: [RewardTransaction]
+    @Query(sort: \Reward.name) private var allRewards: [Reward]
+
+    @State private var selectedRewardId: UUID? = nil
+    @State private var fromDate: Date = Calendar.current.startOfWeek(for: Date())
+    @State private var toDate: Date = Date()
+    @State private var selectedDate: Date? = nil
+
+    struct DayBar: Identifiable {
+        let id = UUID()
+        let date: Date
+        let amount: Double
+        let category: String  // "Added" or "Used"
+    }
+
+    private var selectedReward: Reward? {
+        guard let id = selectedRewardId else { return nil }
+        return allRewards.first { $0.id == id }
+    }
+
+    private var rangeStart: Date { Calendar.current.startOfDay(for: fromDate) }
+    private var rangeEnd:   Date { Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: 1, to: toDate)!) }
+
+    private var dayCount: Int {
+        max(1, Calendar.current.dateComponents([.day], from: rangeStart, to: rangeEnd).day ?? 1)
+    }
+
+    private var bars: [DayBar] {
+        let calendar = Calendar.current
+        var filtered = allTransactions.filter { $0.date >= rangeStart && $0.date < rangeEnd }
+        if let id = selectedRewardId {
+            filtered = filtered.filter { $0.reward?.id == id }
+        }
+
+        var addedMap: [Date: Double] = [:]
+        var usedMap:  [Date: Double] = [:]
+        for tx in filtered {
+            let day = calendar.startOfDay(for: tx.date)
+            if tx.type == .add { addedMap[day, default: 0] += tx.amount }
+            else               { usedMap[day,  default: 0] += tx.amount }
+        }
+
+        var result: [DayBar] = []
+        for offset in 0..<dayCount {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: rangeStart) else { continue }
+            result.append(DayBar(date: day, amount: addedMap[day] ?? 0, category: "Added"))
+            result.append(DayBar(date: day, amount: usedMap[day]  ?? 0, category: "Used"))
+        }
+        return result
+    }
+
+    private var totalAdded: Double { bars.filter { $0.category == "Added" }.reduce(0) { $0 + $1.amount } }
+    private var totalUsed:  Double { bars.filter { $0.category == "Used"  }.reduce(0) { $0 + $1.amount } }
+
+    private var xAxisStride: Int { dayCount > 14 ? 5 : (dayCount > 7 ? 2 : 1) }
+
+    private var yAxisLabel: String {
+        switch selectedReward?.type {
+        case .timeReward:  return "Minutes"
+        case .moneyReward: return "Dollars"
+        default:           return "Points"
+        }
+    }
+
+    private func formatted(_ value: Double) -> String {
+        if let reward = selectedReward { return reward.formattedAmount(value) }
+        return String(format: "%.1f pts", value)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+
+                // Reward selector
+                Picker("Reward", selection: $selectedRewardId) {
+                    Text("All Rewards").tag(Optional<UUID>.none)
+                    ForEach(allRewards) { r in
+                        Text(r.name).tag(Optional(r.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+
+                // Date range pickers
+                VStack(spacing: 8) {
+                    DatePicker("From", selection: $fromDate, in: ...toDate, displayedComponents: .date)
+                    DatePicker("To",   selection: $toDate,   in: fromDate..., displayedComponents: .date)
+                }
+                .padding(.horizontal)
+
+                // Quick range shortcuts
+                HStack(spacing: 8) {
+                    ForEach([("Week", 7), ("Month", 30), ("Quarter", 90)], id: \.0) { label, days in
+                        Button(label) {
+                            toDate   = Date()
+                            fromDate = Calendar.current.date(byAdding: .day, value: -(days - 1), to: Date())!
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.indigo.opacity(0.12))
+                        .foregroundColor(.indigo)
+                        .cornerRadius(8)
+                    }
+                    Button("This Week") {
+                        fromDate = Calendar.current.startOfWeek(for: Date())
+                        toDate   = Date()
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.12))
+                    .foregroundColor(.blue)
+                    .cornerRadius(8)
+                }
+                .padding(.horizontal)
+
+                // Bar chart
+                if bars.allSatisfy({ $0.amount == 0 }) {
+                    ContentUnavailableView("No Transactions", systemImage: "chart.bar",
+                        description: Text("No reward activity in the selected period."))
+                        .frame(height: 200)
+                } else {
+                    VStack(spacing: 8) {
+                        // Tooltip card
+                        if let sel = selectedDate,
+                           let added = bars.first(where: { $0.date == sel && $0.category == "Added" })?.amount,
+                           let used  = bars.first(where: { $0.date == sel && $0.category == "Used"  })?.amount {
+                            HStack(spacing: 20) {
+                                VStack(spacing: 2) {
+                                    Text(sel, format: .dateTime.month(.abbreviated).day().year())
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Divider().frame(height: 28)
+                                Label(formatted(added), systemImage: "arrow.up.circle.fill")
+                                    .font(.caption.bold())
+                                    .foregroundColor(.green)
+                                Divider().frame(height: 28)
+                                Label(formatted(used), systemImage: "arrow.down.circle.fill")
+                                    .font(.caption.bold())
+                                    .foregroundColor(.red)
+                                Divider().frame(height: 28)
+                                let net = added - used
+                                Text(formatted(abs(net)))
+                                    .font(.caption.bold())
+                                    .foregroundColor(net >= 0 ? .green : .red)
+                                Text(net >= 0 ? "net +" : "net −")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        } else {
+                            Text("Drag on a bar to see day details")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Chart(bars) { bar in
+                            BarMark(
+                                x: .value("Date", bar.date, unit: .day),
+                                y: .value(bar.category, bar.amount)
+                            )
+                            .foregroundStyle(by: .value("Type", bar.category))
+                            .position(by: .value("Type", bar.category))
+                            .opacity(selectedDate == nil || selectedDate == bar.date ? 1 : 0.35)
+                        }
+                        .chartForegroundStyleScale(["Added": Color.green, "Used": Color.red])
+                        .chartXAxis {
+                            AxisMarks(values: .stride(by: .day, count: xAxisStride)) { value in
+                                AxisValueLabel(orientation: .verticalReversed) {
+                                    if let date = value.as(Date.self) {
+                                        Text(date, format: .dateTime.month(.abbreviated).day())
+                                            .font(.system(size: 10))
+                                    }
+                                }
+                                AxisGridLine()
+                            }
+                        }
+                        .chartYAxisLabel(yAxisLabel)
+                        .chartLegend(position: .top, alignment: .leading)
+                        .frame(height: 300)
+                        .chartOverlay { proxy in
+                            GeometryReader { geo in
+                                Rectangle()
+                                    .fill(.clear)
+                                    .contentShape(Rectangle())
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { value in
+                                                let x = value.location.x - geo[proxy.plotAreaFrame].origin.x
+                                                if let date: Date = proxy.value(atX: x, as: Date.self) {
+                                                    let cal = Calendar.current
+                                                    let day = cal.startOfDay(for: date)
+                                                    if bars.contains(where: { $0.date == day }) {
+                                                        withAnimation(.easeInOut(duration: 0.1)) { selectedDate = day }
+                                                    }
+                                                }
+                                            }
+                                            .onEnded { _ in
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                                    withAnimation { selectedDate = nil }
+                                                }
+                                            }
+                                    )
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+
+                // Summary chips
+                HStack(spacing: 16) {
+                    summaryChip(label: "Total Added", value: totalAdded, color: .green)
+                    summaryChip(label: "Total Used",  value: totalUsed,  color: .red)
+                }
+                .padding(.horizontal)
+
+                // Net balance
+                let net = totalAdded - totalUsed
+                HStack {
+                    Text("Net (\(dayCount)d)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(formatted(abs(net)))
+                        .font(.headline)
+                        .foregroundColor(net >= 0 ? .green : .red)
+                    Text(net >= 0 ? "surplus" : "deficit")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.secondary.opacity(0.06))
+                .cornerRadius(10)
+                .padding(.horizontal)
+            }
+            .padding(.top, 12)
+        }
+        .navigationTitle("Reward History")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Done") { dismiss() }
+            }
+        }
+    }
+
+    private func summaryChip(label: String, value: Double, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text(formatted(value))
+                .font(.title3.bold())
+                .foregroundColor(color)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(color.opacity(0.1))
+        .cornerRadius(12)
     }
 }
 

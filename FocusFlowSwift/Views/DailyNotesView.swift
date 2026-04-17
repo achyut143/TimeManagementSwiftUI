@@ -131,6 +131,7 @@ struct DailyNotesView: View {
     @State private var scheduleGap: String = ""
     @State private var scheduleTaskName: String = ""
     @State private var scheduleInsertAfter: String = ""
+    @State private var scheduleStartNum: String = "1"
     @State private var scheduleNoRepeat: Bool = false
     @State private var showFormattedSchedule: Bool = true
     @AppStorage("schedule.hideFinishedTasks") private var hideFinishedTasks: Bool = false
@@ -139,6 +140,20 @@ struct DailyNotesView: View {
     @State private var reminderTimer: Timer?
     @State private var showBooksLibrary = false
     @State private var isFocusMode = false
+    @State private var showSaveTemplate = false
+    @State private var showTemplates = false
+    @State private var showAutoGenSheet = false
+    @State private var autoGenDuration: String = "10"
+    @Query private var allTasksQuery: [Task]
+    @State private var showInterceptSheet = false
+    @State private var showSwapSheet = false
+    @State private var swapSheetDefaults: (Int?, Int?) = (nil, nil)
+    @State private var scheduleRenderID: UUID = UUID()
+    @State private var showDeleteOptions = false
+    @State private var pendingDeleteStart: Int = 0
+    @State private var pendingDeleteEnd: Int = 0
+    @State private var pendingDeleteDesc: String = ""
+    @State private var showCancelOptions = false
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -301,6 +316,46 @@ struct DailyNotesView: View {
                 }
 
                 Section("Daily Notes") {
+                    // Template toolbar
+                    HStack(spacing: 8) {
+                        Button(action: { showTemplates = true }) {
+                            Label("Templates", systemImage: "doc.on.doc.fill")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.indigo)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(Color.indigo.opacity(0.1)))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+
+                        Button(action: { showAutoGenSheet = true }) {
+                            Label("Auto-Schedule", systemImage: "wand.and.stars")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.1)))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+
+                        if hasSchedule, currentScheduleBlock != nil {
+                            Button(action: { showSaveTemplate = true }) {
+                                Label("Save as Template", systemImage: "square.and.arrow.down")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.green)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.1)))
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+
+                        Spacer()
+                    }
+
                     if hasSchedule {
                         HStack {
                             Label(
@@ -334,6 +389,7 @@ struct DailyNotesView: View {
 
                     if showFormattedSchedule && hasSchedule {
                         scheduleFormattedView
+                            .id(scheduleRenderID)
                     } else {
                         RichTextEditor(text: $notesText)
                             .frame(height: 300)
@@ -411,6 +467,18 @@ struct DailyNotesView: View {
                                 .foregroundColor(.secondary)
                         }
 
+                        HStack {
+                            Text("Start #:")
+                                .frame(width: 90, alignment: .leading)
+                            TextField("1", text: $scheduleStartNum)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                                .frame(width: 70)
+                            Text("first task number")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
                         Button("Generate Schedule") {
                             generateSchedule()
                         }
@@ -423,6 +491,19 @@ struct DailyNotesView: View {
                         Text(scheduleNoRepeat
                              ? "Generates each task once in sequence from the start time."
                              : "Generates repeating time blocks with specified intervals and gaps.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Divider()
+
+                        Button(action: { showInterceptSheet = true }) {
+                            Label("Intercept Tasks", systemImage: "arrow.turn.down.right")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.purple)
+
+                        Text("Insert new timed tasks at a specific position in the schedule. Existing tasks are renumbered but keep their times.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -522,13 +603,67 @@ struct DailyNotesView: View {
             .sheet(isPresented: $showBooksLibrary) {
                 BooksView()
             }
+            .sheet(isPresented: $showTemplates) {
+                ScheduleTemplatesView { templates in
+                    applyTemplates(templates)
+                }
+            }
+            .sheet(isPresented: $showAutoGenSheet) {
+                AutoScheduleSheet(
+                    selectedDate: selectedDate,
+                    allTasks: allTasksQuery,
+                    duration: $autoGenDuration,
+                    onGenerate: { tasks, duration in
+                        autoGenerateSchedule(tasks: tasks, minutesPerTask: duration)
+                    }
+                )
+            }
+            .sheet(isPresented: $showSaveTemplate) {
+                if let block = currentScheduleBlock {
+                    SaveTemplateSheet(scheduleContent: block)
+                }
+            }
             .sheet(item: $editingTask) { task in
                 EditTaskSheet(
                     task: task,
                     onSave: { newDesc, newStart, newEnd in
-                        updateTaskInNotes(item: task, newDesc: newDesc, newStart: newStart, newEnd: newEnd)
+                        updateTaskAndShiftInNotes(item: task, newDesc: newDesc, newStart: newStart, newEnd: newEnd)
                     }
                 )
+            }
+            .sheet(isPresented: $showInterceptSheet) {
+                InterceptSheet { lines, afterNum in
+                    applyIntercept(lines: lines, afterNum: afterNum)
+                }
+            }
+            .sheet(isPresented: $showSwapSheet) {
+                SwapTasksSheet(defaultA: swapSheetDefaults.0, defaultB: swapSheetDefaults.1) { a, b in
+                    swapScheduleTasks(numA: a, numB: b)
+                }
+            }
+            .confirmationDialog("Delete Task", isPresented: $showDeleteOptions, titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    deleteScheduleTask(startMin: pendingDeleteStart, endMin: pendingDeleteEnd, desc: pendingDeleteDesc)
+                }
+                Button("Delete & Adjust Times Below", role: .destructive) {
+                    deleteScheduleTaskAndShift(startMin: pendingDeleteStart, endMin: pendingDeleteEnd,
+                                              desc: pendingDeleteDesc, shiftBy: pendingDeleteEnd - pendingDeleteStart)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("How would you like to delete \"\(pendingDeleteDesc)\"?")
+            }
+            .confirmationDialog("Cancel Current Task", isPresented: $showCancelOptions, titleVisibility: .visible) {
+                Button("Stop & Start Next") {
+                    cancelCurrentTask()
+                }
+                Button("Remove & Adjust Times") {
+                    removeCurrentTaskFromNotes(adjustTime: true)
+                }
+                Button("Just Remove") {
+                    removeCurrentTaskFromNotes(adjustTime: false)
+                }
+                Button("Cancel", role: .cancel) {}
             }
             .fullScreenCover(isPresented: $isFocusMode) {
                 FocusModeView(
@@ -541,12 +676,17 @@ struct DailyNotesView: View {
                     pausedAt: pausedAt,
                     notesText: $notesText,
                     settings: settings,
-                    onSmartPause: { handleSmartPause() },
-                    onStrikePast: { strikeOutPastTimeSlots() },
-                    onExtendTask: { extendCurrentTask() },
-                    onInterrupt:  { insertInterruptTask() },
-                    onEndAndNew:  { endAndStartNewTask() },
-                    onCancelTask: { cancelCurrentTask() }
+                    onSmartPause:         { handleSmartPause() },
+                    onStrikePast:         { strikeOutPastTimeSlots() },
+                    onExtendTask:         { extendCurrentTask() },
+                    onInterrupt:          { insertInterruptTask() },
+                    onEndAndNew:          { endAndStartNewTask() },
+                    onCancelTask:         { cancelCurrentTask() },
+                    onRemoveCurrentAdjust: { removeCurrentTaskFromNotes(adjustTime: true) },
+                    onRemoveCurrentOnly:   { removeCurrentTaskFromNotes(adjustTime: false) },
+                    onSwapTasks:           { a, b in swapScheduleTasks(numA: a, numB: b) },
+                    onNotesModified:       { saveNotes() },
+                    computeSwapDefaults:   { currentAndNextTaskNums() }
                 )
             }
         }
@@ -751,8 +891,7 @@ struct DailyNotesView: View {
                 }
             }
 
-            if settings.isPlaying && !isTransitioning &&
-               currentTaskName != "Rest up" && currentTaskName != "Free time" && !currentTaskName.isEmpty {
+            if settings.isPlaying && !isTransitioning && !currentTaskName.isEmpty {
                 HStack(spacing: 10) {
                     // +5 min
                     Button(action: { extendCurrentTask() }) {
@@ -781,17 +920,29 @@ struct DailyNotesView: View {
                     .tint(.orange)
                     .help("End & New Task")
 
-                    // Cancel & Skip
-                    Button(action: { cancelCurrentTask() }) {
+                    // Cancel options
+                    Button(action: { showCancelOptions = true }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title2)
                     }
                     .buttonStyle(.bordered)
                     .tint(.gray)
-                    .help("Cancel & Skip to Next")
+                    .help("Cancel Options")
+
+                    // Swap tasks
+                    Button(action: {
+                        swapSheetDefaults = currentAndNextTaskNums()
+                        showSwapSheet = true
+                    }) {
+                        Image(systemName: "arrow.left.arrow.right.circle.fill")
+                            .font(.title2)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.indigo)
+                    .help("Swap Tasks")
                 }
             }
-            
+
             // Smart Pause button (separate from regular pause) - ALWAYS VISIBLE FOR DEBUG
             Button(action: {
                 print("🔘 Smart Pause button ACTION triggered")
@@ -1503,8 +1654,181 @@ struct DailyNotesView: View {
             let newNote = DailyNote(date: selectedDate, content: notesText)
             modelContext.insert(newNote)
         }
-        
+
         try? modelContext.save()
+        scheduleRenderID = UUID()
+    }
+
+    // MARK: - Template Helpers
+
+    /// Extracts the START…END block (inclusive) from the current notes, nil if absent.
+    private var currentScheduleBlock: String? {
+        let lines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return nil }
+        return lines[s...e].joined(separator: "\n")
+    }
+
+    /// Replaces or appends the START…END block in current notes with the template content.
+    private func applyTemplates(_ templates: [ScheduleTemplate]) {
+        guard !templates.isEmpty else { return }
+        // Extract task lines from all templates in order
+        var rawLines: [String] = []
+        for template in templates {
+            var inBlock = false
+            for line in template.content.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed == "START" { inBlock = true; continue }
+                if trimmed == "END"   { inBlock = false; continue }
+                if inBlock { rawLines.append(line) }
+            }
+        }
+        // Renumber sequentially from max existing number + 1
+        let startNum = maxScheduleNumber() + 1
+        let numberedLines = renumberedLines(rawLines, from: startNum)
+        let combinedLines = (["START"] + numberedLines + ["END"])
+
+        var lines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        if let s = sIdx, let e = eIdx {
+            lines.replaceSubrange(s...e, with: combinedLines)
+        } else {
+            if lines.last?.isEmpty == false { lines.append("") }
+            lines.append(contentsOf: combinedLines)
+        }
+        notesText = lines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+    }
+
+    /// Returns the task number of the currently-running task and the next task.
+    private func currentAndNextTaskNums() -> (current: Int?, next: Int?) {
+        let cal = Calendar.current
+        let now = Date()
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return (nil, nil) }
+
+        struct NumberedEntry { let num: Int?; let startMin: Int; let endMin: Int }
+        var entries: [NumberedEntry] = []
+        var prevEnd: Int? = nil
+
+        for i in (s + 1)..<e {
+            let raw = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty { continue }
+            let isStruck = raw.hasPrefix("~~") && raw.hasSuffix("~~")
+            if isStruck { continue }
+            guard let entry = parseTimeEntrySequential(raw, previousEndMinutes: prevEnd) else { continue }
+            var num: Int? = nil
+            if let pIdx = raw.firstIndex(of: ")"),
+               let n = Int(String(raw[raw.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+               n > 0 && n < 1000, !raw[raw.startIndex..<pIdx].contains(" ") {
+                num = n
+            }
+            entries.append(NumberedEntry(num: num, startMin: entry.startMinutes, endMin: entry.endMinutes))
+            prevEnd = entry.endMinutes
+        }
+
+        if let idx = entries.firstIndex(where: { $0.startMin <= nowMin && $0.endMin > nowMin }) {
+            let next = idx + 1 < entries.count ? entries[idx + 1].num : nil
+            return (entries[idx].num, next)
+        }
+        // If between tasks or before first, return first not-yet-started task + following
+        if let idx = entries.firstIndex(where: { $0.startMin > nowMin }) {
+            let next = idx + 1 < entries.count ? entries[idx + 1].num : nil
+            return (entries[idx].num, next)
+        }
+        return (nil, nil)
+    }
+
+    /// Returns the highest task number currently in notesText (pattern "N) ").
+    private func maxScheduleNumber() -> Int {
+        var maxNum = 0
+        for line in notesText.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let parts = trimmed.components(separatedBy: ")")
+            if parts.count >= 2, let num = Int(parts[0].trimmingCharacters(in: .whitespaces)), !parts[0].contains(" ") {
+                maxNum = max(maxNum, num)
+            }
+        }
+        return maxNum
+    }
+
+    /// Re-numbers lines that match the "N) ..." pattern, starting from `startNum`.
+    private func renumberedLines(_ lines: [String], from startNum: Int) -> [String] {
+        var counter = startNum
+        return lines.map { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let parts = trimmed.components(separatedBy: ")")
+            if parts.count >= 2,
+               let _ = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+               !parts[0].contains(" ") {
+                let rest = parts.dropFirst().joined(separator: ")")
+                let result = "\(counter))\(rest)"
+                counter += 1
+                return result
+            }
+            return line
+        }
+    }
+
+    /// Generates a schedule block from the given unattended tasks, `minutesPerTask` each,
+    /// starting from the current time, numbered from maxScheduleNumber() + 1.
+    private func autoGenerateSchedule(tasks: [Task], minutesPerTask: Int) {
+        guard !tasks.isEmpty else { return }
+        let cal = Calendar.current
+        let now = Date()
+        let startMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        let startNum = maxScheduleNumber() + 1
+
+        var newLines: [String] = []
+        for (i, task) in tasks.enumerated() {
+            let taskStart = startMin + i * minutesPerTask
+            let taskEnd   = taskStart + minutesPerTask
+            let startStr  = safeMinutesToTime(taskStart)
+            let endStr    = safeMinutesToTime(taskEnd)
+            newLines.append("\(startNum + i)) \(startStr) - \(endStr) - \(task.title)")
+        }
+
+        // Append inside existing block or create new one
+        var lines = notesText.components(separatedBy: .newlines)
+        var eIdx: Int? = nil
+        var sIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        if let e = eIdx {
+            // Insert new lines just before END
+            lines.insert(contentsOf: newLines, at: e)
+        } else {
+            if lines.last?.isEmpty == false { lines.append("") }
+            lines.append("START")
+            lines.append(contentsOf: newLines)
+            lines.append("END")
+        }
+        notesText = lines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
     }
     
     private func adjustTimesInNotes() {
@@ -2085,7 +2409,7 @@ struct DailyNotesView: View {
 
         var scheduleLines: [String] = []
         var currentStart = fromMinutes
-        var taskNumber = 1
+        var taskNumber = Int(scheduleStartNum.trimmingCharacters(in: .whitespaces)) ?? 1
 
         if scheduleNoRepeat {
             // Single pass: generate each task exactly once in order
@@ -2455,6 +2779,274 @@ struct DailyNotesView: View {
         let fixed: Bool
     }
 
+    /// Updates a task and shifts all downstream non-fixed tasks by the change in end time.
+    private func updateTaskAndShiftInNotes(item: EditTaskItem, newDesc: String, newStart: Int, newEnd: Int) {
+        let delta = newEnd - item.originalEnd   // +ve = extended, -ve = shortened
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return }
+
+        var newLines = allLines
+        var prevEnd: Int? = nil
+        var foundTarget = false
+
+        for i in (s + 1)..<e {
+            let line = allLines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+
+            guard let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) else { continue }
+
+            if !foundTarget {
+                // Match by num + start + end + desc
+                let numMatch = item.num.map { n -> Bool in
+                    if let pIdx = parseLine.firstIndex(of: ")"),
+                       let lineNum = Int(String(parseLine[parseLine.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
+                        return lineNum == n
+                    }
+                    return false
+                } ?? true
+
+                if numMatch && entry.startMinutes == item.originalStart &&
+                   entry.endMinutes == item.originalEnd && entry.description == item.originalDesc {
+                    foundTarget = true
+                    let numStr = item.num.map { "\($0)) " } ?? ""
+                    let fixedMark = item.fixed ? "**" : ""
+                    let updated = "\(numStr)\(safeMinutesToTime(newStart)) - \(safeMinutesToTime(newEnd)) - \(fixedMark)\(newDesc)\(fixedMark)"
+                    newLines[i] = isStruck ? "~~\(updated)~~" : updated
+                    prevEnd = newEnd
+                    continue
+                }
+            } else if delta != 0 && !entry.isFixed && entry.startMinutes >= item.originalEnd {
+                // Shift downstream non-fixed tasks
+                let numStr: String
+                if let pIdx = parseLine.firstIndex(of: ")"),
+                   let n = Int(String(parseLine[parseLine.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
+                    numStr = "\(n)) "
+                } else { numStr = "" }
+                let shiftedStart = max(0, entry.startMinutes + delta)
+                let shiftedEnd   = max(shiftedStart + 1, entry.endMinutes + delta)
+                let fixedMark = entry.isFixed ? "**" : ""
+                let shifted = "\(numStr)\(safeMinutesToTime(shiftedStart)) - \(safeMinutesToTime(shiftedEnd)) - \(fixedMark)\(entry.description)\(fixedMark)"
+                newLines[i] = isStruck ? "~~\(shifted)~~" : shifted
+                prevEnd = shiftedEnd
+                continue
+            }
+            prevEnd = entry.endMinutes
+        }
+
+        notesText = newLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+    }
+
+    /// Swaps two numbered tasks in the schedule and rebuilds times for the entire range between them.
+    /// Inserts `lines` after task number `afterNum` in the START…END block, then renumbers all tasks.
+    private func applyIntercept(lines: [String], afterNum: Int) {
+        guard !lines.isEmpty else { return }
+
+        var allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+
+        // Strip any leading "N)" numbering from the intercept lines
+        let strippedLines = lines.map { line -> String in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if let pIdx = t.firstIndex(of: ")"),
+               let _ = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+               !t[t.startIndex..<pIdx].contains(" ") {
+                return String(t[t.index(after: pIdx)...]).trimmingCharacters(in: .whitespaces)
+            }
+            return t
+        }
+
+        if let s = sIdx, let e = eIdx {
+            // Find insertion point: line index of task `afterNum` inside the block
+            var insertAfterLineIdx: Int? = nil
+            var taskCounter = 0
+            for i in (s + 1)..<e {
+                let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.isEmpty { continue }
+                // Count any non-empty line as a task slot (numbered or not)
+                if let pIdx = t.firstIndex(of: ")"),
+                   let n = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+                   !t[t.startIndex..<pIdx].contains(" "), n > 0, n < 1000 {
+                    if n == afterNum { insertAfterLineIdx = i; break }
+                    _ = taskCounter; taskCounter = n
+                } else {
+                    taskCounter += 1
+                    if taskCounter == afterNum { insertAfterLineIdx = i; break }
+                }
+            }
+            // Default: insert before END if not found
+            let insertAt = (insertAfterLineIdx ?? (e - 1)) + 1
+            allLines.insert(contentsOf: strippedLines, at: insertAt)
+        } else {
+            // No block yet — create one
+            if allLines.last?.isEmpty == false { allLines.append("") }
+            allLines.append("START")
+            allLines.append(contentsOf: strippedLines)
+            allLines.append("END")
+        }
+
+        // Renumber all task lines inside START...END sequentially
+        var sIdx2: Int? = nil, eIdx2: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx2 == nil { sIdx2 = i }
+            else if t == "END" && sIdx2 != nil && eIdx2 == nil { eIdx2 = i; break }
+        }
+        if let s = sIdx2, let e = eIdx2 {
+            var counter = 1
+            for i in (s + 1)..<e {
+                let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.isEmpty { continue }
+                let isStruck = t.hasPrefix("~~") && t.hasSuffix("~~")
+                let inner = isStruck ? String(t.dropFirst(2).dropLast(2)) : t
+                // Strip existing number if present
+                let body: String
+                if let pIdx = inner.firstIndex(of: ")"),
+                   let _ = Int(String(inner[inner.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+                   !inner[inner.startIndex..<pIdx].contains(" ") {
+                    body = String(inner[inner.index(after: pIdx)...]).trimmingCharacters(in: .whitespaces)
+                } else {
+                    body = inner
+                }
+                let rebuilt = "\(counter)) \(body)"
+                allLines[i] = isStruck ? "~~\(rebuilt)~~" : rebuilt
+                counter += 1
+            }
+        }
+
+        notesText = allLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+    }
+
+    /// Returns true if both tasks were found and swapped, false otherwise.
+    @discardableResult
+    private func swapScheduleTasks(numA: Int, numB: Int) -> Bool {
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return false }
+
+        struct ParsedTask {
+            let lineIndex: Int
+            let num: Int?
+            let startMinutes: Int
+            let endMinutes: Int
+            let description: String
+            let isFixed: Bool
+            let isStruck: Bool
+        }
+
+        var parsedTasks: [ParsedTask] = []
+        var prevEnd: Int? = nil
+
+        for i in (s + 1)..<e {
+            let line = allLines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            guard let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) else { continue }
+
+            var num: Int? = nil
+            if let pIdx = parseLine.firstIndex(of: ")"),
+               let n = Int(String(parseLine[parseLine.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+               n > 0 && n < 1000 {
+                num = n
+            }
+
+            parsedTasks.append(ParsedTask(
+                lineIndex: i,
+                num: num,
+                startMinutes: entry.startMinutes,
+                endMinutes: entry.endMinutes,
+                description: entry.description,
+                isFixed: entry.isFixed,
+                isStruck: isStruck
+            ))
+            prevEnd = entry.endMinutes
+        }
+
+        guard let idxA = parsedTasks.firstIndex(where: { $0.num == numA }),
+              let idxB = parsedTasks.firstIndex(where: { $0.num == numB }) else { return false }
+
+        let firstIdx = min(idxA, idxB)
+        let lastIdx  = max(idxA, idxB)
+        guard firstIdx != lastIdx else { return false }
+
+        let firstTask = parsedTasks[firstIdx]
+        let lastTask  = parsedTasks[lastIdx]
+
+        var newLines = allLines
+        var currentStart = firstTask.startMinutes
+
+        for offset in 0...(lastIdx - firstIdx) {
+            let taskIdx = firstIdx + offset
+            let task = parsedTasks[taskIdx]
+
+            let desc: String
+            let isFixed: Bool
+            let isStruck: Bool
+            let num: Int?
+            let dur: Int
+
+            if taskIdx == firstIdx {
+                desc    = lastTask.description
+                isFixed = lastTask.isFixed
+                isStruck = lastTask.isStruck
+                num     = firstTask.num
+                dur     = lastTask.endMinutes - lastTask.startMinutes
+            } else if taskIdx == lastIdx {
+                desc    = firstTask.description
+                isFixed = firstTask.isFixed
+                isStruck = firstTask.isStruck
+                num     = lastTask.num
+                dur     = firstTask.endMinutes - firstTask.startMinutes
+            } else {
+                desc    = task.description
+                isFixed = task.isFixed
+                isStruck = task.isStruck
+                num     = task.num
+                dur     = task.endMinutes - task.startMinutes
+            }
+
+            let newStart = currentStart
+            let newEnd   = newStart + max(1, dur)
+            currentStart = newEnd
+
+            let numStr    = num.map { "\($0)) " } ?? ""
+            let fixedMark = isFixed ? "**" : ""
+            let rebuilt   = "\(numStr)\(safeMinutesToTime(newStart)) - \(safeMinutesToTime(newEnd)) - \(fixedMark)\(desc)\(fixedMark)"
+            newLines[task.lineIndex] = isStruck ? "~~\(rebuilt)~~" : rebuilt
+        }
+
+        notesText = newLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+        return true
+    }
+
     private func updateTaskInNotes(item: EditTaskItem, newDesc: String, newStart: Int, newEnd: Int) {
         let allLines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil
@@ -2556,6 +3148,34 @@ struct DailyNotesView: View {
         return result
     }
 
+    private func toggleStrikeTask(startMin: Int, endMin: Int, desc: String) {
+        var lines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return }
+        var prevEnd: Int? = nil
+        for i in (s + 1)..<e {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
+                if entry.startMinutes == startMin && entry.endMinutes == endMin && entry.description == desc {
+                    lines[i] = isStruck ? parseLine : "~~\(trimmed)~~"
+                    break
+                }
+                prevEnd = entry.endMinutes
+            }
+        }
+        notesText = lines.joined(separator: "\n")
+        saveNotes()
+    }
+
     private func deleteScheduleTask(startMin: Int, endMin: Int, desc: String) {
         var lines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil
@@ -2586,6 +3206,86 @@ struct DailyNotesView: View {
             notesText = lines.joined(separator: "\n")
             saveNotes()
         }
+    }
+
+    /// Deletes a task and shifts all downstream non-fixed tasks earlier by `shiftBy` minutes.
+    private func deleteScheduleTaskAndShift(startMin: Int, endMin: Int, desc: String, shiftBy: Int) {
+        guard shiftBy > 0 else { deleteScheduleTask(startMin: startMin, endMin: endMin, desc: desc); return }
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return }
+
+        struct ParsedRow { let lineIdx: Int; let startMin: Int; let endMin: Int; let desc: String; let isFixed: Bool; let isStruck: Bool; let num: Int? }
+        var rows: [ParsedRow] = []
+        var prevEnd: Int? = nil
+        for i in (s + 1)..<e {
+            let line = allLines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            guard let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) else { continue }
+            var num: Int? = nil
+            if let pIdx = parseLine.firstIndex(of: ")"),
+               let n = Int(String(parseLine[parseLine.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)), n > 0, n < 1000 { num = n }
+            rows.append(ParsedRow(lineIdx: i, startMin: entry.startMinutes, endMin: entry.endMinutes, desc: entry.description, isFixed: entry.isFixed, isStruck: isStruck, num: num))
+            prevEnd = entry.endMinutes
+        }
+
+        guard let ti = rows.firstIndex(where: { $0.startMin == startMin && $0.endMin == endMin && $0.desc == desc }) else { return }
+
+        var newLines = allLines
+        // Shift downstream non-fixed tasks first (indices still valid)
+        for idx in (ti + 1)..<rows.count {
+            let row = rows[idx]
+            if !row.isFixed {
+                let ns = max(0, row.startMin - shiftBy)
+                let ne = max(ns + 1, row.endMin - shiftBy)
+                let numStr    = row.num.map { "\($0)) " } ?? ""
+                let fixedMark = row.isFixed ? "**" : ""
+                let rebuilt   = "\(numStr)\(safeMinutesToTime(ns)) - \(safeMinutesToTime(ne)) - \(fixedMark)\(row.desc)\(fixedMark)"
+                newLines[row.lineIdx] = row.isStruck ? "~~\(rebuilt)~~" : rebuilt
+            }
+        }
+        // Remove the target line
+        newLines.remove(at: rows[ti].lineIdx)
+        notesText = newLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+    }
+
+    /// Removes the currently-running task from the schedule (used by the cancel menu).
+    /// If `adjustTime` is true, shifts all downstream non-fixed tasks earlier by the task's remaining time.
+    private func removeCurrentTaskFromNotes(adjustTime: Bool) {
+        let now = Date()
+        let cal = Calendar.current
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        let timeEntries = extractTimeEntriesFromNotes()
+        guard let cur = findBestCurrentTask(at: nowMin, in: timeEntries) else { return }
+
+        let remainingMin = max(0, cur.endMinutes - nowMin)
+        if adjustTime && remainingMin > 0 {
+            deleteScheduleTaskAndShift(startMin: cur.startMinutes, endMin: cur.endMinutes, desc: cur.description, shiftBy: remainingMin)
+        } else {
+            deleteScheduleTask(startMin: cur.startMinutes, endMin: cur.endMinutes, desc: cur.description)
+        }
+
+        // Advance the timer to the next task
+        let updated = extractTimeEntriesFromNotes()
+        if let next = updated.first(where: { $0.startMinutes >= nowMin && !$0.description.isEmpty }) {
+            let secs = (next.endMinutes - nowMin) * 60
+            if secs > 0 {
+                settings.nextAlertDate = now.addingTimeInterval(TimeInterval(secs))
+                currentTaskName = next.description
+            }
+        }
+        if settings.isPlaying { settings.scheduleIntervalTimer() }
+        else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
     private func clearZeroDurationSchedule() {
@@ -2654,7 +3354,13 @@ struct DailyNotesView: View {
                     taskDisplayRow(num: task.num, startMin: task.start, endMin: task.end,
                                    desc: task.desc, struck: task.struck, fixed: task.fixed,
                                    nowMin: nowMin,
-                                   onDelete: { deleteScheduleTask(startMin: task.start, endMin: task.end, desc: task.desc) })
+                                   onToggleStrike: { toggleStrikeTask(startMin: task.start, endMin: task.end, desc: task.desc) },
+                                   onDelete: {
+                                       pendingDeleteStart = task.start
+                                       pendingDeleteEnd   = task.end
+                                       pendingDeleteDesc  = task.desc
+                                       showDeleteOptions  = true
+                                   })
                     .onTapGesture {
                         editingTask = EditTaskItem(
                             num: task.num,
@@ -2687,6 +3393,7 @@ struct DailyNotesView: View {
     @ViewBuilder
     private func taskDisplayRow(num: Int?, startMin: Int, endMin: Int, desc: String,
                                 struck: Bool, fixed: Bool, nowMin: Int,
+                                onToggleStrike: (() -> Void)? = nil,
                                 onDelete: (() -> Void)? = nil) -> some View {
         let isCurrent = !struck && nowMin >= startMin && nowMin < endMin
         let isPastUnack = !struck && nowMin >= endMin
@@ -2738,6 +3445,15 @@ struct DailyNotesView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 4)
                 .background(.secondary.opacity(0.1), in: Capsule())
+
+            if let onToggleStrike {
+                Button(action: onToggleStrike) {
+                    Image(systemName: struck ? "checkmark.circle.fill" : "circle")
+                        .font(.caption)
+                        .foregroundColor(struck ? .green : .secondary.opacity(0.5))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
 
             if let onDelete {
                 Button(action: onDelete) {
@@ -2853,6 +3569,9 @@ struct DailyNotesView: View {
         // Update running task name immediately
         currentTaskName = "interrupt"
         speechManager.speak("Interrupt added")
+        // Reschedule timer to new nextAlertDate and refresh Live Activity
+        if settings.isPlaying { settings.scheduleIntervalTimer() }
+        else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
     // MARK: - End Current Task and Start New
@@ -2942,6 +3661,8 @@ struct DailyNotesView: View {
 
         currentTaskName = "new task"
         speechManager.speak("New task started")
+        if settings.isPlaying { settings.scheduleIntervalTimer() }
+        else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
     // MARK: - Stop Current Task at Now & Skip to Next
@@ -2952,7 +3673,22 @@ struct DailyNotesView: View {
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
 
         let timeEntries = extractTimeEntriesFromNotes()
-        guard let currentEntry = findBestCurrentTask(at: nowMin, in: timeEntries) else { return }
+        guard let currentEntry = findBestCurrentTask(at: nowMin, in: timeEntries) else {
+            // During rest up / free time — skip to the next scheduled task immediately
+            if currentTaskName == "Rest up" || currentTaskName == "Free time" {
+                if let next = timeEntries.first(where: { $0.startMinutes >= nowMin && !$0.description.isEmpty }) {
+                    let secs = (next.endMinutes - nowMin) * 60
+                    if secs > 0 {
+                        settings.nextAlertDate = now.addingTimeInterval(TimeInterval(secs))
+                        currentTaskName = next.description
+                    }
+                }
+                speechManager.speak("Skipping rest, moving to next task")
+                if settings.isPlaying { settings.scheduleIntervalTimer() }
+                else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
+            }
+            return
+        }
 
         // Shift = how much earlier following tasks move (usually negative)
         let shiftAmount = nowMin - currentEntry.endMinutes
@@ -3032,6 +3768,8 @@ struct DailyNotesView: View {
             }
         }
         speechManager.speak("Stopping task now, moving to next")
+        if settings.isPlaying { settings.scheduleIntervalTimer() }
+        else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
     // MARK: - Extend Current Task
@@ -3042,7 +3780,16 @@ struct DailyNotesView: View {
         let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
 
         let timeEntries = extractTimeEntriesFromNotes()
-        guard let currentEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries) else { return }
+        guard let currentEntry = findBestCurrentTask(at: currentMinutes, in: timeEntries) else {
+            // During rest up / free time there's no note entry — just push the timer forward
+            if currentTaskName == "Rest up" || currentTaskName == "Free time" {
+                settings.nextAlertDate = settings.nextAlertDate.addingTimeInterval(TimeInterval(minutes * 60))
+                currentCycleDuration += minutes
+                if settings.isPlaying { settings.scheduleIntervalTimer() }
+                else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
+            }
+            return
+        }
 
         // Push the live timer forward and update displayed block duration
         settings.nextAlertDate = settings.nextAlertDate.addingTimeInterval(TimeInterval(minutes * 60))
@@ -3098,6 +3845,8 @@ struct DailyNotesView: View {
         editorKey = UUID()
         saveNotes()
         speechManager.speak("Extended by \(minutes) minutes")
+        if settings.isPlaying { settings.scheduleIntervalTimer() }
+        else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
     // MARK: - Insert Generated Tasks at Position
@@ -3216,6 +3965,11 @@ struct FocusModeView: View {
     let onInterrupt: () -> Void
     let onEndAndNew: () -> Void
     let onCancelTask: () -> Void
+    let onRemoveCurrentAdjust: () -> Void
+    let onRemoveCurrentOnly: () -> Void
+    let onSwapTasks: (Int, Int) -> Bool
+    let onNotesModified: () -> Void
+    let computeSwapDefaults: () -> (Int?, Int?)
 
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
@@ -3227,6 +3981,9 @@ struct FocusModeView: View {
     @State private var currentTime: Date = Date()
     @State private var clockTimer: Timer?
     @State private var showSidebar = false
+    @State private var showSwapSheetFocus = false
+    @State private var focusSwapDefaults: (Int?, Int?) = (nil, nil)
+    @State private var showCancelMenuFocus = false
 
     private var timeRemainingFormatted: String {
         let minutes = Int(timeRemaining) / 60
@@ -3288,6 +4045,7 @@ struct FocusModeView: View {
         var lines = notesText.components(separatedBy: .newlines)
         lines.removeAll { $0.trimmingCharacters(in: .whitespacesAndNewlines) == entry.raw }
         notesText = lines.joined(separator: "\n")
+        onNotesModified()
     }
 
     private func clearZeroDurationEntries() {
@@ -3304,6 +4062,7 @@ struct FocusModeView: View {
             return sm == em
         }
         notesText = lines.joined(separator: "\n")
+        onNotesModified()
     }
 
     private func focusModeTimeToMinutes(_ s: String) -> Int? {
@@ -3407,7 +4166,7 @@ struct FocusModeView: View {
                                 )
                             }
 
-                            if !isTransitioning && currentTaskName != "Rest up" && currentTaskName != "Free time" && !currentTaskName.isEmpty {
+                            if !isTransitioning && !currentTaskName.isEmpty {
                                 HStack(spacing: 14) {
                                     // +5 min
                                     Button(action: onExtendTask) {
@@ -3436,8 +4195,8 @@ struct FocusModeView: View {
                                     .padding(10)
                                     .background(Capsule().fill(Color.orange.opacity(0.15)))
 
-                                    // Cancel & Skip
-                                    Button(action: onCancelTask) {
+                                    // Cancel options
+                                    Button(action: { showCancelMenuFocus = true }) {
                                         Image(systemName: "xmark.circle.fill")
                                             .font(.title)
                                             .foregroundColor(.gray)
@@ -3527,95 +4286,8 @@ struct FocusModeView: View {
 
             // Sidebar overlay
             if showSidebar {
-                HStack(spacing: 0) {
-                    // Tap-outside-to-close
-                    Color.black.opacity(0.4)
-                        .ignoresSafeArea()
-                        .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }
-
-                    // Panel
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Header
-                        HStack {
-                            Text("Schedule")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            Spacer()
-                            Button(action: clearZeroDurationEntries) {
-                                Label("Clear Zeros", systemImage: "scissors")
-                                    .font(.caption2)
-                                    .foregroundColor(.orange)
-                            }
-                            Button(action: { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }) {
-                                Image(systemName: "xmark")
-                                    .font(.callout)
-                                    .foregroundColor(.cyan)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 56)
-                        .padding(.bottom, 12)
-
-                        Divider().background(Color.cyan.opacity(0.3))
-
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(scheduleEntries) { entry in
-                                    let sm = entry.startMinutes ?? -1
-                                    let em = entry.endMinutes ?? -1
-                                    let isPast    = em > 0 && em <= nowMinutes
-                                    let isCurrent = sm >= 0 && em > 0 && nowMinutes >= sm && nowMinutes < em
-                                    let isStruck  = entry.isStruck
-
-                                    HStack(alignment: .top, spacing: 10) {
-                                        // Status dot
-                                        Circle()
-                                            .fill(isCurrent ? Color.green : (isPast || isStruck ? Color.red.opacity(0.5) : Color.indigo))
-                                            .frame(width: 7, height: 7)
-                                            .padding(.top, 5)
-
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            if let task = entry.task {
-                                                Text(task)
-                                                    .font(.subheadline)
-                                                    .fontWeight(isCurrent ? .semibold : .regular)
-                                                    .foregroundColor(
-                                                        isCurrent ? .white :
-                                                        (isPast || isStruck) ? .red.opacity(0.7) : .cyan
-                                                    )
-                                                    .strikethrough(isPast || isStruck, color: .red.opacity(0.7))
-                                            }
-                                            if sm >= 0 && em > 0 {
-                                                Text("\(formatSidebarMinutes(sm)) – \(formatSidebarMinutes(em))")
-                                                    .font(.caption2)
-                                                    .foregroundColor(
-                                                        isCurrent ? .green :
-                                                        (isPast || isStruck) ? .red.opacity(0.5) : .teal
-                                                    )
-                                            }
-                                        }
-
-                                        Spacer()
-
-                                        Button(action: { deleteEntry(entry) }) {
-                                            Image(systemName: "trash")
-                                                .font(.caption2)
-                                                .foregroundColor(.red.opacity(0.7))
-                                        }
-                                        .buttonStyle(PlainButtonStyle())
-                                    }
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 9)
-                                    .background(isCurrent ? Color.green.opacity(0.08) : Color.clear)
-                                }
-                            }
-                            .padding(.top, 4)
-                        }
-                    }
-                    .frame(width: 240)
-                    .background(Color(white: 0.08).ignoresSafeArea())
-                }
-                .transition(.move(edge: .trailing))
+                sidebarPanel
+                    .transition(.move(edge: .trailing))
             }
         }
         .onAppear {
@@ -3632,6 +4304,66 @@ struct FocusModeView: View {
         }
         .onChange(of: activeBooks.count) { _, _ in
             buildQuotePool()
+        }
+        .sheet(isPresented: $showSwapSheetFocus) {
+            SwapTasksSheet(defaultA: focusSwapDefaults.0, defaultB: focusSwapDefaults.1) { a, b in
+                return onSwapTasks(a, b)
+            }
+        }
+        .confirmationDialog("Cancel Current Task", isPresented: $showCancelMenuFocus, titleVisibility: .visible) {
+            Button("Stop & Start Next") { onCancelTask() }
+            Button("Remove & Adjust Times") { onRemoveCurrentAdjust() }
+            Button("Just Remove") { onRemoveCurrentOnly() }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    @ViewBuilder
+    private var sidebarPanel: some View {
+        HStack(spacing: 0) {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Schedule")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button(action: {
+                        focusSwapDefaults = computeSwapDefaults()
+                        showSwapSheetFocus = true
+                    }) {
+                        Label("Swap", systemImage: "arrow.left.arrow.right")
+                            .font(.caption2)
+                            .foregroundColor(.indigo)
+                    }
+                    Button(action: clearZeroDurationEntries) {
+                        Label("Clear Zeros", systemImage: "scissors")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                    Button(action: { withAnimation(.easeInOut(duration: 0.25)) { showSidebar = false } }) {
+                        Image(systemName: "xmark")
+                            .font(.callout)
+                            .foregroundColor(.cyan)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 56)
+                .padding(.bottom, 12)
+                Divider().background(Color.cyan.opacity(0.3))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(scheduleEntries) { entry in
+                            SidebarEntryRow(entry: entry, nowMinutes: nowMinutes, onDelete: deleteEntry)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .frame(width: 240)
+            .background(Color(white: 0.08).ignoresSafeArea())
         }
     }
 
@@ -3677,16 +4409,71 @@ struct FocusModeView: View {
     }
 }
 
+// MARK: - Sidebar Entry Row (Focus Mode)
+
+private struct SidebarEntryRow: View {
+    let entry: ScheduleEntry
+    let nowMinutes: Int
+    let onDelete: (ScheduleEntry) -> Void
+
+    private var sm: Int { entry.startMinutes ?? -1 }
+    private var em: Int { entry.endMinutes ?? -1 }
+    private var isPast: Bool    { em > 0 && em <= nowMinutes }
+    private var isCurrent: Bool { sm >= 0 && em > 0 && nowMinutes >= sm && nowMinutes < em }
+
+    private func fmt(_ m: Int) -> String {
+        let h = (m / 60) % 24, min = m % 60
+        let suffix = h >= 12 ? "PM" : "AM"
+        let displayH = h == 0 ? 12 : (h > 12 ? h - 12 : h)
+        return String(format: "%d:%02d %@", displayH, min, suffix)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(isCurrent ? Color.green : (isPast || entry.isStruck ? Color.red.opacity(0.5) : Color.indigo))
+                .frame(width: 7, height: 7)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 2) {
+                if let task = entry.task {
+                    Text(task)
+                        .font(.subheadline)
+                        .fontWeight(isCurrent ? .semibold : .regular)
+                        .foregroundColor(isCurrent ? .white : (isPast || entry.isStruck) ? .red.opacity(0.7) : .cyan)
+                        .strikethrough(isPast || entry.isStruck, color: .red.opacity(0.7))
+                }
+                if sm >= 0 && em > 0 {
+                    Text("\(fmt(sm)) – \(fmt(em))")
+                        .font(.caption2)
+                        .foregroundColor(isCurrent ? .green : (isPast || entry.isStruck) ? .red.opacity(0.5) : .teal)
+                }
+            }
+            Spacer()
+            Button(action: { onDelete(entry) }) {
+                Image(systemName: "trash")
+                    .font(.caption2)
+                    .foregroundColor(.red.opacity(0.7))
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(isCurrent ? Color.green.opacity(0.08) : Color.clear)
+    }
+}
+
 // MARK: - Edit Task Sheet
 
 struct EditTaskSheet: View {
     let task: DailyNotesView.EditTaskItem
+    /// Called with (desc, newStart, newEnd). Use `updateTaskAndShiftInNotes` at the call site.
     let onSave: (String, Int, Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var desc: String
     @State private var startText: String
     @State private var endText: String
+    @State private var endMinutes: Int
     @State private var errorMessage: String = ""
 
     init(task: DailyNotesView.EditTaskItem, onSave: @escaping (String, Int, Int) -> Void) {
@@ -3695,6 +4482,12 @@ struct EditTaskSheet: View {
         _desc = State(initialValue: task.originalDesc)
         _startText = State(initialValue: minutesToTimeString(task.originalStart))
         _endText = State(initialValue: minutesToTimeString(task.originalEnd))
+        _endMinutes = State(initialValue: task.originalEnd)
+    }
+
+    private var currentDurationMinutes: Int {
+        let startMins = parseTimeString(startText) ?? task.originalStart
+        return max(0, endMinutes - startMins)
     }
 
     var body: some View {
@@ -3717,6 +4510,40 @@ struct EditTaskSheet: View {
                             .frame(width: 44, alignment: .leading)
                         TextField("e.g. 3:00 PM", text: $endText)
                             .autocorrectionDisabled()
+                            .onChange(of: endText) { _, newVal in
+                                if let parsed = parseTimeString(newVal) {
+                                    endMinutes = parsed
+                                }
+                            }
+                    }
+                    // ±5 quick-adjust row
+                    HStack {
+                        Text("Duration")
+                            .foregroundColor(.secondary)
+                            .frame(width: 60, alignment: .leading)
+                        Text(formatDuration(currentDurationMinutes))
+                            .foregroundColor(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            adjustEnd(by: -5)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                                .foregroundColor(.indigo)
+                                .font(.title3)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        Text("5 min")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(width: 40, alignment: .center)
+                        Button {
+                            adjustEnd(by: +5)
+                        } label: {
+                            Image(systemName: "plus.circle")
+                                .foregroundColor(.indigo)
+                                .font(.title3)
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
                 if !errorMessage.isEmpty {
@@ -3741,16 +4568,33 @@ struct EditTaskSheet: View {
         }
     }
 
+    private func adjustEnd(by delta: Int) {
+        let startMins = parseTimeString(startText) ?? task.originalStart
+        let newEnd = max(startMins + 1, endMinutes + delta)
+        endMinutes = newEnd
+        endText = minutesToTimeString(newEnd)
+        errorMessage = ""
+    }
+
+    private func formatDuration(_ mins: Int) -> String {
+        if mins == 0 { return "—" }
+        let h = mins / 60
+        let m = mins % 60
+        if h > 0 && m > 0 { return "\(h)h \(m)m" }
+        if h > 0 { return "\(h)h" }
+        return "\(m)m"
+    }
+
     private func trySave() {
         guard !desc.trimmingCharacters(in: .whitespaces).isEmpty else {
             errorMessage = "Name cannot be empty."
             return
         }
-        guard let s = parseTimeString(startText),
-              let e = parseTimeString(endText) else {
-            errorMessage = "Could not parse times. Use format like \"2:30 PM\" or \"14:30\"."
+        guard let s = parseTimeString(startText) else {
+            errorMessage = "Could not parse start time. Use format like \"2:30 PM\"."
             return
         }
+        let e = endMinutes
         guard e > s else {
             errorMessage = "End time must be after start time."
             return
@@ -3776,6 +4620,356 @@ struct EditTaskSheet: View {
         if isAM && h == 12 { h = 0 }
         guard h >= 0 && h < 24 else { return nil }
         return h * 60 + m
+    }
+}
+
+// MARK: - Intercept Sheet
+
+struct InterceptSheet: View {
+    /// Called with the parsed task lines and the task number to insert after.
+    let onApply: ([String], Int) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var tasksText: String = ""
+    @State private var afterNumText: String = ""
+    @State private var errorMessage: String = ""
+    @FocusState private var textFocused: Bool
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    Text("Enter one task per line in the format:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("1:30 PM - 2:00 PM - study\n2:00 PM - 2:30 PM - groceries")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.indigo)
+                        .padding(.vertical, 2)
+                    Text("Leading numbers like \"1)\" are stripped automatically.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } header: {
+                    Text("Tasks to Insert")
+                }
+
+                Section {
+                    TextEditor(text: $tasksText)
+                        .font(.system(.callout, design: .monospaced))
+                        .frame(minHeight: 160)
+                        .focused($textFocused)
+                        .autocorrectionDisabled()
+                        .autocapitalization(.none)
+                }
+
+                Section("Insert After Task #") {
+                    TextField("e.g. 4", text: $afterNumText)
+                        .keyboardType(.numberPad)
+                    Text("Tasks will be inserted after this task number and the whole list will be renumbered. Leave empty to append at the end.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if !errorMessage.isEmpty {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    }
+                }
+            }
+            .navigationTitle("Intercept Tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") { tryApply() }
+                        .fontWeight(.semibold)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { textFocused = false }.fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private func tryApply() {
+        let lines = tasksText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else {
+            errorMessage = "Enter at least one task."
+            return
+        }
+
+        let afterNum = Int(afterNumText.trimmingCharacters(in: .whitespaces)) ?? 0
+        onApply(lines, afterNum)
+        dismiss()
+    }
+}
+
+// MARK: - Swap Tasks Sheet
+
+struct SwapTasksSheet: View {
+    var defaultA: Int? = nil
+    var defaultB: Int? = nil
+    /// Called with the two task numbers. Returns true if the swap succeeded.
+    let onSwap: (Int, Int) -> Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var numAText = ""
+    @State private var numBText = ""
+    @State private var errorMessage = ""
+
+    private var hasDefaults: Bool { defaultA != nil && defaultB != nil }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Task Numbers to Swap") {
+                    HStack {
+                        Text("First")
+                            .foregroundColor(.secondary)
+                            .frame(width: 50, alignment: .leading)
+                        TextField(hasDefaults ? "default: \(defaultA!)" : "e.g. 1", text: $numAText)
+                            .keyboardType(.numberPad)
+                    }
+                    HStack {
+                        Text("Second")
+                            .foregroundColor(.secondary)
+                            .frame(width: 50, alignment: .leading)
+                        TextField(hasDefaults ? "default: \(defaultB!)" : "e.g. 3", text: $numBText)
+                            .keyboardType(.numberPad)
+                    }
+                }
+
+                Section {
+                    if hasDefaults && numAText.trimmingCharacters(in: .whitespaces).isEmpty && numBText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("Leave both fields empty to swap task \(defaultA!) with task \(defaultB!) (current → next).")
+                            .font(.caption)
+                            .foregroundColor(.indigo)
+                    }
+                    Text("The two tasks will be swapped and all times in between will be adjusted to fit the new order.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if !errorMessage.isEmpty {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    }
+                }
+            }
+            .navigationTitle("Swap Tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Swap") { trySwap() }
+                        .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private func trySwap() {
+        let aText = numAText.trimmingCharacters(in: .whitespaces)
+        let bText = numBText.trimmingCharacters(in: .whitespaces)
+
+        // Use defaults when both fields are empty
+        if aText.isEmpty && bText.isEmpty, let da = defaultA, let db = defaultB {
+            if onSwap(da, db) {
+                dismiss()
+            } else {
+                errorMessage = "Tasks \(da) and \(db) not found. Make sure tasks are numbered (e.g. \"1) 2:00 PM - ...\")."
+            }
+            return
+        }
+
+        guard let a = Int(aText), let b = Int(bText) else {
+            errorMessage = "Enter valid task numbers."
+            return
+        }
+        guard a != b else {
+            errorMessage = "Choose two different task numbers."
+            return
+        }
+        if onSwap(a, b) {
+            dismiss()
+        } else {
+            errorMessage = "Tasks \(a) and \(b) not found. Make sure tasks are numbered (e.g. \"1) 2:00 PM - ...\")."
+        }
+    }
+}
+
+// MARK: - Auto-Schedule Sheet
+
+struct AutoScheduleSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedDate: Date
+    let allTasks: [Task]
+    @Binding var duration: String
+    var onGenerate: ([Task], Int) -> Void
+
+    @FocusState private var durationFocused: Bool
+    /// Ordered list of selected task IDs — position = selection order.
+    @State private var selectedIDs: [PersistentIdentifier] = []
+
+    private var unattendedTasks: [Task] {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: selectedDate)
+        let end   = cal.date(byAdding: .day, value: 1, to: start)!
+        return allTasks.filter { t in
+            guard let d = t.date else { return false }
+            return d >= start && d < end && !t.completed && !t.notCompleted
+        }
+    }
+
+    private var selectedTasks: [Task] {
+        selectedIDs.compactMap { id in unattendedTasks.first { $0.id == id } }
+    }
+
+    private var parsedDuration: Int { max(1, Int(duration.trimmingCharacters(in: .whitespaces)) ?? 10) }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Duration per Task") {
+                    HStack {
+                        TextField("10", text: $duration)
+                            .keyboardType(.numberPad)
+                            .focused($durationFocused)
+                            .frame(width: 60)
+                            .toolbar {
+                                ToolbarItemGroup(placement: .keyboard) {
+                                    Spacer()
+                                    Button("Done") { durationFocused = false }.fontWeight(.semibold)
+                                }
+                            }
+                        Text("minutes per task")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section {
+                    if unattendedTasks.isEmpty {
+                        Text("No unattended tasks for this date.")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    } else {
+                        ForEach(unattendedTasks) { task in
+                            let selectionIndex = selectedIDs.firstIndex(of: task.id)
+                            let isSelected = selectionIndex != nil
+                            Button(action: { toggleTask(task) }) {
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        if let idx = selectionIndex {
+                                            Circle()
+                                                .fill(Color.orange)
+                                                .frame(width: 24, height: 24)
+                                            Text("\(idx + 1)")
+                                                .font(.caption2)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.white)
+                                        } else {
+                                            Circle()
+                                                .strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1.5)
+                                                .frame(width: 24, height: 24)
+                                        }
+                                    }
+                                    Text(task.title)
+                                        .font(.subheadline)
+                                        .foregroundColor(isSelected ? .primary : .secondary)
+                                    Spacer()
+                                    if isSelected {
+                                        Text("\(parsedDuration) min")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Tasks to Schedule (\(selectedIDs.count)/\(unattendedTasks.count))")
+                        Spacer()
+                        if !unattendedTasks.isEmpty {
+                            if selectedIDs.count == unattendedTasks.count {
+                                Button("Deselect All") { selectedIDs.removeAll() }
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            } else {
+                                Button("Select All") { selectAll() }
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                    }
+                }
+
+                if !selectedIDs.isEmpty {
+                    Section("Order Preview") {
+                        ForEach(Array(selectedTasks.enumerated()), id: \.offset) { idx, task in
+                            HStack(spacing: 8) {
+                                Text("\(idx + 1).")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                    .frame(width: 20, alignment: .trailing)
+                                Text(task.title)
+                                    .font(.caption)
+                                Spacer()
+                                Text("\(parsedDuration) min")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Text("Tasks will be added in the order shown above, starting at current time.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 2)
+                    }
+                }
+            }
+            .navigationTitle("Auto-Schedule")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear { selectAll() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Generate") {
+                        onGenerate(selectedTasks, parsedDuration)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(selectedIDs.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func toggleTask(_ task: Task) {
+        if let idx = selectedIDs.firstIndex(of: task.id) {
+            selectedIDs.remove(at: idx)
+        } else {
+            selectedIDs.append(task.id)
+        }
+    }
+
+    private func selectAll() {
+        selectedIDs = unattendedTasks.map { $0.id }
     }
 }
 

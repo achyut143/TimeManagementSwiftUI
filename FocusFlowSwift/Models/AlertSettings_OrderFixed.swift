@@ -805,6 +805,13 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         scheduleBackupNotification()
     }
     
+    /// Public entry point so views can force a Live Activity refresh after
+    /// manually changing nextAlertDate / currentTaskName without a timer fire.
+    @available(iOS 16.1, *)
+    func refreshLiveActivity() {
+        updateLiveActivity()
+    }
+
     private func scheduleBackupNotification() {
         // Schedule enhanced notifications for real device reliability
         let remainingTime = nextAlertDate.timeIntervalSinceNow

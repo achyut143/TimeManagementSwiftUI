@@ -172,6 +172,14 @@ struct ContentView: View {
                 }
                 
                 NavigationStack {
+                    OKRInsightsView()
+                }
+                .tabItem {
+                    Image(systemName: "sparkles")
+                    Text("OKRs")
+                }
+
+                NavigationStack {
                     AlertManagerView()
                 }
                 .tabItem {
