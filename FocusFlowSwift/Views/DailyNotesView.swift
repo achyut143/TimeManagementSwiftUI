@@ -462,7 +462,7 @@ struct DailyNotesView: View {
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .keyboardType(.numberPad)
                                 .frame(width: 70)
-                            Text("(leave empty to append)")
+                            Text("(empty = nearest interval)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -1675,42 +1675,109 @@ struct DailyNotesView: View {
         return lines[s...e].joined(separator: "\n")
     }
 
-    /// Replaces or appends the START…END block in current notes with the template content.
+    /// Applies the first template as the base schedule, then intercepts with each subsequent
+    /// template using time-based overlap detection so later templates take priority.
     private func applyTemplates(_ templates: [ScheduleTemplate]) {
         guard !templates.isEmpty else { return }
-        // Extract task lines from all templates in order
-        var rawLines: [String] = []
-        for template in templates {
+
+        func taskLines(from template: ScheduleTemplate) -> [String] {
+            var result: [String] = []
             var inBlock = false
             for line in template.content.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed == "START" { inBlock = true; continue }
                 if trimmed == "END"   { inBlock = false; continue }
-                if inBlock { rawLines.append(line) }
+                if inBlock { result.append(line) }
             }
+            return result
         }
-        // Renumber sequentially from max existing number + 1
-        let startNum = maxScheduleNumber() + 1
-        let numberedLines = renumberedLines(rawLines, from: startNum)
-        let combinedLines = (["START"] + numberedLines + ["END"])
 
-        var lines = notesText.components(separatedBy: .newlines)
-        var sIdx: Int? = nil
-        var eIdx: Int? = nil
-        for (i, line) in lines.enumerated() {
+        // 1. Apply template 1 as the base (replace the whole START…END block)
+        let baseLines = renumberedLines(taskLines(from: templates[0]), from: 1)
+        let combinedBase = ["START"] + baseLines + ["END"]
+        var currentLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in currentLines.enumerated() {
             let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if t == "START" && sIdx == nil { sIdx = i }
             else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
         }
         if let s = sIdx, let e = eIdx {
-            lines.replaceSubrange(s...e, with: combinedLines)
+            currentLines.replaceSubrange(s...e, with: combinedBase)
         } else {
-            if lines.last?.isEmpty == false { lines.append("") }
-            lines.append(contentsOf: combinedLines)
+            if currentLines.last?.isEmpty == false { currentLines.append("") }
+            currentLines.append(contentsOf: combinedBase)
         }
-        notesText = lines.joined(separator: "\n")
+        notesText = currentLines.joined(separator: "\n")
+
+        // 2. Intercept with each subsequent template in order
+        let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+        guard templates.count > 1,
+              let timeRegex = try? NSRegularExpression(pattern: timePattern) else {
+            editorKey = UUID()
+            saveNotes()
+            return
+        }
+
+        for template in templates.dropFirst() {
+            let lines = taskLines(from: template).filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard !lines.isEmpty else { continue }
+
+            // Find the start time of the first timed task in this template
+            var firstStartMin: Int? = nil
+            for line in lines {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                   let sr = Range(m.range(at: 1), in: t),
+                   let startMin = interceptParseMinutes(String(t[sr])) {
+                    firstStartMin = startMin
+                    break
+                }
+            }
+
+            // Find insertion point: last existing task whose start time is < this template's start
+            let allLines = notesText.components(separatedBy: .newlines)
+            var s2: Int? = nil, e2: Int? = nil
+            for (i, line) in allLines.enumerated() {
+                let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t == "START" && s2 == nil { s2 = i }
+                else if t == "END" && s2 != nil && e2 == nil { e2 = i; break }
+            }
+
+            let afterNum: Int
+            if let s = s2, let e = e2, let targetMin = firstStartMin {
+                afterNum = taskNumBefore(minutes: targetMin, in: allLines, startIdx: s, endIdx: e)
+            } else {
+                afterNum = 0
+            }
+
+            processGroupedIntercept(lines: lines, firstGroupAfterNum: afterNum)
+        }
+
         editorKey = UUID()
         saveNotes()
+    }
+
+    /// Returns the task number of the last task whose start time is strictly less than `targetMinutes`.
+    /// Returns 0 when all tasks start at or after `targetMinutes` (caller should insert at beginning).
+    private func taskNumBefore(minutes targetMin: Int, in allLines: [String], startIdx: Int, endIdx: Int) -> Int {
+        let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+        guard let timeRegex = try? NSRegularExpression(pattern: timePattern) else { return 0 }
+        var result = 0
+        for i in (startIdx + 1)..<endIdx {
+            let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty { continue }
+            guard let pIdx = t.firstIndex(of: ")"),
+                  let num = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+                  !t[t.startIndex..<pIdx].contains(" "), num > 0, num < 1000 else { continue }
+            guard let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                  let sr = Range(m.range(at: 1), in: t),
+                  let startMin = interceptParseMinutes(String(t[sr])) else { continue }
+            if startMin < targetMin { result = num }
+        }
+        return result
     }
 
     /// Returns the task number of the currently-running task and the next task.
@@ -2475,8 +2542,18 @@ struct DailyNotesView: View {
         if let insertNum = Int(insertAfterTrimmed), !insertAfterTrimmed.isEmpty {
             // Insert after task #insertNum and shift subsequent tasks
             insertGeneratedTasksAfter(taskNum: insertNum, scheduleLines: scheduleLines, shiftMinutes: shiftMinutes)
+        } else if let sIdx = startLineIndex, let endIdx = endLineIndex {
+            // No explicit insert-after: find nearest interval and insert there
+            let nearestNum = nearestTaskNum(in: allLines, startIdx: sIdx, endIdx: endIdx)
+            if nearestNum > 0 {
+                insertGeneratedTasksAfter(taskNum: nearestNum, scheduleLines: scheduleLines, shiftMinutes: shiftMinutes)
+            } else {
+                var newLines = allLines
+                newLines.insert(contentsOf: scheduleLines, at: endIdx)
+                notesText = newLines.joined(separator: "\n")
+            }
         } else if let endIdx = endLineIndex {
-            // Insert the generated lines just before the END tag
+            // No numbered tasks found — append before END
             var newLines = allLines
             newLines.insert(contentsOf: scheduleLines, at: endIdx)
             notesText = newLines.joined(separator: "\n")
@@ -2849,18 +2926,95 @@ struct DailyNotesView: View {
         saveNotes()
     }
 
-    /// Swaps two numbered tasks in the schedule and rebuilds times for the entire range between them.
-    /// Inserts `lines` after task number `afterNum` in the START…END block, then renumbers all tasks.
+    /// Inserts `lines` after task number `afterNum`, shifts subsequent tasks' times forward
+    /// so they start after the intercept block ends, then renumbers everything sequentially.
+    /// UI entry point: resolves afterNum == 0 to the nearest time interval, then delegates.
     private func applyIntercept(lines: [String], afterNum: Int) {
         guard !lines.isEmpty else { return }
-
-        var allLines = notesText.components(separatedBy: .newlines)
-        var sIdx: Int? = nil, eIdx: Int? = nil
-        for (i, line) in allLines.enumerated() {
-            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if t == "START" && sIdx == nil { sIdx = i }
-            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        let resolved: Int
+        if afterNum == 0 {
+            let allLines = notesText.components(separatedBy: .newlines)
+            var s: Int? = nil, e: Int? = nil
+            for (i, line) in allLines.enumerated() {
+                let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t == "START" && s == nil { s = i }
+                else if t == "END" && s != nil && e == nil { e = i; break }
+            }
+            resolved = (s != nil && e != nil) ? nearestTaskNum(in: allLines, startIdx: s!, endIdx: e!) : 0
+        } else {
+            resolved = afterNum
         }
+        processGroupedIntercept(lines: lines, firstGroupAfterNum: resolved)
+    }
+
+    /// Splits `lines` into contiguous time-groups and processes each independently via
+    /// `coreIntercept`, so non-adjacent tasks only shift the entries they actually overlap.
+    /// The first group is inserted after `firstGroupAfterNum`; subsequent groups find their
+    /// own position via `taskNumBefore` on the freshly-updated schedule.
+    private func processGroupedIntercept(lines: [String], firstGroupAfterNum: Int) {
+        guard !lines.isEmpty else { return }
+        let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+        guard let timeRegex = try? NSRegularExpression(pattern: timePattern) else { return }
+
+        // Build contiguous groups: a new group begins whenever there is a time gap.
+        var groups: [[String]] = []
+        var currentGroup: [String] = []
+        var prevEnd: Int? = nil
+        for line in lines {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            var lineStart: Int? = nil, lineEnd: Int? = nil
+            if let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+               let sr = Range(m.range(at: 1), in: t),
+               let er = Range(m.range(at: 2), in: t) {
+                lineStart = interceptParseMinutes(String(t[sr]))
+                lineEnd   = interceptParseMinutes(String(t[er]))
+            }
+            if let start = lineStart, let prev = prevEnd, start > prev {
+                if !currentGroup.isEmpty { groups.append(currentGroup) }
+                currentGroup = [line]
+            } else {
+                currentGroup.append(line)
+            }
+            prevEnd = lineEnd ?? prevEnd
+        }
+        if !currentGroup.isEmpty { groups.append(currentGroup) }
+
+        coreIntercept(lines: groups[0], resolvedAfterNum: firstGroupAfterNum)
+
+        for group in groups.dropFirst() {
+            var firstStartMin: Int? = nil
+            for line in group {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                   let sr = Range(m.range(at: 1), in: t),
+                   let startMin = interceptParseMinutes(String(t[sr])) {
+                    firstStartMin = startMin; break
+                }
+            }
+            let allLines = notesText.components(separatedBy: .newlines)
+            var s2: Int? = nil, e2: Int? = nil
+            for (i, line) in allLines.enumerated() {
+                let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t == "START" && s2 == nil { s2 = i }
+                else if t == "END" && s2 != nil && e2 == nil { e2 = i; break }
+            }
+            let groupAfterNum: Int
+            if let s = s2, let e = e2, let targetMin = firstStartMin {
+                groupAfterNum = taskNumBefore(minutes: targetMin, in: allLines, startIdx: s, endIdx: e)
+            } else {
+                groupAfterNum = 0
+            }
+            coreIntercept(lines: group, resolvedAfterNum: groupAfterNum)
+        }
+    }
+
+    /// Inserts `lines` after task `resolvedAfterNum`, shifting subsequent tasks forward.
+    /// resolvedAfterNum == 0 inserts at the very start of the block (after START tag).
+    private func coreIntercept(lines: [String], resolvedAfterNum: Int) {
+        guard !lines.isEmpty else { return }
+
+        let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+        guard let timeRegex = try? NSRegularExpression(pattern: timePattern) else { return }
 
         // Strip any leading "N)" numbering from the intercept lines
         let strippedLines = lines.map { line -> String in
@@ -2873,27 +3027,84 @@ struct DailyNotesView: View {
             return t
         }
 
+        // Parse end time of last intercept task (to know how far to shift subsequent tasks)
+        var interceptEndMin: Int? = nil
+        for line in strippedLines.reversed() {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+               let er = Range(m.range(at: 2), in: t),
+               let end = interceptParseMinutes(String(t[er])) {
+                interceptEndMin = end
+                break
+            }
+        }
+
+        var allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+
         if let s = sIdx, let e = eIdx {
-            // Find insertion point: line index of task `afterNum` inside the block
+            // Find line index for the target task number
             var insertAfterLineIdx: Int? = nil
-            var taskCounter = 0
-            for i in (s + 1)..<e {
-                let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
-                if t.isEmpty { continue }
-                // Count any non-empty line as a task slot (numbered or not)
-                if let pIdx = t.firstIndex(of: ")"),
-                   let n = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
-                   !t[t.startIndex..<pIdx].contains(" "), n > 0, n < 1000 {
-                    if n == afterNum { insertAfterLineIdx = i; break }
-                    _ = taskCounter; taskCounter = n
-                } else {
-                    taskCounter += 1
-                    if taskCounter == afterNum { insertAfterLineIdx = i; break }
+            if resolvedAfterNum > 0 {
+                for i in (s + 1)..<e {
+                    let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if t.isEmpty { continue }
+                    if let pIdx = t.firstIndex(of: ")"),
+                       let n = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+                       !t[t.startIndex..<pIdx].contains(" "), n > 0, n < 1000,
+                       n == resolvedAfterNum {
+                        insertAfterLineIdx = i
+                        break
+                    }
                 }
             }
-            // Default: insert before END if not found
-            let insertAt = (insertAfterLineIdx ?? (e - 1)) + 1
+            // 0 → insert at start of block (right after START); >0 → after that task line
+            let insertAt: Int = resolvedAfterNum == 0 ? (s + 1) : ((insertAfterLineIdx ?? (e - 1)) + 1)
+
+            // Calculate how much to shift tasks that follow the intercept
+            var shiftAmount = 0
+            if let interceptEnd = interceptEndMin, insertAt <= e {
+                let candidateLine = allLines[insertAt].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidateLine.isEmpty,
+                   let m = timeRegex.firstMatch(in: candidateLine, range: NSRange(candidateLine.startIndex..., in: candidateLine)),
+                   let sr = Range(m.range(at: 1), in: candidateLine),
+                   let firstStart = interceptParseMinutes(String(candidateLine[sr])) {
+                    shiftAmount = max(0, interceptEnd - firstStart)
+                }
+            }
+
+            // Insert intercept lines
             allLines.insert(contentsOf: strippedLines, at: insertAt)
+
+            // Shift downstream tasks that are contiguous with the intercept block.
+            // Stop as soon as a task's original start time is beyond the current wave end —
+            // that gap means the intercept does not displace it.
+            if shiftAmount > 0, let waveStart = interceptEndMin {
+                let newE = e + strippedLines.count
+                let shiftFrom = insertAt + strippedLines.count
+                var waveEnd = waveStart
+                for i in shiftFrom..<newE {
+                    let raw = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if raw.isEmpty { continue }
+                    let isStruck = raw.hasPrefix("~~") && raw.hasSuffix("~~")
+                    let inner = isStruck ? String(raw.dropFirst(2).dropLast(2)) : raw
+                    if let m = timeRegex.firstMatch(in: inner, range: NSRange(inner.startIndex..., in: inner)),
+                       let sr = Range(m.range(at: 1), in: inner),
+                       let er = Range(m.range(at: 2), in: inner),
+                       let taskStart = interceptParseMinutes(String(inner[sr])),
+                       let taskEnd   = interceptParseMinutes(String(inner[er])) {
+                        if taskStart > waveEnd { break }
+                        waveEnd = max(waveEnd, taskEnd)
+                    }
+                    let shifted = interceptShiftTimeLine(inner, by: shiftAmount, regex: timeRegex)
+                    allLines[i] = isStruck ? "~~\(shifted)~~" : shifted
+                }
+            }
         } else {
             // No block yet — create one
             if allLines.last?.isEmpty == false { allLines.append("") }
@@ -2916,7 +3127,6 @@ struct DailyNotesView: View {
                 if t.isEmpty { continue }
                 let isStruck = t.hasPrefix("~~") && t.hasSuffix("~~")
                 let inner = isStruck ? String(t.dropFirst(2).dropLast(2)) : t
-                // Strip existing number if present
                 let body: String
                 if let pIdx = inner.firstIndex(of: ")"),
                    let _ = Int(String(inner[inner.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
@@ -2934,6 +3144,79 @@ struct DailyNotesView: View {
         notesText = allLines.joined(separator: "\n")
         editorKey = UUID()
         saveNotes()
+    }
+
+    /// Returns the task number of the scheduled task nearest to the current time.
+    /// Prefers the currently-active task; falls back to the last task whose start has passed;
+    /// falls back to the first numbered task in the block.  Returns 0 if no numbered tasks exist.
+    private func nearestTaskNum(in allLines: [String], startIdx: Int, endIdx: Int) -> Int {
+        let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+        guard let timeRegex = try? NSRegularExpression(pattern: timePattern) else { return 0 }
+
+        let calendar = Calendar.current
+        let now = calendar.dateComponents([.hour, .minute], from: Date())
+        let currentMinutes = (now.hour ?? 0) * 60 + (now.minute ?? 0)
+
+        struct Slot { let num: Int; let start: Int; let end: Int }
+        var slots: [Slot] = []
+        for i in (startIdx + 1)..<endIdx {
+            let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty { continue }
+            guard let pIdx = t.firstIndex(of: ")"),
+                  let num = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
+                  !t[t.startIndex..<pIdx].contains(" "), num > 0, num < 1000 else { continue }
+            guard let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                  let sr = Range(m.range(at: 1), in: t),
+                  let er = Range(m.range(at: 2), in: t),
+                  let startMin = interceptParseMinutes(String(t[sr])),
+                  let endMin   = interceptParseMinutes(String(t[er])) else { continue }
+            slots.append(Slot(num: num, start: startMin, end: endMin))
+        }
+        guard !slots.isEmpty else { return 0 }
+
+        // Active task: currentMinutes falls within [start, end)
+        if let active = slots.last(where: { currentMinutes >= $0.start && currentMinutes < $0.end }) {
+            return active.num
+        }
+        // Last past task: latest start that has already passed
+        if let past = slots.last(where: { $0.start <= currentMinutes }) {
+            return past.num
+        }
+        // All tasks are in the future — insert before the first one (i.e. after task 0 means before END,
+        // but here we return the first task so new tasks land right before it; use task before first)
+        return slots[0].num > 1 ? slots[0].num - 1 : 0
+    }
+
+    /// Parses a time string like "1:30 PM" or "13:30" into minutes since midnight.
+    private func interceptParseMinutes(_ s: String) -> Int? {
+        let clean = s.trimmingCharacters(in: .whitespaces).lowercased()
+        let isPM = clean.contains("pm")
+        let isAM = clean.contains("am")
+        let digits = clean
+            .replacingOccurrences(of: "pm", with: "")
+            .replacingOccurrences(of: "am", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let parts = digits.components(separatedBy: ":").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count >= 2 else { return nil }
+        var h = parts[0], m = parts[1]
+        if isPM && h != 12 { h += 12 }
+        if isAM && h == 12 { h = 0 }
+        guard h >= 0 && h < 48 && m >= 0 && m < 60 else { return nil }
+        return h * 60 + m
+    }
+
+    /// Shifts the start and end times in a task line by `minutes`, preserving everything else.
+    private func interceptShiftTimeLine(_ line: String, by minutes: Int, regex: NSRegularExpression) -> String {
+        guard let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+              let sr = Range(match.range(at: 1), in: line),
+              let er = Range(match.range(at: 2), in: line),
+              let startMin = interceptParseMinutes(String(line[sr])),
+              let endMin   = interceptParseMinutes(String(line[er])) else {
+            return line
+        }
+        let before = String(line[line.startIndex..<sr.lowerBound])
+        let after  = String(line[er.upperBound...])
+        return "\(before)\(safeMinutesToTime(startMin + minutes)) - \(safeMinutesToTime(endMin + minutes))\(after)"
     }
 
     /// Returns true if both tasks were found and swapped, false otherwise.
@@ -3585,11 +3868,8 @@ struct DailyNotesView: View {
         guard let currentEntry = findBestCurrentTask(at: nowMin, in: timeEntries) else { return }
 
         let newTaskDuration = 5
-        // How much the following tasks need to shift:
-        // positive = they move later, negative = they move earlier (we finished early)
         let shiftAmount = (nowMin + newTaskDuration) - currentEntry.endMinutes
 
-        // Timer counts down the new 5-minute task
         settings.nextAlertDate = now.addingTimeInterval(TimeInterval(newTaskDuration * 60))
 
         guard let startTagRange = notesText.range(of: "START"),
@@ -3600,6 +3880,8 @@ struct DailyNotesView: View {
         var result: [String] = []
         var prevEnd: Int? = nil
         var foundCurrent = false
+        var waveEnd = currentEntry.endMinutes
+        var doneShifting = false
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3622,28 +3904,32 @@ struct DailyNotesView: View {
                         baseNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces))
                     }
 
-                    // Truncated original task
                     let part1Num = baseNum.map { "\($0)) " } ?? ""
                     result.append("\(part1Num)\(safeMinutesToTime(entry.startMinutes)) - \(safeMinutesToTime(nowMin)) - \(entry.description)")
 
-                    // New 5-minute task
                     let part2Num = baseNum.map { "\($0 + 1)) " } ?? ""
                     result.append("\(part2Num)\(safeMinutesToTime(nowMin)) - \(safeMinutesToTime(nowMin + newTaskDuration)) - new task")
 
                     prevEnd = nowMin + newTaskDuration
 
-                } else if foundCurrent && entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
-                    // Shift by shiftAmount and bump number by +1
-                    var shiftedNum: Int? = nil
-                    if let pIdx = trimmed.firstIndex(of: ")") {
-                        shiftedNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)).map { $0 + 1 }
+                } else if foundCurrent && !entry.isFixed && !doneShifting {
+                    if entry.startMinutes > waveEnd {
+                        // Gap — stop the shift wave; append this and all remaining unchanged
+                        doneShifting = true
+                        result.append(line)
+                        prevEnd = entry.endMinutes
+                    } else {
+                        waveEnd = max(waveEnd, entry.endMinutes)
+                        var shiftedNum: Int? = nil
+                        if let pIdx = trimmed.firstIndex(of: ")") {
+                            shiftedNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)).map { $0 + 1 }
+                        }
+                        let numStr   = shiftedNum.map { "\($0)) " } ?? ""
+                        let newStart = safeMinutesToTime(max(0, entry.startMinutes + shiftAmount))
+                        let newEnd   = safeMinutesToTime(max(0, entry.endMinutes   + shiftAmount))
+                        result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
+                        prevEnd = entry.endMinutes + shiftAmount
                     }
-                    let numStr   = shiftedNum.map { "\($0)) " } ?? ""
-                    let newStart = safeMinutesToTime(max(0, entry.startMinutes + shiftAmount))
-                    let newEnd   = safeMinutesToTime(max(0, entry.endMinutes   + shiftAmount))
-                    result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
-                    prevEnd = entry.endMinutes + shiftAmount
-
                 } else {
                     result.append(line)
                     prevEnd = entry.endMinutes
@@ -3701,6 +3987,8 @@ struct DailyNotesView: View {
         var result: [String] = []
         var prevEnd: Int? = nil
         var foundCurrent = false
+        var waveEnd = currentEntry.endMinutes
+        var doneShifting = false
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3717,7 +4005,6 @@ struct DailyNotesView: View {
 
                 if isCurrentTask {
                     foundCurrent = true
-                    // Truncate current task's end time to now
                     let numStr: String
                     if let pIdx = trimmed.firstIndex(of: ")"),
                        let num = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
@@ -3725,24 +4012,29 @@ struct DailyNotesView: View {
                     } else {
                         numStr = ""
                     }
-                    let newEnd = safeMinutesToTime(nowMin)
-                    result.append("\(numStr)\(safeMinutesToTime(entry.startMinutes)) - \(newEnd) - \(entry.description)")
+                    result.append("\(numStr)\(safeMinutesToTime(entry.startMinutes)) - \(safeMinutesToTime(nowMin)) - \(entry.description)")
                     prevEnd = nowMin
 
-                } else if foundCurrent && entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
-                    // Shift following tasks earlier
-                    let numStr: String
-                    if let pIdx = trimmed.firstIndex(of: ")"),
-                       let num = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
-                        numStr = "\(num)) "
+                } else if foundCurrent && !entry.isFixed && !doneShifting {
+                    if entry.startMinutes > waveEnd {
+                        // Gap — stop the shift wave
+                        doneShifting = true
+                        result.append(line)
+                        prevEnd = entry.endMinutes
                     } else {
-                        numStr = ""
+                        waveEnd = max(waveEnd, entry.endMinutes)
+                        let numStr: String
+                        if let pIdx = trimmed.firstIndex(of: ")"),
+                           let num = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
+                            numStr = "\(num)) "
+                        } else {
+                            numStr = ""
+                        }
+                        let newStart = safeMinutesToTime(max(0, entry.startMinutes + shiftAmount))
+                        let newEnd   = safeMinutesToTime(max(0, entry.endMinutes   + shiftAmount))
+                        result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
+                        prevEnd = entry.endMinutes + shiftAmount
                     }
-                    let newStart = safeMinutesToTime(max(0, entry.startMinutes + shiftAmount))
-                    let newEnd   = safeMinutesToTime(max(0, entry.endMinutes   + shiftAmount))
-                    result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
-                    prevEnd = entry.endMinutes + shiftAmount
-
                 } else {
                     result.append(line)
                     prevEnd = entry.endMinutes
@@ -3894,9 +4186,31 @@ struct DailyNotesView: View {
         // Insert generated lines after the found position
         allLines.insert(contentsOf: renumbered, at: insertAfterLine + 1)
 
-        // Renumber and shift lines that came after the insertion point
+        // Renumber and shift lines that came after the insertion point.
+        // Wave: only shift tasks contiguous with the inserted block; stop at any gap.
         let shiftFrom = insertAfterLine + 1 + newCount
         let newEndIdx = eIdx + newCount
+
+        // Wave end = end time of the last generated task
+        var waveEnd: Int = 0
+        for line in scheduleLines.reversed() {
+            if let entry = parseTimeEntry(line.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                waveEnd = entry.endMinutes; break
+            }
+        }
+
+        // Actual shift = overlap between generated block end and the first downstream task's start
+        // (mirrors coreIntercept's shiftAmount = max(0, interceptEnd - firstStart))
+        var actualShift = 0
+        for lineIdx in shiftFrom..<newEndIdx {
+            let t = allLines[lineIdx].trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty { continue }
+            let w = (t.hasPrefix("~~") && t.hasSuffix("~~")) ? String(t.dropFirst(2).dropLast(2)) : t
+            if let entry = parseTimeEntry(w) {
+                actualShift = max(0, waveEnd - entry.startMinutes)
+            }
+            break
+        }
 
         for lineIdx in shiftFrom..<newEndIdx {
             let line = allLines[lineIdx]
@@ -3906,24 +4220,29 @@ struct DailyNotesView: View {
             let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
             let workLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
 
+            // Wave check: stop if this task has a gap from the wave front
+            if let entry = parseTimeEntry(workLine) {
+                if entry.startMinutes > waveEnd { break }
+                if !entry.isFixed { waveEnd = max(waveEnd, entry.endMinutes) }
+            }
+
             // Extract old number prefix
             if let numRange = workLine.range(of: #"^\d+\)"#, options: .regularExpression) {
-                let numStr = String(workLine[numRange].dropLast())  // drop ")"
+                let numStr = String(workLine[numRange].dropLast())
                 if let oldNum = Int(numStr) {
                     let newNum = oldNum + newCount
                     var updated = workLine.replacingOccurrences(
                         of: #"^\d+\)\s*"#, with: "\(newNum)) ", options: .regularExpression)
-                    // Shift times if it's a time entry and not fixed
                     if let entry = parseTimeEntry(updated), !entry.isFixed {
-                        let newStart = formatMinutesToTime(entry.startMinutes + shiftMinutes)
-                        let newEnd = formatMinutesToTime(entry.endMinutes + shiftMinutes)
+                        let newStart = formatMinutesToTime(entry.startMinutes + actualShift)
+                        let newEnd = formatMinutesToTime(entry.endMinutes + actualShift)
                         updated = "\(newNum)) \(newStart) - \(newEnd) - \(entry.description)"
                     }
                     allLines[lineIdx] = isStruck ? "~~\(updated)~~" : updated
                 }
             } else if let entry = parseTimeEntry(workLine), !entry.isFixed {
-                let newStart = formatMinutesToTime(entry.startMinutes + shiftMinutes)
-                let newEnd = formatMinutesToTime(entry.endMinutes + shiftMinutes)
+                let newStart = formatMinutesToTime(entry.startMinutes + actualShift)
+                let newEnd = formatMinutesToTime(entry.endMinutes + actualShift)
                 let updated = "\(newStart) - \(newEnd) - \(entry.description)"
                 allLines[lineIdx] = isStruck ? "~~\(updated)~~" : updated
             }
@@ -4665,7 +4984,7 @@ struct InterceptSheet: View {
                 Section("Insert After Task #") {
                     TextField("e.g. 4", text: $afterNumText)
                         .keyboardType(.numberPad)
-                    Text("Tasks will be inserted after this task number and the whole list will be renumbered. Leave empty to append at the end.")
+                    Text("Tasks will be inserted after this task number and the whole list will be renumbered. Leave empty to auto-insert after the nearest time interval.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
