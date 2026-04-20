@@ -613,8 +613,8 @@ struct DailyNotesView: View {
                     selectedDate: selectedDate,
                     allTasks: allTasksQuery,
                     duration: $autoGenDuration,
-                    onGenerate: { tasks, duration in
-                        autoGenerateSchedule(tasks: tasks, minutesPerTask: duration)
+                    onGenerate: { tasks, duration, startTimeStr in
+                        autoGenerateSchedule(tasks: tasks, minutesPerTask: duration, startTimeStr: startTimeStr)
                     }
                 )
             }
@@ -1857,45 +1857,52 @@ struct DailyNotesView: View {
         }
     }
 
-    /// Generates a schedule block from the given unattended tasks, `minutesPerTask` each,
-    /// starting from the current time, numbered from maxScheduleNumber() + 1.
-    private func autoGenerateSchedule(tasks: [Task], minutesPerTask: Int) {
+    /// Generates a schedule block from the given tasks, `minutesPerTask` each, starting at
+    /// `startTimeStr` (e.g. "12:30 PM"). Falls back to current time if empty or unparseable.
+    /// Inserts at the correct position via `taskNumBefore` and uses wave-based shifting.
+    private func autoGenerateSchedule(tasks: [Task], minutesPerTask: Int, startTimeStr: String = "") {
         guard !tasks.isEmpty else { return }
         let cal = Calendar.current
         let now = Date()
-        let startMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
-        let startNum = maxScheduleNumber() + 1
 
+        let trimmed = startTimeStr.trimmingCharacters(in: .whitespaces)
+        let startMin: Int
+        if !trimmed.isEmpty, let parsed = interceptParseMinutes(trimmed) {
+            startMin = parsed
+        } else {
+            startMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        }
+
+        let startNum = maxScheduleNumber() + 1
         var newLines: [String] = []
         for (i, task) in tasks.enumerated() {
             let taskStart = startMin + i * minutesPerTask
             let taskEnd   = taskStart + minutesPerTask
-            let startStr  = safeMinutesToTime(taskStart)
-            let endStr    = safeMinutesToTime(taskEnd)
-            newLines.append("\(startNum + i)) \(startStr) - \(endStr) - \(task.title)")
+            newLines.append("\(startNum + i)) \(safeMinutesToTime(taskStart)) - \(safeMinutesToTime(taskEnd)) - \(task.title)")
         }
 
-        // Append inside existing block or create new one
-        var lines = notesText.components(separatedBy: .newlines)
-        var eIdx: Int? = nil
-        var sIdx: Int? = nil
-        for (i, line) in lines.enumerated() {
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
             let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if t == "START" && sIdx == nil { sIdx = i }
             else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
         }
-        if let e = eIdx {
-            // Insert new lines just before END
-            lines.insert(contentsOf: newLines, at: e)
+
+        if let s = sIdx, let e = eIdx {
+            let afterNum = taskNumBefore(minutes: startMin, in: allLines, startIdx: s, endIdx: e)
+            insertGeneratedTasksAfter(taskNum: afterNum, scheduleLines: newLines, shiftMinutes: tasks.count * minutesPerTask)
         } else {
+            // No START/END block yet — create one
+            var lines = notesText.components(separatedBy: .newlines)
             if lines.last?.isEmpty == false { lines.append("") }
             lines.append("START")
             lines.append(contentsOf: newLines)
             lines.append("END")
+            notesText = lines.joined(separator: "\n")
+            editorKey = UUID()
+            saveNotes()
         }
-        notesText = lines.joined(separator: "\n")
-        editorKey = UUID()
-        saveNotes()
     }
     
     private func adjustTimesInNotes() {
@@ -5137,11 +5144,14 @@ struct AutoScheduleSheet: View {
     let selectedDate: Date
     let allTasks: [Task]
     @Binding var duration: String
-    var onGenerate: ([Task], Int) -> Void
+    var onGenerate: ([Task], Int, String) -> Void
 
-    @FocusState private var durationFocused: Bool
+    @FocusState private var focusedField: Field?
+    @State private var startTime: String = Self.currentTimeString()
     /// Ordered list of selected task IDs — position = selection order.
     @State private var selectedIDs: [PersistentIdentifier] = []
+
+    private enum Field { case startTime, duration }
 
     private var unattendedTasks: [Task] {
         let cal = Calendar.current
@@ -5162,20 +5172,27 @@ struct AutoScheduleSheet: View {
     var body: some View {
         NavigationView {
             Form {
+                Section("Start Time") {
+                    TextField("e.g. 12:30 PM", text: $startTime)
+                        .focused($focusedField, equals: .startTime)
+                        .autocorrectionDisabled()
+                        .autocapitalization(.none)
+                }
+
                 Section("Duration per Task") {
                     HStack {
                         TextField("10", text: $duration)
                             .keyboardType(.numberPad)
-                            .focused($durationFocused)
+                            .focused($focusedField, equals: .duration)
                             .frame(width: 60)
-                            .toolbar {
-                                ToolbarItemGroup(placement: .keyboard) {
-                                    Spacer()
-                                    Button("Done") { durationFocused = false }.fontWeight(.semibold)
-                                }
-                            }
                         Text("minutes per task")
                             .foregroundColor(.secondary)
+                    }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { focusedField = nil }.fontWeight(.semibold)
                     }
                 }
 
@@ -5253,7 +5270,7 @@ struct AutoScheduleSheet: View {
                                     .foregroundColor(.secondary)
                             }
                         }
-                        Text("Tasks will be added in the order shown above, starting at current time.")
+                        Text("Tasks will be added in the order shown above, starting at \(startTime.trimmingCharacters(in: .whitespaces).isEmpty ? "current time" : startTime.trimmingCharacters(in: .whitespaces)).")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .padding(.top, 2)
@@ -5269,7 +5286,7 @@ struct AutoScheduleSheet: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Generate") {
-                        onGenerate(selectedTasks, parsedDuration)
+                        onGenerate(selectedTasks, parsedDuration, startTime)
                         dismiss()
                     }
                     .fontWeight(.semibold)
@@ -5289,6 +5306,16 @@ struct AutoScheduleSheet: View {
 
     private func selectAll() {
         selectedIDs = unattendedTasks.map { $0.id }
+    }
+
+    private static func currentTimeString() -> String {
+        let cal = Calendar.current
+        let now = Date()
+        let h24 = cal.component(.hour, from: now)
+        let m   = cal.component(.minute, from: now)
+        let h12 = h24 % 12 == 0 ? 12 : h24 % 12
+        let ampm = h24 < 12 ? "AM" : "PM"
+        return String(format: "%d:%02d %@", h12, m, ampm)
     }
 }
 
