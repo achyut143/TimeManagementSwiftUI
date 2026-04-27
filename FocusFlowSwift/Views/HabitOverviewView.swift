@@ -8,8 +8,12 @@ struct HabitOverviewView: View {
     @Query private var eventDays: [EventDay]
     @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate = Date()
+    @State private var pendingFromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var pendingToDate = Date()
+    @State private var selectedView = "table"  // "table" | "all"
     @State private var filterMode = "all"
     @State private var searchText = ""
+    @State private var appliedSearch = ""
     @State private var selectedHabit: String? = nil
     @State private var showDetailedView = false
     @State private var showDMSGuide = false
@@ -22,6 +26,16 @@ struct HabitOverviewView: View {
     @State private var pdfURL: URL?
     @State private var showNoNotesAlert = false
     @State private var noNotesHabitName = ""
+
+    // MARK: - Performance caches (populated by recomputeAllStats)
+    @State private var cachedStats: [String: HabitStats] = [:]
+    @State private var cachedPoints: [String: (earned: Double, allocated: Double)] = [:]
+    @State private var cachedDiscipline: [String: DisciplineMuscleScore] = [:]
+    @State private var cachedEventStats: [String: (eventDays: Int, nonEventMisses: Int)] = [:]
+    @State private var cachedRepeatInterval: [String: Int] = [:]
+    @State private var cachedDateRange: [Date] = []
+    @State private var cachedHabitTags: [String] = []
+    @State private var cachedHabitCountPerTag: [String: Int] = [:]
     
     var body: some View {
         NavigationStack {
@@ -29,22 +43,28 @@ struct HabitOverviewView: View {
                 // Header with filters
                 headerView
                 
-                // Overall Discipline Level Display (only when discipline filter is selected)
-                if filterMode == "discipline" && !filteredHabitNames.isEmpty {
-                    overallDisciplineView
-                }
-                
-                if filteredHabitNames.isEmpty {
-                    emptyStateView
+                if selectedView == "table" {
+                    HabitGridView(fromDate: $fromDate, toDate: $toDate)
                 } else {
-                    // Main table view
-                    habitTableView
+                    // Overall Discipline Level Display (only when discipline filter is selected)
+                    if filterMode == "discipline" && !filteredHabitNames.isEmpty {
+                        overallDisciplineView
+                    }
+
+                    if filteredHabitNames.isEmpty {
+                        emptyStateView
+                    } else {
+                        habitTableView
+                    }
                 }
             }
             .navigationTitle("Habit Overview")
             .onAppear {
                 loadHabitSettings()
             }
+            .onChange(of: fromDate) { _, _ in recomputeAllStats() }
+            .onChange(of: toDate) { _, _ in recomputeAllStats() }
+            .onChange(of: tasks.count) { _, _ in recomputeAllStats() }
             .sheet(isPresented: $showDetailedView) {
                 if let selectedHabit = selectedHabit {
                     NavigationStack {
@@ -77,24 +97,18 @@ struct HabitOverviewView: View {
         VStack(spacing: 8) {
             // Filter controls
             HStack {
-                Picker("Filter", selection: $filterMode) {
+                Picker("View", selection: $selectedView) {
+                    Text("Table").tag("table")
                     Text("All").tag("all")
-                    Text("Discipline").tag("discipline")
-                    Text("Repeats").tag("repeats")
                 }
                 .pickerStyle(.segmented)
-                
+
                 Spacer()
             }
             .padding(.horizontal)
-            
-            // Filters Accordion
+
+            // Filters Accordion (shared between both views)
             filtersAccordion
-            
-            // DMS Guide Accordion (only show when discipline filter is selected)
-            if filterMode == "discipline" {
-                dmsGuideAccordion
-            }
         }
         .padding(.vertical, 6)
         .background(Color(.systemGroupedBackground))
@@ -102,25 +116,55 @@ struct HabitOverviewView: View {
     
     private var habitTableView: some View {
         VStack(spacing: 0) {
-            // Scrollable content with cards instead of table
+            habitTableHeader
+            Divider()
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    // Habit cards
                     ForEach(filteredHabitNames, id: \.self) { habitName in
                         habitCardView(habitName: habitName)
                     }
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 2)
+                .padding(.vertical, 4)
             }
         }
     }
+
+    private var habitTableHeader: some View {
+        HStack(spacing: 6) {
+            Text("Habit")
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if filterMode == "discipline" {
+                Text("DMS").frame(maxWidth: .infinity)
+                Text("Done").frame(maxWidth: .infinity)
+                Text("Penalty").frame(maxWidth: .infinity)
+                Text("Streak").frame(maxWidth: .infinity)
+                Text("Bonus").frame(maxWidth: .infinity)
+            } else {
+                Text("%").frame(maxWidth: .infinity)
+                Text("Score").frame(maxWidth: .infinity)
+                Text("Streak").frame(maxWidth: .infinity)
+                Text("Best").frame(maxWidth: .infinity)
+                Text("Points").frame(maxWidth: .infinity)
+                Text("Events").frame(maxWidth: .infinity)
+                Text("Misses").frame(maxWidth: .infinity)
+            }
+
+            Spacer().frame(width: 44)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundColor(.secondary)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 7)
+        .background(Color(.systemGroupedBackground))
+    }
     
     private func habitCardView(habitName: String) -> some View {
-        let stats = calculateStatsForHabit(habitName)
-        let pointsStats = calculatePointsForHabit(habitName)
-        let disciplineScore = calculateDisciplineScoreForHabit(habitName)
-        let habitColor = Color.blue // All habits use blue color
+        let stats = cachedStats[habitName] ?? HabitStats(completed: 0, missed: 0, noData: 0, total: 0, percentage: 0, currentStreak: 0, maxStreak: 0, habitName: habitName)
+        let pointsStats = cachedPoints[habitName] ?? (earned: 0.0, allocated: 0.0)
+        let disciplineScore = cachedDiscipline[habitName] ?? calculateDisciplineScoreForHabit(habitName)
+        let habitColor = Color.blue
         
         return HStack(spacing: 0) {
             Button(action: {
@@ -145,7 +189,7 @@ struct HabitOverviewView: View {
                             }
                             
                             if filterMode == "discipline" {
-                                let repeatInterval = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }.first?.repeatAgain ?? 1
+                                let repeatInterval = cachedRepeatInterval[habitName] ?? 1
                                 let frequencyText = repeatInterval == 1 ? "Daily" : repeatInterval == 7 ? "Weekly" : "Every \(repeatInterval)d"
                                 Text(frequencyText)
                                     .font(.caption2)
@@ -191,7 +235,8 @@ struct HabitOverviewView: View {
                     if filterMode == "discipline" {
                         compactDisciplineMetrics(disciplineScore: disciplineScore)
                     } else {
-                        compactTraditionalMetrics(stats: stats, pointsStats: pointsStats)
+                        let evtStats = cachedEventStats[habitName] ?? (eventDays: 0, nonEventMisses: 0)
+                        compactTraditionalMetrics(stats: stats, pointsStats: pointsStats, eventStats: evtStats)
                     }
                 }
                 .padding(10)
@@ -315,8 +360,7 @@ struct HabitOverviewView: View {
         }
     }
     
-    private func compactTraditionalMetrics(stats: HabitStats, pointsStats: (earned: Double, allocated: Double)) -> some View {
-        let eventStats = calculateEventStatsForHabit(stats.habitName ?? "")
+    private func compactTraditionalMetrics(stats: HabitStats, pointsStats: (earned: Double, allocated: Double), eventStats: (eventDays: Int, nonEventMisses: Int)) -> some View {
         
         return VStack(spacing: 4) {
             // First row: Completed/Total, Current Streak, Max Streak
@@ -463,7 +507,7 @@ struct HabitOverviewView: View {
     }
     
     private var overallDisciplineView: some View {
-        let allScores = filteredHabitNames.map { calculateDisciplineScoreForHabit($0) }
+        let allScores = filteredHabitNames.compactMap { cachedDiscipline[$0] }
         let overallDiscipline = DisciplineMuscleCalculator.calculateOverallDiscipline(scores: allScores)
         let levelColors = overallDiscipline.level.color
         
@@ -613,26 +657,72 @@ struct HabitOverviewView: View {
                 }
                 return true
             }
-            .filter { searchText.isEmpty || $0.localizedCaseInsensitiveContains(searchText) }
+            .filter { appliedSearch.isEmpty || $0.localizedCaseInsensitiveContains(appliedSearch) }
             .filter { name in
                 if percentageFilter == "all" { return true }
-                let pct = calculateStatsForHabit(name).percentage
+                let pct = cachedStats[name]?.percentage ?? 0
                 return percentageFilter == "above" ? pct >= 85 : pct < 85
             }
     }
     
-    private var dateRange: [Date] {
+    private var dateRange: [Date] { cachedDateRange }
+
+    // MARK: - Stats Recomputation
+
+    private func recomputeAllStats() {
+        let cal = Calendar.current
         var dates: [Date] = []
-        var currentDate = fromDate
-        
-        while currentDate <= toDate {
-            dates.append(currentDate)
-            currentDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        var cur = fromDate
+        while cur <= toDate {
+            dates.append(cur)
+            cur = cal.date(byAdding: .day, value: 1, to: cur) ?? cur
         }
-        
-        return dates
+        cachedDateRange = dates
+
+        let htasks = tasks.filter { $0.repeatAgain != nil }
+        let names = Array(Set(htasks.map { $0.title }))
+
+        var stats: [String: HabitStats] = [:]
+        var pts: [String: (earned: Double, allocated: Double)] = [:]
+        var disc: [String: DisciplineMuscleScore] = [:]
+        var evts: [String: (eventDays: Int, nonEventMisses: Int)] = [:]
+        var repeatIntervals: [String: Int] = [:]
+
+        for name in names {
+            stats[name] = calculateStatsForHabit(name)
+            pts[name] = calculatePointsForHabit(name)
+            disc[name] = calculateDisciplineScoreForHabit(name)
+            evts[name] = calculateEventStatsForHabit(name)
+            repeatIntervals[name] = htasks.first { $0.title == name }?.repeatAgain ?? 1
+        }
+
+        cachedStats = stats
+        cachedPoints = pts
+        cachedDiscipline = disc
+        cachedEventStats = evts
+        cachedRepeatInterval = repeatIntervals
+
+        var allTags = Set<String>()
+        var countPerTag: [String: Set<String>] = [:]
+        for task in htasks {
+            let tags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            for tag in tags where !tag.isEmpty {
+                allTags.insert(tag)
+                countPerTag[tag, default: Set()].insert(task.title)
+            }
+            if task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
+                allTags.insert("")
+                countPerTag["", default: Set()].insert(task.title)
+            }
+        }
+        cachedHabitTags = Array(allTags).sorted { f, s in
+            if f.isEmpty && !s.isEmpty { return false }
+            if !f.isEmpty && s.isEmpty { return true }
+            return f < s
+        }
+        cachedHabitCountPerTag = countPerTag.mapValues { $0.count }
     }
-    
+
     // MARK: - Helper Methods
     
     private func calculateDisciplineScoreForHabit(_ habitName: String) -> DisciplineMuscleScore {
@@ -833,17 +923,22 @@ struct HabitOverviewView: View {
                         }
                         
                         VStack(spacing: 8) {
-                            DatePicker("Start Date", selection: $fromDate, displayedComponents: .date)
+                            DatePicker("Start Date", selection: $pendingFromDate, displayedComponents: .date)
                                 .datePickerStyle(.compact)
-                                .onChange(of: fromDate) { _, newValue in
-                                    saveDateSettings()
-                                }
-                            
-                            DatePicker("End Date", selection: $toDate, displayedComponents: .date)
+                            DatePicker("End Date", selection: $pendingToDate, displayedComponents: .date)
                                 .datePickerStyle(.compact)
-                                .onChange(of: toDate) { _, newValue in
-                                    saveDateSettings()
-                                }
+                            Button {
+                                fromDate = pendingFromDate
+                                toDate = pendingToDate
+                                saveDateSettings()
+                            } label: {
+                                Text("Apply Dates")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 9)
+                                    .background(Color.indigo, in: RoundedRectangle(cornerRadius: 9))
+                            }
                         }
                     }
                     
@@ -865,11 +960,25 @@ struct HabitOverviewView: View {
                             }
                         }
                         
-                        HStack {
+                        HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass")
-                                .font(.caption)
+                                .font(.caption).foregroundColor(.secondary)
                             TextField("Search habits…", text: $searchText)
                                 .textFieldStyle(.roundedBorder)
+                            Button {
+                                appliedSearch = searchText
+                            } label: {
+                                Text("Search")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                            }
+                            if !appliedSearch.isEmpty {
+                                Button { searchText = ""; appliedSearch = "" } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                                }
+                            }
                         }
                     }
                     
@@ -1163,9 +1272,11 @@ struct HabitOverviewView: View {
         habitSettings = HabitSettings.getOrCreate(context: modelContext)
         if let settings = habitSettings {
             fromDate = settings.fromDate
-            // Always set toDate to today
+            pendingFromDate = settings.fromDate
             toDate = Date()
+            pendingToDate = Date()
         }
+        recomputeAllStats()
     }
     
     private func saveDateSettings() {
@@ -1207,49 +1318,9 @@ struct HabitOverviewView: View {
         return selectedRepeatFilter != nil || !searchText.isEmpty || !selectedTagsFilter.isEmpty || percentageFilter != "all"
     }
     
-    private func getAvailableHabitTags() -> [String] {
-        // Get all habit tasks (tasks with repeatAgain != nil)
-        let habitTasks = tasks.filter { $0.repeatAgain != nil }
-        
-        // Split taskDescription by commas and get unique tags
-        var allTags = Set<String>()
-        for task in habitTasks {
-            let tags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            for tag in tags {
-                if !tag.isEmpty {
-                    allTags.insert(tag)
-                }
-            }
-            // Also add empty tag if taskDescription is empty
-            if task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
-                allTags.insert("")
-            }
-        }
-        
-        // Return sorted array, with empty strings (no tag) at the end
-        return Array(allTags).sorted { first, second in
-            if first.isEmpty && !second.isEmpty { return false }
-            if !first.isEmpty && second.isEmpty { return true }
-            return first < second
-        }
-    }
-    
-    private func getHabitCountForTag(_ tag: String) -> Int {
-        // Get habit names that have this specific tag
-        let habitNames = Set(tasks.filter { task in
-            guard task.repeatAgain != nil else { return false }
-            
-            if tag.isEmpty {
-                // For empty tag, check if taskDescription is empty
-                return task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty
-            } else {
-                // For non-empty tag, check if it exists in comma-separated values
-                let tags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                return tags.contains(tag)
-            }
-        }.map { $0.title })
-        return habitNames.count
-    }
+    private func getAvailableHabitTags() -> [String] { cachedHabitTags }
+
+    private func getHabitCountForTag(_ tag: String) -> Int { cachedHabitCountPerTag[tag] ?? 0 }
     
     private func getActiveFiltersText() -> String {
         var filters: [String] = []

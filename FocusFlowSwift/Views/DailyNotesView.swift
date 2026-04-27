@@ -597,6 +597,9 @@ struct DailyNotesView: View {
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
             }
+            .onChange(of: notesText) { _, _ in
+                scheduleRenderID = UUID()
+            }
             .onChange(of: currentTaskName) { _, newName in
                 settings.activeTaskName = newName
             }
@@ -1675,8 +1678,8 @@ struct DailyNotesView: View {
         return lines[s...e].joined(separator: "\n")
     }
 
-    /// Applies the first template as the base schedule, then intercepts with each subsequent
-    /// template using time-based overlap detection so later templates take priority.
+    /// Applies templates. The first template replaces the block only if no non-empty block exists;
+    /// otherwise it is intercept-merged like all subsequent templates.
     private func applyTemplates(_ templates: [ScheduleTemplate]) {
         guard !templates.isEmpty else { return }
 
@@ -1687,57 +1690,53 @@ struct DailyNotesView: View {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed == "START" { inBlock = true; continue }
                 if trimmed == "END"   { inBlock = false; continue }
-                if inBlock { result.append(line) }
+                if inBlock {
+                    // If this is a reward template, stamp each non-empty task line with [🎁]
+                    if template.isReward && !trimmed.isEmpty && !trimmed.contains("[🎁]") {
+                        result.append(line.replacingOccurrences(of: trimmed, with: trimmed + " [🎁]"))
+                    } else {
+                        result.append(line)
+                    }
+                }
             }
             return result
         }
 
-        // 1. Apply template 1 as the base (replace the whole START…END block)
-        let baseLines = renumberedLines(taskLines(from: templates[0]), from: 1)
-        let combinedBase = ["START"] + baseLines + ["END"]
-        var currentLines = notesText.components(separatedBy: .newlines)
-        var sIdx: Int? = nil, eIdx: Int? = nil
-        for (i, line) in currentLines.enumerated() {
-            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if t == "START" && sIdx == nil { sIdx = i }
-            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        // Check whether a non-empty START…END block already exists in the notes.
+        func existingBlockIsEmpty() -> Bool {
+            let lines = notesText.components(separatedBy: .newlines)
+            var inside = false
+            for line in lines {
+                let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t == "START" { inside = true; continue }
+                if t == "END"   { return true }
+                if inside && !t.isEmpty { return false }
+            }
+            return true
         }
-        if let s = sIdx, let e = eIdx {
-            currentLines.replaceSubrange(s...e, with: combinedBase)
-        } else {
-            if currentLines.last?.isEmpty == false { currentLines.append("") }
-            currentLines.append(contentsOf: combinedBase)
-        }
-        notesText = currentLines.joined(separator: "\n")
 
-        // 2. Intercept with each subsequent template in order
         let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
-        guard templates.count > 1,
-              let timeRegex = try? NSRegularExpression(pattern: timePattern) else {
-            editorKey = UUID()
-            saveNotes()
-            return
-        }
+        let timeRegex = try? NSRegularExpression(pattern: timePattern)
 
-        for template in templates.dropFirst() {
+        func interceptTemplate(_ template: ScheduleTemplate) {
             let lines = taskLines(from: template).filter {
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
-            guard !lines.isEmpty else { continue }
+            guard !lines.isEmpty else { return }
 
-            // Find the start time of the first timed task in this template
             var firstStartMin: Int? = nil
-            for line in lines {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                if let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
-                   let sr = Range(m.range(at: 1), in: t),
-                   let startMin = interceptParseMinutes(String(t[sr])) {
-                    firstStartMin = startMin
-                    break
+            if let re = timeRegex {
+                for line in lines {
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    if let m = re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                       let sr = Range(m.range(at: 1), in: t),
+                       let startMin = interceptParseMinutes(String(t[sr])) {
+                        firstStartMin = startMin
+                        break
+                    }
                 }
             }
 
-            // Find insertion point: last existing task whose start time is < this template's start
             let allLines = notesText.components(separatedBy: .newlines)
             var s2: Int? = nil, e2: Int? = nil
             for (i, line) in allLines.enumerated() {
@@ -1752,8 +1751,38 @@ struct DailyNotesView: View {
             } else {
                 afterNum = 0
             }
-
             processGroupedIntercept(lines: lines, firstGroupAfterNum: afterNum)
+        }
+
+        // Decide whether template[0] replaces the block or is intercept-merged.
+        if existingBlockIsEmpty() {
+            // No existing content — replace with template[0] as the base.
+            let baseLines = renumberedLines(taskLines(from: templates[0]), from: 1)
+            let combinedBase = ["START"] + baseLines + ["END"]
+            var currentLines = notesText.components(separatedBy: .newlines)
+            var sIdx: Int? = nil, eIdx: Int? = nil
+            for (i, line) in currentLines.enumerated() {
+                let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t == "START" && sIdx == nil { sIdx = i }
+                else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+            }
+            if let s = sIdx, let e = eIdx {
+                currentLines.replaceSubrange(s...e, with: combinedBase)
+            } else {
+                if currentLines.last?.isEmpty == false { currentLines.append("") }
+                currentLines.append(contentsOf: combinedBase)
+            }
+            notesText = currentLines.joined(separator: "\n")
+
+            // Intercept remaining templates.
+            for template in templates.dropFirst() {
+                interceptTemplate(template)
+            }
+        } else {
+            // Existing block has content — intercept-merge all templates.
+            for template in templates {
+                interceptTemplate(template)
+            }
         }
 
         editorKey = UUID()
@@ -1890,8 +1919,9 @@ struct DailyNotesView: View {
         }
 
         if let s = sIdx, let e = eIdx {
+            // Find insertion point and let coreIntercept compute the exact shift + wave
             let afterNum = taskNumBefore(minutes: startMin, in: allLines, startIdx: s, endIdx: e)
-            insertGeneratedTasksAfter(taskNum: afterNum, scheduleLines: newLines, shiftMinutes: tasks.count * minutesPerTask)
+            processGroupedIntercept(lines: newLines, firstGroupAfterNum: afterNum)
         } else {
             // No START/END block yet — create one
             var lines = notesText.components(separatedBy: .newlines)
@@ -3073,27 +3103,64 @@ struct DailyNotesView: View {
             // 0 → insert at start of block (right after START); >0 → after that task line
             let insertAt: Int = resolvedAfterNum == 0 ? (s + 1) : ((insertAfterLineIdx ?? (e - 1)) + 1)
 
-            // Calculate how much to shift tasks that follow the intercept
+            // If the intercept's start time falls inside the "after" task, push it forward
+            // so it starts exactly when that task ends — no truncation, no overlap.
+            var adjustedLines = strippedLines
+            if let afterIdx = insertAfterLineIdx {
+                let afterRaw = allLines[afterIdx].trimmingCharacters(in: .whitespacesAndNewlines)
+                let afterInner = (afterRaw.hasPrefix("~~") && afterRaw.hasSuffix("~~"))
+                    ? String(afterRaw.dropFirst(2).dropLast(2)) : afterRaw
+                if let am = timeRegex.firstMatch(in: afterInner, range: NSRange(afterInner.startIndex..., in: afterInner)),
+                   let er = Range(am.range(at: 2), in: afterInner),
+                   let afterEnd = interceptParseMinutes(String(afterInner[er])) {
+                    // Find first start time in the intercept lines
+                    var firstInterceptStart: Int? = nil
+                    for line in adjustedLines {
+                        let t = line.trimmingCharacters(in: .whitespaces)
+                        if let im = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                           let sr = Range(im.range(at: 1), in: t),
+                           let start = interceptParseMinutes(String(t[sr])) {
+                            firstInterceptStart = start; break
+                        }
+                    }
+                    if let firstStart = firstInterceptStart, firstStart < afterEnd {
+                        let delta = afterEnd - firstStart
+                        adjustedLines = adjustedLines.map { interceptShiftTimeLine($0, by: delta, regex: timeRegex) }
+                        interceptEndMin = interceptEndMin.map { $0 + delta }
+                    }
+                }
+            }
+
+            // Calculate how much to shift tasks that follow the intercept.
+            // Scan forward from insertAt to find the first non-empty line with a parseable time.
             var shiftAmount = 0
-            if let interceptEnd = interceptEndMin, insertAt <= e {
-                let candidateLine = allLines[insertAt].trimmingCharacters(in: .whitespacesAndNewlines)
-                if !candidateLine.isEmpty,
-                   let m = timeRegex.firstMatch(in: candidateLine, range: NSRange(candidateLine.startIndex..., in: candidateLine)),
-                   let sr = Range(m.range(at: 1), in: candidateLine),
-                   let firstStart = interceptParseMinutes(String(candidateLine[sr])) {
-                    shiftAmount = max(0, interceptEnd - firstStart)
+            if let interceptEnd = interceptEndMin {
+                var idx = insertAt
+                while idx < e {
+                    let cl = allLines[idx].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cl.isEmpty {
+                        let isStruck = cl.hasPrefix("~~") && cl.hasSuffix("~~")
+                        let inner = isStruck ? String(cl.dropFirst(2).dropLast(2)) : cl
+                        if let m = timeRegex.firstMatch(in: inner, range: NSRange(inner.startIndex..., in: inner)),
+                           let sr = Range(m.range(at: 1), in: inner),
+                           let firstStart = interceptParseMinutes(String(inner[sr])) {
+                            shiftAmount = max(0, interceptEnd - firstStart)
+                        }
+                        break
+                    }
+                    idx += 1
                 }
             }
 
             // Insert intercept lines
-            allLines.insert(contentsOf: strippedLines, at: insertAt)
+            allLines.insert(contentsOf: adjustedLines, at: insertAt)
 
             // Shift downstream tasks that are contiguous with the intercept block.
             // Stop as soon as a task's original start time is beyond the current wave end —
             // that gap means the intercept does not displace it.
             if shiftAmount > 0, let waveStart = interceptEndMin {
-                let newE = e + strippedLines.count
-                let shiftFrom = insertAt + strippedLines.count
+                let newE = e + adjustedLines.count
+                let shiftFrom = insertAt + adjustedLines.count
                 var waveEnd = waveStart
                 for i in shiftFrom..<newE {
                     let raw = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3401,7 +3468,7 @@ struct DailyNotesView: View {
         return false
     }
 
-    private func parseFormattedTaskItems() -> [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool)] {
+    private func parseFormattedTaskItems() -> [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool, isReward: Bool)] {
         let allLines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil
         var eIdx: Int? = nil
@@ -3412,7 +3479,7 @@ struct DailyNotesView: View {
         }
         guard let s = sIdx, let e = eIdx else { return [] }
 
-        var result: [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool)] = []
+        var result: [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool, isReward: Bool)] = []
         var prevEnd: Int? = nil
 
         for line in allLines[(s + 1)..<e] {
@@ -3422,16 +3489,19 @@ struct DailyNotesView: View {
             let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
             let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
 
+            let isReward = parseLine.contains(" [🎁]")
+            let parseLineClean = parseLine.replacingOccurrences(of: " [🎁]", with: "")
+
             // Extract task number from "N) ..." prefix
             var num: Int? = nil
-            if let parenIdx = parseLine.firstIndex(of: ")") {
-                let prefix = String(parseLine[parseLine.startIndex..<parenIdx])
+            if let parenIdx = parseLineClean.firstIndex(of: ")") {
+                let prefix = String(parseLineClean[parseLineClean.startIndex..<parenIdx])
                 num = Int(prefix.trimmingCharacters(in: .whitespaces))
             }
 
-            if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
+            if let entry = parseTimeEntrySequential(parseLineClean, previousEndMinutes: prevEnd) {
                 result.append((num: num, start: entry.startMinutes, end: entry.endMinutes,
-                               desc: entry.description, struck: isStruck, fixed: entry.isFixed))
+                               desc: entry.description, struck: isStruck, fixed: entry.isFixed, isReward: isReward))
                 prevEnd = entry.endMinutes
             }
         }
@@ -3457,6 +3527,41 @@ struct DailyNotesView: View {
             if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
                 if entry.startMinutes == startMin && entry.endMinutes == endMin && entry.description == desc {
                     lines[i] = isStruck ? parseLine : "~~\(trimmed)~~"
+                    break
+                }
+                prevEnd = entry.endMinutes
+            }
+        }
+        notesText = lines.joined(separator: "\n")
+        saveNotes()
+    }
+
+    private func toggleRewardTask(startMin: Int, endMin: Int, desc: String) {
+        var lines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return }
+        var prevEnd: Int? = nil
+        for i in (s + 1)..<e {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            let parseLineClean = parseLine.replacingOccurrences(of: " [🎁]", with: "")
+            if let entry = parseTimeEntrySequential(parseLineClean, previousEndMinutes: prevEnd) {
+                if entry.startMinutes == startMin && entry.endMinutes == endMin && entry.description == desc {
+                    let toggled: String
+                    if parseLine.contains(" [🎁]") {
+                        toggled = parseLine.replacingOccurrences(of: " [🎁]", with: "")
+                    } else {
+                        toggled = parseLine + " [🎁]"
+                    }
+                    lines[i] = isStruck ? "~~\(toggled)~~" : toggled
                     break
                 }
                 prevEnd = entry.endMinutes
@@ -3643,8 +3748,9 @@ struct DailyNotesView: View {
                 if !hideFinishedTasks || !task.struck {
                     taskDisplayRow(num: task.num, startMin: task.start, endMin: task.end,
                                    desc: task.desc, struck: task.struck, fixed: task.fixed,
-                                   nowMin: nowMin,
+                                   isReward: task.isReward, nowMin: nowMin,
                                    onToggleStrike: { toggleStrikeTask(startMin: task.start, endMin: task.end, desc: task.desc) },
+                                   onToggleReward: { toggleRewardTask(startMin: task.start, endMin: task.end, desc: task.desc) },
                                    onDelete: {
                                        pendingDeleteStart = task.start
                                        pendingDeleteEnd   = task.end
@@ -3682,21 +3788,35 @@ struct DailyNotesView: View {
 
     @ViewBuilder
     private func taskDisplayRow(num: Int?, startMin: Int, endMin: Int, desc: String,
-                                struck: Bool, fixed: Bool, nowMin: Int,
+                                struck: Bool, fixed: Bool, isReward: Bool = false, nowMin: Int,
                                 onToggleStrike: (() -> Void)? = nil,
+                                onToggleReward: (() -> Void)? = nil,
                                 onDelete: (() -> Void)? = nil) -> some View {
         let isCurrent = !struck && nowMin >= startMin && nowMin < endMin
         let isPastUnack = !struck && nowMin >= endMin
-        let accentColor: Color = struck ? .green : (isCurrent ? .blue : (isPastUnack ? .orange : .primary))
+        let isFutureReward = isReward && !struck && nowMin < startMin
+        let gold = Color(hue: 0.12, saturation: 0.9, brightness: 0.95)
+        let accentColor: Color = struck ? .green : (isReward && !isPastUnack ? gold : (isCurrent ? .blue : (isPastUnack ? .orange : .primary)))
         let duration = endMin - startMin
+
+        // Countdown text for future reward tasks
+        let countdownLabel: String? = {
+            guard isFutureReward else { return nil }
+            let mins = startMin - nowMin
+            let h = mins / 60, m = mins % 60
+            return h > 0 ? "in \(h)h \(m)m" : "in \(m)m"
+        }()
 
         HStack(spacing: 12) {
             // Number/status badge
             ZStack {
                 Circle()
-                    .fill(accentColor.opacity(struck ? 0.2 : (isCurrent ? 0.18 : 0.1)))
+                    .fill(accentColor.opacity(struck ? 0.2 : (isCurrent ? 0.18 : (isReward ? 0.22 : 0.1))))
                     .frame(width: 34, height: 34)
-                if let n = num {
+                if isReward && !struck {
+                    Text("🎁")
+                        .font(.system(size: 14))
+                } else if let n = num {
                     Text("\(n)")
                         .font(.caption.monospacedDigit().bold())
                         .foregroundColor(accentColor)
@@ -3716,15 +3836,29 @@ struct DailyNotesView: View {
                     }
                     Text(desc)
                         .font(.subheadline)
-                        .fontWeight(isCurrent ? .semibold : .regular)
+                        .fontWeight((isCurrent || isReward) ? .semibold : .regular)
                         .foregroundColor(struck ? .secondary : .primary)
                         .strikethrough(struck, color: .secondary)
                         .lineLimit(2)
                 }
-                Text("\(safeMinutesToTime(startMin)) – \(safeMinutesToTime(endMin))")
-                    .font(.caption)
-                    .foregroundColor(accentColor.opacity(0.85))
-                    .monospacedDigit()
+                HStack(spacing: 6) {
+                    Text("\(safeMinutesToTime(startMin)) – \(safeMinutesToTime(endMin))")
+                        .font(.caption)
+                        .foregroundColor(accentColor.opacity(0.85))
+                        .monospacedDigit()
+                    if isCurrent && isReward {
+                        Text("🎁 NOW")
+                            .font(.caption2.bold())
+                            .foregroundColor(gold)
+                    } else if let label = countdownLabel {
+                        Text(label)
+                            .font(.caption2.monospacedDigit().bold())
+                            .foregroundColor(gold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(gold.opacity(0.15), in: Capsule())
+                    }
+                }
             }
 
             Spacer()
@@ -3735,6 +3869,15 @@ struct DailyNotesView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 4)
                 .background(.secondary.opacity(0.1), in: Capsule())
+
+            if let onToggleReward {
+                Button(action: onToggleReward) {
+                    Image(systemName: isReward ? "gift.fill" : "gift")
+                        .font(.caption)
+                        .foregroundColor(isReward ? gold : .secondary.opacity(0.5))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
 
             if let onToggleStrike {
                 Button(action: onToggleStrike) {
@@ -3758,11 +3901,11 @@ struct DailyNotesView: View {
         .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(isCurrent ? Color.blue.opacity(0.07) : Color.secondary.opacity(0.05))
+                .fill(isReward && !struck ? gold.opacity(0.08) : (isCurrent ? Color.blue.opacity(0.07) : Color.secondary.opacity(0.05)))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(accentColor.opacity(isCurrent ? 0.45 : 0.15), lineWidth: 1)
+                .stroke(accentColor.opacity(isCurrent || (isReward && !struck) ? 0.45 : 0.15), lineWidth: isReward && !struck ? 1.5 : 1)
         )
     }
 
@@ -4171,8 +4314,10 @@ struct DailyNotesView: View {
             return
         }
 
-        // Find the line for task #taskNum
-        var insertAfterLine: Int = eIdx  // default: before END
+        // Find the line for task #taskNum.
+        // Default to eIdx - 1 so that insert(at: insertAfterLine + 1) = insert(at: eIdx),
+        // placing new tasks just before the END tag when taskNum is 0 or not found.
+        var insertAfterLine: Int = eIdx - 1
         for lineIdx in (sIdx + 1)..<eIdx {
             let line = allLines[lineIdx]
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4184,23 +4329,35 @@ struct DailyNotesView: View {
             }
         }
 
-        let newCount = scheduleLines.count
-        // Renumber generated lines to start from taskNum+1
-        let renumbered: [String] = scheduleLines.enumerated().map { (i, line) in
+        // If generated tasks start inside the "after" task, push them to start at its end.
+        var adjustedLines = scheduleLines
+        let afterRaw = allLines[insertAfterLine].trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterInner = (afterRaw.hasPrefix("~~") && afterRaw.hasSuffix("~~"))
+            ? String(afterRaw.dropFirst(2).dropLast(2)) : afterRaw
+        if let afterEntry = parseTimeEntry(afterInner) {
+            if let firstEntry = scheduleLines.compactMap({ parseTimeEntry($0.trimmingCharacters(in: .whitespacesAndNewlines)) }).first,
+               firstEntry.startMinutes < afterEntry.endMinutes {
+                let delta = afterEntry.endMinutes - firstEntry.startMinutes
+                let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+                if let regex = try? NSRegularExpression(pattern: timePattern) {
+                    adjustedLines = adjustedLines.map { interceptShiftTimeLine($0, by: delta, regex: regex) }
+                }
+            }
+        }
+
+        let newCount = adjustedLines.count
+        let renumbered: [String] = adjustedLines.enumerated().map { (i, line) in
             line.replacingOccurrences(of: #"^\d+\)\s*"#, with: "\(taskNum + 1 + i)) ", options: .regularExpression)
         }
 
-        // Insert generated lines after the found position
         allLines.insert(contentsOf: renumbered, at: insertAfterLine + 1)
 
-        // Renumber and shift lines that came after the insertion point.
-        // Wave: only shift tasks contiguous with the inserted block; stop at any gap.
         let shiftFrom = insertAfterLine + 1 + newCount
         let newEndIdx = eIdx + newCount
 
-        // Wave end = end time of the last generated task
+        // Wave end = end time of the last generated task (use adjusted times)
         var waveEnd: Int = 0
-        for line in scheduleLines.reversed() {
+        for line in adjustedLines.reversed() {
             if let entry = parseTimeEntry(line.trimmingCharacters(in: .whitespacesAndNewlines)) {
                 waveEnd = entry.endMinutes; break
             }
@@ -4310,6 +4467,7 @@ struct FocusModeView: View {
     @State private var showSwapSheetFocus = false
     @State private var focusSwapDefaults: (Int?, Int?) = (nil, nil)
     @State private var showCancelMenuFocus = false
+    @AppStorage("focusSidebar.showActiveOnly") private var showActiveOnly: Bool = false
 
     private var timeRemainingFormatted: String {
         let minutes = Int(timeRemaining) / 60
@@ -4644,6 +4802,14 @@ struct FocusModeView: View {
         }
     }
 
+    private var visibleEntries: [ScheduleEntry] {
+        guard showActiveOnly else { return scheduleEntries }
+        return scheduleEntries.filter { entry in
+            guard let em = entry.endMinutes else { return true }
+            return em > nowMinutes
+        }
+    }
+
     @ViewBuilder
     private var sidebarPanel: some View {
         HStack(spacing: 0) {
@@ -4677,11 +4843,28 @@ struct FocusModeView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 56)
-                .padding(.bottom, 12)
+                .padding(.bottom, 8)
+
+                // Active-only toggle
+                HStack {
+                    Toggle(isOn: $showActiveOnly) {
+                        Text("Active Only")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .toggleStyle(SwitchToggleStyle(tint: .cyan))
+                    .labelsHidden()
+                    Text("Active Only")
+                        .font(.caption)
+                        .foregroundColor(showActiveOnly ? .cyan : .secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+
                 Divider().background(Color.cyan.opacity(0.3))
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(scheduleEntries) { entry in
+                        ForEach(visibleEntries) { entry in
                             SidebarEntryRow(entry: entry, nowMinutes: nowMinutes, onDelete: deleteEntry)
                         }
                     }
@@ -4746,6 +4929,19 @@ private struct SidebarEntryRow: View {
     private var em: Int { entry.endMinutes ?? -1 }
     private var isPast: Bool    { em > 0 && em <= nowMinutes }
     private var isCurrent: Bool { sm >= 0 && em > 0 && nowMinutes >= sm && nowMinutes < em }
+    private var isReward: Bool  { entry.task?.contains("[🎁]") == true }
+    private var displayTask: String? {
+        entry.task?.replacingOccurrences(of: " [🎁]", with: "")
+    }
+    private var gold: Color { Color(hue: 0.12, saturation: 0.9, brightness: 0.95) }
+    private var isFutureReward: Bool { isReward && !entry.isStruck && nowMinutes < sm }
+
+    private var countdownLabel: String? {
+        guard isFutureReward, sm > 0 else { return nil }
+        let mins = sm - nowMinutes
+        let h = mins / 60, m = mins % 60
+        return h > 0 ? "in \(h)h \(m)m" : "in \(m)m"
+    }
 
     private func fmt(_ m: Int) -> String {
         let h = (m / 60) % 24, min = m % 60
@@ -4757,21 +4953,35 @@ private struct SidebarEntryRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Circle()
-                .fill(isCurrent ? Color.green : (isPast || entry.isStruck ? Color.red.opacity(0.5) : Color.indigo))
+                .fill(isReward && !isPast ? gold : (isCurrent ? Color.green : (isPast || entry.isStruck ? Color.red.opacity(0.5) : Color.indigo)))
                 .frame(width: 7, height: 7)
                 .padding(.top, 5)
             VStack(alignment: .leading, spacing: 2) {
-                if let task = entry.task {
-                    Text(task)
-                        .font(.subheadline)
-                        .fontWeight(isCurrent ? .semibold : .regular)
-                        .foregroundColor(isCurrent ? .white : (isPast || entry.isStruck) ? .red.opacity(0.7) : .cyan)
-                        .strikethrough(isPast || entry.isStruck, color: .red.opacity(0.7))
+                if let task = displayTask {
+                    HStack(spacing: 4) {
+                        if isReward { Text("🎁").font(.caption) }
+                        Text(task)
+                            .font(.subheadline)
+                            .fontWeight((isCurrent || isReward) ? .semibold : .regular)
+                            .foregroundColor(isReward && !isPast ? gold : (isCurrent ? .white : (isPast || entry.isStruck) ? .red.opacity(0.7) : .cyan))
+                            .strikethrough(isPast || entry.isStruck, color: .red.opacity(0.7))
+                    }
                 }
-                if sm >= 0 && em > 0 {
-                    Text("\(fmt(sm)) – \(fmt(em))")
-                        .font(.caption2)
-                        .foregroundColor(isCurrent ? .green : (isPast || entry.isStruck) ? .red.opacity(0.5) : .teal)
+                HStack(spacing: 6) {
+                    if sm >= 0 && em > 0 {
+                        Text("\(fmt(sm)) – \(fmt(em))")
+                            .font(.caption2)
+                            .foregroundColor(isReward && !isPast ? gold.opacity(0.8) : (isCurrent ? .green : (isPast || entry.isStruck) ? .red.opacity(0.5) : .teal))
+                    }
+                    if isCurrent && isReward {
+                        Text("🎁 NOW")
+                            .font(.caption2.bold())
+                            .foregroundColor(gold)
+                    } else if let label = countdownLabel {
+                        Text(label)
+                            .font(.caption2.monospacedDigit().bold())
+                            .foregroundColor(gold)
+                    }
                 }
             }
             Spacer()
@@ -4784,7 +4994,7 @@ private struct SidebarEntryRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(isCurrent ? Color.green.opacity(0.08) : Color.clear)
+        .background(isReward && !isPast ? gold.opacity(0.06) : (isCurrent ? Color.green.opacity(0.08) : Color.clear))
     }
 }
 

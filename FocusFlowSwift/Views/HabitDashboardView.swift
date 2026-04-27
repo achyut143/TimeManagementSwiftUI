@@ -9,6 +9,8 @@ struct HabitDashboardView: View {
     @State private var selectedHabit = ""
     @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate = Date()
+    @State private var pendingFromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var pendingToDate = Date()
     @State private var filterMode = "all"
     
     private static let startDateKey = "HabitDashboardStartDate"
@@ -17,6 +19,8 @@ struct HabitDashboardView: View {
     @State private var showArchivedHabits = false
     @State private var habitToDelete = ""
     @State private var searchText = ""
+    @State private var appliedSearch = ""
+    @State private var cachedTabStats: [String: HabitStats] = [:]
     @State private var showEventDetail = false
     @State private var selectedEventDate: Date?
     @State private var selectedEventDay: EventDay?
@@ -38,12 +42,26 @@ struct HabitDashboardView: View {
             }
             
             dateFilters
-                HStack {
-        Image(systemName: "magnifyingglass")
-        TextField("Search habits…", text: $searchText)
-          .textFieldStyle(.roundedBorder)
-      }
-      .padding(.horizontal)
+                HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                TextField("Search habits…", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    appliedSearch = searchText
+                } label: {
+                    Text("Search")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                }
+                if !appliedSearch.isEmpty {
+                    Button { searchText = ""; appliedSearch = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal)
             
     if filteredHabitNames.isEmpty {
         Text("No habits match “\(searchText)”")
@@ -73,42 +91,18 @@ struct HabitDashboardView: View {
         }
         .navigationTitle("Habit Tracker")
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Test Event") {
-                    // Create a test event for today
-                    let testEvent = EventDay(
-                        date: Date(),
-                        isFullDay: true,
-                        isMorning: false,
-                        isAfternoon: true,
-                        isEvening: false,
-                        events: ["Test Event"]
-                    )
-                    modelContext.insert(testEvent)
-                    try? modelContext.save()
-                    print("🔍 Test event created for today")
-                }
             }
-        }
     .onAppear {
-      // Load saved start date and set end date to today
       loadStartDate()
-      
-      // Debug: Check eventDays loading
-      print("🔍 HabitDashboard onAppear - EventDays count: \(eventDays.count)")
-      for eventDay in eventDays {
-          let formatter = DateFormatter()
-          formatter.dateStyle = .short
-          print("🔍 EventDay: \(formatter.string(from: eventDay.date)), hasAnyEvent: \(eventDay.hasAnyEvent), types: \(eventDay.eventTypes)")
-      }
-      
-      // Use initialHabit if provided, otherwise use first available
       if let initialHabit = initialHabit, filteredHabitNames.contains(initialHabit) {
         selectedHabit = initialHabit
       } else if selectedHabit.isEmpty, let first = filteredHabitNames.first {
         selectedHabit = first
       }
     }
+    .onChange(of: fromDate) { _, _ in recomputeTabStats() }
+    .onChange(of: toDate) { _, _ in recomputeTabStats() }
+    .onChange(of: tasks.count) { _, _ in recomputeTabStats() }
     .onChange(of: filteredHabitNames) { _, newList in
       // Reset selectedHabit if it was filtered out
       if !newList.contains(selectedHabit) {
@@ -166,17 +160,22 @@ struct HabitDashboardView: View {
     
     private var dateFilters: some View {
         VStack(spacing: 8) {
-            DatePicker("Start Date", selection: $fromDate, displayedComponents: .date)
+            DatePicker("Start Date", selection: $pendingFromDate, displayedComponents: .date)
                 .datePickerStyle(.compact)
-                .onChange(of: fromDate) { _, newValue in
-                    saveStartDate()
-                }
-            
-            DatePicker("End Date", selection: $toDate, displayedComponents: .date)
+            DatePicker("End Date", selection: $pendingToDate, displayedComponents: .date)
                 .datePickerStyle(.compact)
-                .onChange(of: toDate) { _, newValue in
-                    saveStartDate()
-                }
+            Button {
+                fromDate = pendingFromDate
+                toDate = pendingToDate
+                saveStartDate()
+            } label: {
+                Text("Apply Dates")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.indigo, in: RoundedRectangle(cornerRadius: 10))
+            }
         }
         .padding(.horizontal)
     }
@@ -188,9 +187,19 @@ struct HabitDashboardView: View {
     private func loadStartDate() {
         if let savedDate = UserDefaults.standard.object(forKey: Self.startDateKey) as? Date {
             fromDate = savedDate
+            pendingFromDate = savedDate
         }
-        // Set toDate to today by default
         toDate = Date()
+        pendingToDate = Date()
+        recomputeTabStats()
+    }
+
+    private func recomputeTabStats() {
+        var result: [String: HabitStats] = [:]
+        for name in filteredHabitNames {
+            result[name] = calculateStatsForHabit(name)
+        }
+        cachedTabStats = result
     }
     
    private var filteredHabitNames: [String] {
@@ -207,8 +216,7 @@ struct HabitDashboardView: View {
           default:         return true
         }
       }
-      .filter { searchText.isEmpty
-               || $0.localizedCaseInsensitiveContains(searchText) }
+      .filter { appliedSearch.isEmpty || $0.localizedCaseInsensitiveContains(appliedSearch) }
   }
 
   private var habitTabs: some View {
@@ -226,7 +234,7 @@ struct HabitDashboardView: View {
  
     
     private func habitTabView(habitName: String) -> some View {
-        let stats = calculateStatsForHabit(habitName)
+        let stats = cachedTabStats[habitName] ?? calculateStatsForHabit(habitName)
         let isSelected = selectedHabit == habitName
         
         return VStack(spacing: 4) {
@@ -289,21 +297,6 @@ struct HabitDashboardView: View {
         let status = getStatusForDay(date: date)
         let eventDay = eventDays.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
         let eventTypes = eventDay?.eventTypes ?? []
-        
-        // Debug: Print detailed event information
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .short
-        if let eventDay = eventDay {
-            print("🔍 Date: \(dateFormatter.string(from: date))")
-            print("   - hasAnyEvent: \(eventDay.hasAnyEvent)")
-            print("   - isFullDay: \(eventDay.isFullDay)")
-            print("   - isMorning: \(eventDay.isMorning)")
-            print("   - isAfternoon: \(eventDay.isAfternoon)")
-            print("   - isEvening: \(eventDay.isEvening)")
-            print("   - events count: \(eventDay.events.count)")
-            print("   - eventTypes count: \(eventTypes.count)")
-            print("   - eventTypes: \(eventTypes.map { $0.rawValue })")
-        }
         
         return ZStack {
             // The habit cell content
@@ -443,10 +436,13 @@ struct HabitDashboardView: View {
     }
     
     private var overallStreakSummary: some View {
-        let allStats = filteredHabitNames.map { calculateStatsForHabit($0) }
-        let totalCurrentStreak = allStats.reduce(0) { $0 + $1.currentStreak }
-        let maxStreakOverall = allStats.map { $0.maxStreak }.max() ?? 0
-        let activeStreaks = allStats.filter { $0.currentStreak > 0 }.count
+        let allStats = filteredHabitNames.compactMap { cachedTabStats[$0] }
+        var totalCurrentStreak = 0, maxStreakOverall = 0, activeStreaks = 0
+        for s in allStats {
+            totalCurrentStreak += s.currentStreak
+            if s.maxStreak > maxStreakOverall { maxStreakOverall = s.maxStreak }
+            if s.currentStreak > 0 { activeStreaks += 1 }
+        }
         
         return HStack(spacing: 20) {
             VStack {

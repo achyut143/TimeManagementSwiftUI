@@ -12,8 +12,9 @@ struct ScheduleTemplatesView: View {
     var onApply: ([ScheduleTemplate]) -> Void
 
     @State private var searchText: String = ""
-    @State private var selectedNames: Set<String> = []
+    @State private var selectedNames: [String] = []
     @State private var editingTemplate: ScheduleTemplate? = nil
+    @State private var showNewTemplate = false
     @State private var deletePending: ScheduleTemplate? = nil
     @State private var showDeleteConfirm = false
 
@@ -23,8 +24,8 @@ struct ScheduleTemplatesView: View {
     }
 
     private var selectedTemplates: [ScheduleTemplate] {
-        // Preserve the visual order (most recently updated first)
-        templates.filter { selectedNames.contains($0.name) }
+        // Preserve tap order
+        selectedNames.compactMap { name in templates.first { $0.name == name } }
     }
 
     var body: some View {
@@ -52,11 +53,19 @@ struct ScheduleTemplatesView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
+                    HStack(spacing: 16) {
+                        Button { showNewTemplate = true } label: {
+                            Image(systemName: "plus")
+                        }
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
             .sheet(item: $editingTemplate) { template in
                 TemplateEditorView(template: template)
+            }
+            .sheet(isPresented: $showNewTemplate) {
+                NewTemplateView()
             }
             .confirmationDialog(
                 "Delete \"\(deletePending?.name ?? "")\"?",
@@ -65,7 +74,7 @@ struct ScheduleTemplatesView: View {
             ) {
                 Button("Delete", role: .destructive) {
                     if let t = deletePending {
-                        selectedNames.remove(t.name)
+                        selectedNames.removeAll { $0 == t.name }
                         modelContext.delete(t)
                         try? modelContext.save()
                     }
@@ -101,7 +110,7 @@ struct ScheduleTemplatesView: View {
                 ForEach(filtered) { template in
                     TemplateRowView(
                         template: template,
-                        isSelected: selectedNames.contains(template.name),
+                        selectionIndex: selectedNames.firstIndex(of: template.name).map { $0 + 1 },
                         onToggleSelect: { toggle(template) },
                         onApply: {
                             onApply([template])
@@ -143,14 +152,14 @@ struct ScheduleTemplatesView: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
         .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.spring(response: 0.3), value: selectedNames.isEmpty)
+        .animation(.spring(response: 0.3), value: selectedNames.count == 0)
     }
 
     private func toggle(_ template: ScheduleTemplate) {
-        if selectedNames.contains(template.name) {
-            selectedNames.remove(template.name)
+        if let idx = selectedNames.firstIndex(of: template.name) {
+            selectedNames.remove(at: idx)
         } else {
-            selectedNames.insert(template.name)
+            selectedNames.append(template.name)
         }
     }
 }
@@ -159,11 +168,14 @@ struct ScheduleTemplatesView: View {
 
 private struct TemplateRowView: View {
     let template: ScheduleTemplate
-    let isSelected: Bool
+    /// 1-based selection order, nil if not selected
+    let selectionIndex: Int?
     var onToggleSelect: () -> Void
     var onApply: () -> Void
     var onEdit: () -> Void
     var onDelete: () -> Void
+
+    private var isSelected: Bool { selectionIndex != nil }
 
     @State private var isExpanded = false
 
@@ -180,17 +192,28 @@ private struct TemplateRowView: View {
         VStack(alignment: .leading, spacing: 8) {
             // Header row
             HStack(spacing: 10) {
-                // Selection checkmark
+                // Selection order badge
                 Button(action: onToggleSelect) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(isSelected ? .indigo : .secondary.opacity(0.4))
-                        .font(.title3)
+                    ZStack {
+                        Circle()
+                            .fill(isSelected ? Color.indigo : Color.clear)
+                            .overlay(Circle().stroke(isSelected ? Color.indigo : Color.secondary.opacity(0.4), lineWidth: 1.5))
+                            .frame(width: 26, height: 26)
+                        if let idx = selectionIndex {
+                            Text("\(idx)")
+                                .font(.caption2).fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    }
                 }
                 .buttonStyle(PlainButtonStyle())
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(template.name)
-                        .font(.subheadline).fontWeight(.semibold)
+                    HStack(spacing: 4) {
+                        if template.isReward { Text("🎁").font(.caption) }
+                        Text(template.name)
+                            .font(.subheadline).fontWeight(.semibold)
+                    }
                     Text("\(previewLines.count) task\(previewLines.count == 1 ? "" : "s") · saved \(template.updatedAt.formatted(.relative(presentation: .named)))")
                         .font(.caption2).foregroundColor(.secondary)
                 }
@@ -265,6 +288,7 @@ struct TemplateEditorView: View {
 
     @State private var name: String = ""
     @State private var content: String = ""
+    @State private var isReward: Bool = false
     @State private var saveError: String? = nil
 
     var body: some View {
@@ -272,6 +296,18 @@ struct TemplateEditorView: View {
             Form {
                 Section("Template Name") {
                     TextField("e.g. Morning Routine", text: $name)
+                }
+
+                Section {
+                    Toggle(isOn: $isReward) {
+                        Label("Reward Template", systemImage: "gift.fill")
+                            .foregroundColor(isReward ? Color(hue: 0.12, saturation: 0.9, brightness: 0.85) : .primary)
+                    }
+                    .tint(Color(hue: 0.12, saturation: 0.9, brightness: 0.85))
+                    if isReward {
+                        Text("All tasks in this template will be marked as rewards (🎁) when applied.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                 }
 
                 Section("Schedule Content") {
@@ -301,6 +337,7 @@ struct TemplateEditorView: View {
             .onAppear {
                 name = template.name
                 content = template.content
+                isReward = template.isReward
             }
         }
     }
@@ -319,7 +356,7 @@ struct TemplateEditorView: View {
             saveError = "Content must contain START and END markers."
             return
         }
-        template.update(name: trimmedName, content: content)
+        template.update(name: trimmedName, content: content, isReward: isReward)
         try? modelContext.save()
         dismiss()
     }
@@ -377,6 +414,86 @@ struct SaveTemplateSheet: View {
             return
         }
         let template = ScheduleTemplate(name: trimmedName, content: scheduleContent)
+        modelContext.insert(template)
+        try? modelContext.save()
+        dismiss()
+    }
+}
+
+// MARK: - New Template Sheet
+
+struct NewTemplateView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String = ""
+    @State private var content: String = "START\n\nEND"
+    @State private var isReward: Bool = false
+    @State private var saveError: String? = nil
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Template Name") {
+                    TextField("e.g. Morning Routine", text: $name)
+                }
+
+                Section {
+                    Toggle(isOn: $isReward) {
+                        Label("Reward Template", systemImage: "gift.fill")
+                            .foregroundColor(isReward ? Color(hue: 0.12, saturation: 0.9, brightness: 0.85) : .primary)
+                    }
+                    .tint(Color(hue: 0.12, saturation: 0.9, brightness: 0.85))
+                    if isReward {
+                        Text("All tasks in this template will be marked as rewards (🎁) when applied.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Schedule Content") {
+                    Text("Write your schedule between the START and END markers.")
+                        .font(.caption).foregroundColor(.secondary)
+                    TextEditor(text: $content)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 300)
+                }
+
+                if let error = saveError {
+                    Section {
+                        Text(error).foregroundColor(.red).font(.caption)
+                    }
+                }
+            }
+            .navigationTitle("New Template")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") { save() }
+                        .fontWeight(.semibold)
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            saveError = "Please enter a name."
+            return
+        }
+        let hasStart = content.components(separatedBy: .newlines)
+            .contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "START" }
+        let hasEnd = content.components(separatedBy: .newlines)
+            .contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "END" }
+        guard hasStart && hasEnd else {
+            saveError = "Content must contain START and END markers."
+            return
+        }
+        let template = ScheduleTemplate(name: trimmedName, content: content, isReward: isReward)
         modelContext.insert(template)
         try? modelContext.save()
         dismiss()

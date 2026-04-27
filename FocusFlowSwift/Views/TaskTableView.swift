@@ -15,8 +15,11 @@ struct TaskTableView: View {
         }
     }
     @State private var searchText = ""
+    @State private var appliedSearch = ""
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var endDate = Date()
+    @State private var pendingStartDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+    @State private var pendingEndDate = Date()
     @State private var showOnlyWithNotes = false
     @State private var showOnlyWithAttachments = false
     @State private var selectedTags: Set<String> = []
@@ -93,7 +96,7 @@ struct TaskTableView: View {
         return tasks.filter { task in
             guard let taskDate = task.date else { return false }
             guard taskDate >= rangeStart && taskDate < rangeEnd else { return false }
-            guard searchText.isEmpty || task.title.localizedCaseInsensitiveContains(searchText) else { return false }
+            guard appliedSearch.isEmpty || task.title.localizedCaseInsensitiveContains(appliedSearch) else { return false }
             guard !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty) else { return false }
             guard !showOnlyWithAttachments || (task.attachments != nil && !task.attachments!.isEmpty) else { return false }
             guard taskMatchesStatus(completed: task.completed, notCompleted: task.notCompleted) else { return false }
@@ -305,10 +308,23 @@ struct TaskTableView: View {
     
     private var filterSection: some View {
         VStack(spacing: 12) {
-            HStack {
+            HStack(spacing: 8) {
                 TextField("Search tasks...", text: $searchText)
                     .textFieldStyle(.roundedBorder)
-
+                Button {
+                    appliedSearch = searchText
+                } label: {
+                    Text("Search")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                }
+                if !appliedSearch.isEmpty {
+                    Button { searchText = ""; appliedSearch = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    }
+                }
                 Toggle(isOn: $showTodayOnly) {
                     Label("Today", systemImage: "calendar.badge.clock")
                         .font(.subheadline)
@@ -320,8 +336,18 @@ struct TaskTableView: View {
             }
 
             HStack {
-                DatePicker("From", selection: $startDate, displayedComponents: .date)
-                DatePicker("To", selection: $endDate, displayedComponents: .date)
+                DatePicker("From", selection: $pendingStartDate, displayedComponents: .date)
+                DatePicker("To", selection: $pendingEndDate, displayedComponents: .date)
+                Button {
+                    startDate = pendingStartDate
+                    endDate = pendingEndDate
+                } label: {
+                    Text("Apply")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                }
             }
             .disabled(showTodayOnly)
             .opacity(showTodayOnly ? 0.4 : 1)

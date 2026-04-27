@@ -18,6 +18,7 @@ struct RewardsView: View {
     @State private var selectedFilter: RewardStatus? = nil
     @State private var showGuiltOnly = false
     @State private var searchText = ""
+    @State private var appliedSearch = ""
     @State private var currentPage = 0
     @State private var showChart = false
     @State private var rewardToDelete: Reward? = nil
@@ -38,10 +39,10 @@ struct RewardsView: View {
         }
         
         // Apply search filter
-        if !searchText.isEmpty {
-            filtered = filtered.filter { 
-                $0.name.localizedCaseInsensitiveContains(searchText) ||
-                ($0.rewardDescription?.localizedCaseInsensitiveContains(searchText) ?? false)
+        if !appliedSearch.isEmpty {
+            filtered = filtered.filter {
+                $0.name.localizedCaseInsensitiveContains(appliedSearch) ||
+                ($0.rewardDescription?.localizedCaseInsensitiveContains(appliedSearch) ?? false)
             }
         }
         
@@ -64,9 +65,30 @@ struct RewardsView: View {
         VStack(spacing: 0) {
             // Filter Section
             VStack(spacing: 12) {
-                TextField("Search rewards...", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .padding(.horizontal)
+                HStack(spacing: 8) {
+                    TextField("Search rewards...", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                    Button {
+                        appliedSearch = searchText
+                        currentPage = 0
+                    } label: {
+                        Text("Search")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    if !appliedSearch.isEmpty {
+                        Button {
+                            searchText = ""
+                            appliedSearch = ""
+                            currentPage = 0
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal)
                 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {

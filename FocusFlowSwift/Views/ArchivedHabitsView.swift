@@ -5,6 +5,7 @@ struct ArchivedHabitsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ArchivedHabit.archivedDate, order: .reverse) private var archivedHabits: [ArchivedHabit]
     @State private var searchText = ""
+    @State private var appliedSearch = ""
     @State private var selectedHabit: ArchivedHabit?
     @State private var showingDetail = false
     @State private var showingDeleteAllAlert = false
@@ -12,19 +13,45 @@ struct ArchivedHabitsView: View {
     @State private var showingDeleteConfirmation = false
     
     var filteredHabits: [ArchivedHabit] {
-        if searchText.isEmpty {
+        if appliedSearch.isEmpty {
             return archivedHabits
         } else {
-            return archivedHabits.filter { 
-                $0.habitName.localizedCaseInsensitiveContains(searchText) ||
-                $0.habitDescription.localizedCaseInsensitiveContains(searchText)
+            return archivedHabits.filter {
+                $0.habitName.localizedCaseInsensitiveContains(appliedSearch) ||
+                $0.habitDescription.localizedCaseInsensitiveContains(appliedSearch)
             }
         }
     }
     
     var body: some View {
         NavigationView {
-            VStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    HStack {
+                        Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                        TextField("Search archived habits...", text: $searchText).textFieldStyle(.plain)
+                        if !searchText.isEmpty {
+                            Button { searchText = ""; appliedSearch = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding(8)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10))
+
+                    Button {
+                        appliedSearch = searchText
+                    } label: {
+                        Text("Search")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Color.indigo, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
                 if filteredHabits.isEmpty {
                     emptyStateView
                 } else {
@@ -32,7 +59,6 @@ struct ArchivedHabitsView: View {
                 }
             }
             .navigationTitle("Archived Habits")
-            .searchable(text: $searchText, prompt: "Search archived habits...")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {

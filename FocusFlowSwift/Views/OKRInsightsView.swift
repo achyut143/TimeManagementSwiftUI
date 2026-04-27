@@ -200,30 +200,33 @@ struct OKREditSheet: View {
     }
 }
 
-// MARK: - Insights Section
+// MARK: - Chat Message Model
+
+struct ChatMessage: Identifiable {
+    enum Role { case user, assistant }
+    let id = UUID()
+    let role: Role
+    let text: String
+}
+
+// MARK: - Insights Section (Chat)
 
 struct InsightsSection: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var allTasks: [Task]
     @Query private var okrs: [TaskOKR]
-    @Query private var savedInsights: [TaskInsight]
 
-    /// Empty set = all tasks. Non-empty = only the selected task keys.
     @State private var selectedTaskKeys: Set<String> = []
     @State private var showTaskPicker = false
     @State private var fromDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var toDate: Date = Date()
-    @State private var insightCountText: String = "20"
-    @State private var isGenerating = false
+    @State private var messages: [ChatMessage] = []
+    @State private var inputText: String = ""
+    @State private var isSending = false
     @State private var errorMessage: String? = nil
-    @FocusState private var countFieldFocused: Bool
+    @FocusState private var inputFocused: Bool
 
     private var items: [RepeatTaskItem] { uniqueRepeatItems(from: allTasks) }
-
-    /// Stable cache key: "all" or sorted keys joined by "|"
-    private var cacheKey: String {
-        selectedTaskKeys.isEmpty ? "all" : selectedTaskKeys.sorted().joined(separator: "|")
-    }
 
     private var taskSelectionLabel: String {
         if selectedTaskKeys.isEmpty { return "All Tasks" }
@@ -232,273 +235,221 @@ struct InsightsSection: View {
         return "\(selectedTaskKeys.count) Habits"
     }
 
-    private var currentInsight: TaskInsight? {
-        savedInsights.first { $0.matches(taskTitle: cacheKey, fromDate: fromDate, toDate: toDate) }
-    }
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                configCard
-                generateButton
-                if let error = errorMessage {
-                    errorCard(error)
-                }
-                if let insight = currentInsight {
-                    insightsCard(insight)
-                } else if !isGenerating {
-                    placeholderCard
+        VStack(spacing: 0) {
+            configCard
+            Divider()
+
+            if messages.isEmpty {
+                placeholderView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(messages) { msg in
+                                ChatBubbleView(message: msg)
+                                    .id(msg.id)
+                            }
+                            if isSending {
+                                TypingIndicatorView()
+                                    .id("typing")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal)
+                            }
+                        }
+                        .padding(.vertical, 12)
+                    }
+                    .onChange(of: messages.count) { _, _ in
+                        withAnimation { proxy.scrollTo(messages.last?.id) }
+                    }
+                    .onChange(of: isSending) { _, sending in
+                        if sending { withAnimation { proxy.scrollTo("typing") } }
+                    }
                 }
             }
-            .padding(.bottom, 32)
+
+            if let error = errorMessage {
+                errorBanner(error)
+            }
+
+            inputBar
         }
     }
 
     // MARK: Config card
 
     private var configCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Configure")
-                .font(.caption).fontWeight(.semibold)
-                .foregroundColor(.secondary)
-                .textCase(.uppercase)
-
-            // Task multi-select
-            Button { showTaskPicker = true } label: {
-                HStack {
-                    Text("Habits")
-                        .font(.subheadline)
-                        .foregroundColor(.primary)
-                    Spacer()
-                    Text(taskSelectionLabel)
-                        .font(.subheadline)
-                        .foregroundColor(.indigo)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(.plain)
-            .onChange(of: selectedTaskKeys) { _, _ in errorMessage = nil }
-            .sheet(isPresented: $showTaskPicker) {
-                TaskPickerSheet(items: items, selectedKeys: $selectedTaskKeys)
-            }
-
-            // Date range
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                DatePicker("From", selection: $fromDate, displayedComponents: .date)
-                    .datePickerStyle(.compact)
-                    .onChange(of: fromDate) { _, _ in errorMessage = nil }
-                Divider().frame(height: 20)
-                DatePicker("To", selection: $toDate, displayedComponents: .date)
-                    .datePickerStyle(.compact)
-                    .onChange(of: toDate) { _, _ in errorMessage = nil }
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            // Insight count
-            HStack {
-                Text("Insights to generate")
-                    .font(.subheadline)
+                Text("Context")
+                    .font(.caption).fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
                 Spacer()
-                TextField("20", text: $insightCountText)
-                    .keyboardType(.numberPad)
-                    .multilineTextAlignment(.trailing)
-                    .focused($countFieldFocused)
-                    .toolbar {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { countFieldFocused = false }
-                                .fontWeight(.semibold)
-                        }
+                if !messages.isEmpty {
+                    Button {
+                        messages = []
+                        errorMessage = nil
+                    } label: {
+                        Label("Clear Chat", systemImage: "trash")
+                            .font(.caption)
+                            .foregroundColor(.red.opacity(0.8))
                     }
-                    .frame(width: 56)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Color(.systemGray6))
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 10) {
+                // Task picker
+                Button { showTaskPicker = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption2)
+                        Text(taskSelectionLabel)
+                            .font(.subheadline)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Color.indigo.opacity(0.1))
+                    .foregroundColor(.indigo)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .padding()
-    }
-
-    // MARK: Generate button
-
-    private var generateButton: some View {
-        Button(action: generate) {
-            HStack(spacing: 8) {
-                if isGenerating {
-                    ProgressView().tint(.white)
-                } else {
-                    Image(systemName: currentInsight == nil ? "sparkles" : "arrow.clockwise")
                 }
-                Text(isGenerating ? "Generating…" :
-                     currentInsight == nil ? "Generate Insights" : "Generate New Insights")
-                    .fontWeight(.semibold)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(isGenerating ? Color.indigo.opacity(0.6) : Color.indigo)
-            .foregroundColor(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-        .disabled(isGenerating)
-        .padding(.horizontal)
-        .padding(.bottom, 8)
-    }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showTaskPicker) {
+                    TaskPickerSheet(items: items, selectedKeys: $selectedTaskKeys)
+                }
 
-    // MARK: Error card
-
-    private func errorCard(_ message: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
-            Text(message).font(.caption).foregroundColor(.primary)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal)
-        .padding(.bottom, 8)
-    }
-
-    // MARK: Insights card
-
-    private func insightsCard(_ insight: TaskInsight) -> some View {
-        let all = insight.insights
-        let observations = all.filter { !$0.hasPrefix("→ ") }
-        let improvements = all.filter { $0.hasPrefix("→ ") }
-                               .map { String($0.dropFirst(2)) } // strip "→ "
-
-        return VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("\(all.count) total · \(observations.count) insights · \(improvements.count) improvements")
-                    .font(.caption).foregroundColor(.secondary)
                 Spacer()
-                Text("Generated \(insight.generatedAt.formatted(.relative(presentation: .named)))")
-                    .font(.caption2).foregroundColor(.secondary)
-            }
 
-            if !observations.isEmpty {
-                insightGroup(title: "Insights", icon: "chart.bar.fill", color: .indigo, lines: observations)
-            }
-            if !improvements.isEmpty {
-                insightGroup(title: "Improvements", icon: "arrow.up.right.circle.fill", color: .green, lines: improvements)
+                DatePicker("", selection: $fromDate, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .labelsHidden()
+                Text("–").foregroundColor(.secondary)
+                DatePicker("", selection: $toDate, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .labelsHidden()
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.04), radius: 4, y: 2)
-        .padding(.horizontal)
+        .padding(.horizontal).padding(.vertical, 10)
+        .background(Color(.systemGroupedBackground))
     }
 
-    @ViewBuilder
-    private func insightGroup(title: String, icon: String, color: Color, lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).foregroundColor(color).font(.caption)
-                Text(title)
-                    .font(.caption).fontWeight(.semibold).foregroundColor(color).textCase(.uppercase)
-            }
-            ForEach(Array(lines.enumerated()), id: \.offset) { idx, line in
-                HStack(alignment: .top, spacing: 10) {
-                    Text("\(idx + 1)")
-                        .font(.caption2).fontWeight(.bold)
-                        .foregroundColor(color.opacity(0.7))
-                        .frame(width: 20, alignment: .trailing)
-                        .padding(.top, 2)
-                    Text(line)
-                        .font(.subheadline)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.vertical, 3)
-                if idx < lines.count - 1 { Divider() }
-            }
-        }
-        .padding(12)
-        .background(color.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
+    // MARK: Placeholder
 
-    // MARK: Placeholder card
-
-    private var placeholderCard: some View {
-        VStack(spacing: 12) {
+    private var placeholderView: some View {
+        VStack(spacing: 14) {
             Image(systemName: "sparkles")
                 .font(.system(size: 44))
                 .foregroundColor(.indigo.opacity(0.3))
-            Text("No Insights Yet")
+            Text("Ask About Your Habits")
                 .font(.title3).fontWeight(.semibold)
-            Text("Select a task and date range, then tap Generate Insights.")
+            Text("Ask anything — completion trends, streaks, what to improve, or comparisons across habits.")
                 .font(.subheadline).foregroundColor(.secondary)
-                .multilineTextAlignment(.center).padding(.horizontal, 32)
+                .multilineTextAlignment(.center).padding(.horizontal, 36)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(["What's my best streak this month?",
+                         "Which habit do I skip most often?",
+                         "How are my habits correlated?"], id: \.self) { suggestion in
+                    Button {
+                        inputText = suggestion
+                        send()
+                    } label: {
+                        HStack {
+                            Image(systemName: "sparkle").font(.caption2)
+                            Text(suggestion).font(.subheadline)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.indigo.opacity(0.25), lineWidth: 1))
+                        .foregroundColor(.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 8)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding()
     }
 
-    // MARK: Generate action
+    // MARK: Error banner
 
-    private func generate() {
-        let count = max(1, min(200, Int(insightCountText.trimmingCharacters(in: .whitespaces)) ?? 20))
-        insightCountText = "\(count)"
-        isGenerating = true
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+            Text(message).font(.caption).foregroundColor(.primary)
+            Spacer()
+            Button { errorMessage = nil } label: {
+                Image(systemName: "xmark").font(.caption2).foregroundColor(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12).padding(.bottom, 4)
+    }
+
+    // MARK: Input bar
+
+    private var inputBar: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Ask about your habits…", text: $inputText, axis: .vertical)
+                .lineLimit(1...5)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 22))
+                .focused($inputFocused)
+
+            Button(action: send) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 34))
+                    .foregroundColor(canSend ? .indigo : .secondary.opacity(0.4))
+            }
+            .disabled(!canSend)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color(.systemBackground))
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private var canSend: Bool {
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+    }
+
+    // MARK: Send action
+
+    private func send() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        inputText = ""
         errorMessage = nil
+
+        let userMsg = ChatMessage(role: .user, text: text)
+        messages.append(userMsg)
+        isSending = true
 
         let context = buildContext()
         let apiKey = Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String ?? ""
-        let taskKeySnapshot = cacheKey
-        let fromSnapshot = fromDate
-        let toSnapshot = toDate
-        // Capture model context explicitly so the async closure uses the live reference,
-        // not a potentially stale copy from the captured struct.
-        let mc = modelContext
+        let history = messages
 
         _Concurrency.Task {
             do {
-                let selectedCount = selectedTaskKeys.isEmpty ? items.count : selectedTaskKeys.count
-                let results = try await InsightGeneratorService.generate(
-                    context: context,
-                    count: count,
-                    apiKey: apiKey,
-                    isMultiHabit: selectedCount > 1
+                let reply = try await InsightGeneratorService.chat(
+                    systemContext: context,
+                    messages: history,
+                    apiKey: apiKey
                 )
                 await MainActor.run {
-                    do {
-                        // Check for an existing record for the same task + date range
-                        let existingKey = taskKeySnapshot.lowercased().trimmingCharacters(in: .whitespaces)
-                        let fromDay = Calendar.current.startOfDay(for: fromSnapshot)
-                        let toDay   = Calendar.current.startOfDay(for: toSnapshot)
-                        let existing = savedInsights.first {
-                            $0.taskTitle == existingKey
-                            && Calendar.current.isDate($0.fromDate, inSameDayAs: fromDay)
-                            && Calendar.current.isDate($0.toDate, inSameDayAs: toDay)
-                        }
-                        if let existing {
-                            existing.update(insights: results, insightCount: count)
-                        } else {
-                            let record = TaskInsight(taskTitle: taskKeySnapshot, fromDate: fromSnapshot,
-                                                     toDate: toSnapshot, insightCount: count, insights: results)
-                            mc.insert(record)
-                        }
-                        try mc.save()
-                    } catch {
-                        errorMessage = "Save failed: \(error.localizedDescription)"
-                    }
-                    isGenerating = false
+                    messages.append(ChatMessage(role: .assistant, text: reply))
+                    isSending = false
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
-                    isGenerating = false
+                    isSending = false
                 }
             }
         }
@@ -669,69 +620,88 @@ struct InsightsSection: View {
 
 }
 
+// MARK: - Chat Bubble View
+
+struct ChatBubbleView: View {
+    let message: ChatMessage
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            if message.role == .assistant {
+                Image(systemName: "sparkles")
+                    .font(.caption2)
+                    .foregroundColor(.indigo)
+                    .frame(width: 24, height: 24)
+                    .background(Color.indigo.opacity(0.1))
+                    .clipShape(Circle())
+            }
+
+            Text(message.text)
+                .font(.subheadline)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(message.role == .user ? Color.indigo : Color(.systemBackground))
+                .foregroundColor(message.role == .user ? .white : .primary)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .shadow(color: .black.opacity(message.role == .assistant ? 0.05 : 0), radius: 3, y: 1)
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.75, alignment: message.role == .user ? .trailing : .leading)
+
+            if message.role == .user { Spacer(minLength: 0) }
+        }
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+        .padding(.horizontal)
+    }
+}
+
+// MARK: - Typing Indicator
+
+struct TypingIndicatorView: View {
+    @State private var phase = 0
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(Color.secondary.opacity(0.5))
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(phase == i ? 1.3 : 1.0)
+                    .animation(.easeInOut(duration: 0.4).repeatForever().delay(Double(i) * 0.15), value: phase)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
+        .padding(.horizontal)
+        .onAppear { phase = 1 }
+    }
+}
+
 // MARK: - Insight Generator Service
 
 enum InsightGeneratorService {
-    static func generate(context: String, count: Int, apiKey: String, isMultiHabit: Bool = false) async throws -> [String] {
-        let correlationBlock = isMultiHabit ? """
 
-        CROSS-HABIT CORRELATIONS (use the Day-by-Day Status table):
-        - On days Habit A was completed, what % of the time was Habit B also completed?
-        - Which habit most often drags the other down when missed?
-        - Do the habits reinforce each other or are they independent?
-        - Which day combinations (both done / both missed / split) are most common?
-        """ : ""
-
-        let halfCount = count / 2
-        let improveCount = count - halfCount
-
+    static func chat(systemContext: String, messages: [ChatMessage], apiKey: String) async throws -> String {
         let systemPrompt = """
-        You are a data-driven productivity analyst. Analyze the habit/task data below.
+        You are a data-driven productivity analyst. The user's habit and task data is provided below.
+        Answer questions specifically and concisely based on this data. Reference actual numbers and dates.
+        If the data doesn't contain enough information to answer, say so clearly.
 
-        Generate exactly \(count) one-liners in two groups:
-
-        GROUP 1 — OBSERVATIONS (\(halfCount) lines, plain text):
-        Metric-based facts from the data. Lead with a specific number or date. Cover different angles:
-        - Overall completion rate vs OKR target
-        - Longest streak and when it broke
-        - Current streak status
-        - Consecutive-miss patterns
-        - Best vs worst period
-        - Momentum trend (first half of range vs second half)
-        - Gap since last completion
-        - Recurring themes in task notes
-        - Points earned vs available per day and overall (use the Daily Points section)
-        - Days with high points earn vs days the habit was missed (correlation)\(correlationBlock)
-
-        GROUP 2 — IMPROVEMENTS (\(improveCount) lines, each MUST start with "→ "):
-        One specific, actionable change — start with a verb. Must be concrete and specific to this habit:
-        - A scheduling tweak based on when misses cluster
-        - A friction-reduction idea based on the miss pattern
-        - A micro-habit or trigger to protect streaks
-        - A recovery tactic for after consecutive misses
-        - An OKR-aligned focus shift
-
-        Rules:
-        - Max 18 words per line
-        - Observations: must reference actual numbers/dates — no generic statements
-        - Improvements: must start with "→ " exactly — no exceptions
-        - No two lines cover the same angle
-        - Output all \(halfCount) observations first, then all \(improveCount) improvements
-
-        Return ONLY a flat JSON array of strings in order (observations first, then improvements):
-        ["observation 1", ..., "→ improvement 1", ...]
+        ---
+        \(systemContext)
         """
 
-        let messages: [[String: String]] = [
-            ["role": "system", "content": systemPrompt],
-            ["role": "user", "content": context]
+        var apiMessages: [[String: String]] = [
+            ["role": "system", "content": systemPrompt]
         ]
+        for msg in messages {
+            apiMessages.append(["role": msg.role == .user ? "user" : "assistant", "content": msg.text])
+        }
 
         let body: [String: Any] = [
             "model": "gpt-4o",
-            "messages": messages,
-            "max_tokens": min(4000, count * 60),
-            "temperature": 0.3
+            "messages": apiMessages,
+            "max_tokens": 600,
+            "temperature": 0.4
         ]
 
         guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
@@ -754,33 +724,7 @@ enum InsightGeneratorService {
 
         let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
         guard let content = decoded.choices.first?.message.content else { throw OpenAIError.noResponse }
-
-        return parseInsightsArray(from: content)
-    }
-
-    private static func parseInsightsArray(from text: String) -> [String] {
-        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.hasPrefix("```") {
-            cleaned = cleaned.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
-            if let fence = cleaned.range(of: "```") {
-                cleaned = String(cleaned[..<fence.lowerBound])
-            }
-        }
-
-        guard let start = cleaned.firstIndex(of: "["),
-              let end = cleaned.lastIndex(of: "]") else {
-            // Fallback: split on newlines if not JSON
-            return cleaned.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }
-
-        let jsonStr = String(cleaned[start...end])
-        guard let jsonData = jsonStr.data(using: .utf8),
-              let arr = try? JSONDecoder().decode([String].self, from: jsonData) else {
-            return []
-        }
-        return arr.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
