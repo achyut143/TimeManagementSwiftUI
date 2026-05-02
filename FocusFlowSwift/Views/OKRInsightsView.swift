@@ -425,6 +425,7 @@ struct InsightsSection: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         inputText = ""
+        inputFocused = false
         errorMessage = nil
 
         let userMsg = ChatMessage(role: .user, text: text)

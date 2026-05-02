@@ -21,7 +21,7 @@ struct HabitGridView: View {
     // MARK: - Caches
     @State private var cachedDateRange: [Date] = []
     @State private var cachedHabitNames: [String] = []
-    @State private var cachedStatsMap: [String: (streak: Int, best: Int, points: Double)] = [:]
+    @State private var cachedStatsMap: [String: (streak: Int, best: Int, completed: Int, total: Int)] = [:]
     @State private var cachedStatusGrid: [String: CellStatus] = [:]  // key: "habitName|dateISO"
 
     private let leftWidth: CGFloat = 170
@@ -43,8 +43,8 @@ struct HabitGridView: View {
         return cachedStatusGrid[key] ?? .noData
     }
 
-    private func stats(habit: String) -> (streak: Int, best: Int, points: Double) {
-        cachedStatsMap[habit] ?? (streak: 0, best: 0, points: 0)
+    private func stats(habit: String) -> (streak: Int, best: Int, completed: Int, total: Int) {
+        cachedStatsMap[habit] ?? (streak: 0, best: 0, completed: 0, total: 0)
     }
 
     // MARK: - Grid Recomputation
@@ -72,13 +72,12 @@ struct HabitGridView: View {
             tasksByHabit[task.title, default: []].append(task)
         }
 
-        var statsMap: [String: (streak: Int, best: Int, points: Double)] = [:]
+        var statsMap: [String: (streak: Int, best: Int, completed: Int, total: Int)] = [:]
         var statusGrid: [String: CellStatus] = [:]
 
         for habit in names {
             let habitTasks = tasksByHabit[habit] ?? []
             var completions: [(Date, Bool)] = []
-            var pts: Double = 0
 
             for date in dates {
                 let day = habitTasks.filter { cal.isDate($0.date ?? .distantPast, inSameDayAs: date) }
@@ -90,7 +89,6 @@ struct HabitGridView: View {
                 if day.contains(where: { $0.completed }) {
                     statusGrid[key] = .completed
                     completions.append((date, true))
-                    pts += day.reduce(0) { $0 + ($1.completed ? $1.effectiveWeight : 0) }
                 } else if day.contains(where: { $0.notCompleted }) {
                     statusGrid[key] = .missed
                     completions.append((date, false))
@@ -104,7 +102,8 @@ struct HabitGridView: View {
             for (_, done) in sorted { done ? (tmp += 1) : (tmp = 0); best = max(best, tmp) }
             var current = 0
             for (_, done) in sorted.reversed() { if done { current += 1 } else { break } }
-            statsMap[habit] = (streak: current, best: best, points: pts)
+            let completedCount = sorted.filter { $0.1 }.count
+            statsMap[habit] = (streak: current, best: best, completed: completedCount, total: sorted.count)
         }
 
         cachedStatsMap = statsMap
@@ -283,8 +282,8 @@ struct HabitGridView: View {
                             .font(.caption2).foregroundColor(.orange)
                         Label("\(s.best)", systemImage: "crown.fill")
                             .font(.caption2).foregroundColor(Color(hue: 0.12, saturation: 0.9, brightness: 0.85))
-                        Label(String(format: "%.0f", s.points), systemImage: "star.fill")
-                            .font(.caption2).foregroundColor(.indigo)
+                        Text("\(s.completed)/\(s.total)")
+                            .font(.caption2).fontWeight(.bold).foregroundColor(.primary)
                     }
                 }
                 .frame(width: leftWidth, height: rowHeight, alignment: .leading)
@@ -299,7 +298,7 @@ struct HabitGridView: View {
 
     private var dateHeaderRow: some View {
         HStack(spacing: 0) {
-            ForEach(dateRange, id: \.self) { date in
+            ForEach(Array(dateRange.reversed()), id: \.self) { date in
                 Text(dateLabel(date))
                     .font(.caption2.monospacedDigit())
                     .foregroundColor(isToday(date) ? .blue : .secondary)
@@ -312,7 +311,7 @@ struct HabitGridView: View {
 
     private func dateCellRow(habit: String) -> some View {
         HStack(spacing: 0) {
-            ForEach(dateRange, id: \.self) { date in
+            ForEach(Array(dateRange.reversed()), id: \.self) { date in
                 let s = status(habit: habit, on: date)
                 cellView(s)
                     .frame(width: cellWidth, height: rowHeight)

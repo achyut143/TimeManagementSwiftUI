@@ -111,6 +111,7 @@ struct DailyNotesView: View {
     @Query private var dailyNotes: [DailyNote]
     @StateObject private var settings = AlertSettings.shared
     @StateObject private var speechManager = SpeechManager.shared
+    @StateObject private var distractionTracker = DistractionTracker.shared
     @State private var notesText: String = ""
     @State private var adjustmentMinutes: String = ""
     @State private var editorKey: UUID = UUID()
@@ -570,6 +571,7 @@ struct DailyNotesView: View {
             }
             .onAppear {
                 loadNotesForDate(selectedDate)
+                handleReturn()
                 startCountdownTimer()
                 
                 // Load persistent pause state
@@ -589,10 +591,17 @@ struct DailyNotesView: View {
                 }
             }
             .onDisappear {
+                trackDistraction()
                 stopCountdownTimer()
                 cycleEndObserver?.cancel()
                 speechManager.stopSpeaking()
                 reminderTimer?.invalidate()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                trackDistraction()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                handleReturn()
             }
             .onChange(of: selectedDate) { _, _ in
                 loadNotesForDate(selectedDate)
@@ -672,6 +681,7 @@ struct DailyNotesView: View {
                 FocusModeView(
                     isPresented: $isFocusMode,
                     currentTaskName: currentTaskName,
+                    selectedDate: selectedDate,
                     timeRemaining: timeRemaining,
                     currentCycleDuration: $currentCycleDuration,
                     isTransitioning: isTransitioning,
@@ -1855,6 +1865,72 @@ struct DailyNotesView: View {
         return (nil, nil)
     }
 
+    // MARK: - Distraction Tracking
+
+    /// Returns (startMin, desc) of the schedule task that is active right now, or nil.
+    private func currentActiveTaskInfo() -> (startMin: Int, desc: String)? {
+        let nowMin = Calendar.current.component(.hour, from: Date()) * 60
+                   + Calendar.current.component(.minute, from: Date())
+        let tasks = parseFormattedTaskItems()
+        guard let task = tasks.first(where: { !$0.struck && nowMin >= $0.start && nowMin < $0.end })
+        else { return nil }
+        return (task.start, task.desc)
+    }
+
+    /// Increment the distraction count for whatever task is current right now and record the exit time.
+    private func trackDistraction() {
+        guard let info = currentActiveTaskInfo() else { return }
+        distractionTracker.increment(date: selectedDate, startMin: info.startMin, desc: info.desc)
+        distractionTracker.recordExit(date: selectedDate, startMin: info.startMin, desc: info.desc)
+        // Write updated count (duration will be added on return via handleReturn)
+        writeMetricsToNotesText(startMin: info.startMin, desc: info.desc)
+    }
+
+    /// Called when the user returns to DailyNotes (onAppear or didBecomeActive).
+    /// Settles the pending exit — adds elapsed time to tracker and updates the notes line.
+    private func handleReturn() {
+        guard let result = distractionTracker.settleReturn() else { return }
+        // Only update this view's notes if the exit was for the same date
+        guard Calendar.current.isDate(result.date, inSameDayAs: selectedDate) else { return }
+        writeMetricsToNotesText(startMin: result.startMin, desc: result.desc)
+    }
+
+    /// Writes (or updates) the metrics suffix " /N ~Xm" on the matching task line in notes text.
+    private func writeMetricsToNotesText(startMin: Int, desc: String) {
+        var lines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return }
+        var prevEnd: Int? = nil
+        for i in (s + 1)..<e {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
+                if entry.startMinutes == startMin && entry.description == desc {
+                    var rawLine = lines[i]
+                    // Strip existing metrics suffix
+                    if let r = rawLine.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
+                        rawLine.removeSubrange(r)
+                    }
+                    let count = distractionTracker.count(date: selectedDate, startMin: startMin, desc: desc)
+                    let secs  = distractionTracker.duration(date: selectedDate, startMin: startMin, desc: desc)
+                    rawLine += distractionTracker.metricsSuffix(count: count, seconds: secs)
+                    lines[i] = rawLine
+                    break
+                }
+                prevEnd = entry.endMinutes
+            }
+        }
+        notesText = lines.joined(separator: "\n")
+        saveNotes()
+    }
+
     /// Returns the highest task number currently in notesText (pattern "N) ").
     private func maxScheduleNumber() -> Int {
         var maxNum = 0
@@ -2148,8 +2224,15 @@ struct DailyNotesView: View {
         
         let startTimeStr = String(lineWithoutNumbering[startTimeRange])
         let endTimeStr = String(lineWithoutNumbering[endTimeRange])
-        let description = String(lineWithoutNumbering[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-        
+        let rawDescription = String(lineWithoutNumbering[descriptionRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip metrics suffix (e.g. " /3 ~8m") so task operations use the clean name
+        let description: String
+        if let range = rawDescription.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
+            description = String(rawDescription[..<range.lowerBound])
+        } else {
+            description = rawDescription
+        }
+
         // Parse times sequentially (respecting chronological order)
         guard let startMinutes = timeToMinutesSequential(startTimeStr, previousEndMinutes: previousEndMinutes),
               let rawEndMinutes = timeToMinutesSequential(endTimeStr, previousEndMinutes: startMinutes) else {
@@ -3870,6 +3953,15 @@ struct DailyNotesView: View {
                 .padding(.vertical, 4)
                 .background(.secondary.opacity(0.1), in: Capsule())
 
+            if let badge = distractionTracker.badgeText(date: selectedDate, startMin: startMin, desc: desc) {
+                Text(badge)
+                    .font(.caption2.monospacedDigit().bold())
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.12), in: Capsule())
+            }
+
             if let onToggleReward {
                 Button(action: onToggleReward) {
                     Image(systemName: isReward ? "gift.fill" : "gift")
@@ -4435,6 +4527,7 @@ struct ScheduleEntry: Identifiable {
 struct FocusModeView: View {
     @Binding var isPresented: Bool
     let currentTaskName: String
+    let selectedDate: Date
     let timeRemaining: TimeInterval
     @Binding var currentCycleDuration: Int
     let isTransitioning: Bool
@@ -4619,6 +4712,31 @@ struct FocusModeView: View {
                                 .fontWeight(.semibold)
                                 .foregroundColor(.cyan)
                                 .tracking(1)
+                            let focusBadge: String? = {
+                                // Find the exact entry by start minute — strip /N ~Xm and [🎁] before comparing.
+                                let nowMin = nowMinutes
+                                let activeEntry = scheduleEntries.first { e in
+                                    guard !e.isStruck,
+                                          let sm = e.startMinutes, let em = e.endMinutes else { return false }
+                                    var taskClean = e.task ?? ""
+                                    taskClean = taskClean.replacingOccurrences(of: " [🎁]", with: "")
+                                    if let r = taskClean.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
+                                        taskClean.removeSubrange(r)
+                                    }
+                                    return nowMin >= sm && nowMin < em && taskClean == currentTaskName
+                                }
+                                guard let sm = activeEntry?.startMinutes else { return nil }
+                                return DistractionTracker.shared.badgeText(date: selectedDate, startMin: sm, desc: currentTaskName)
+                            }()
+                            if let badge = focusBadge {
+                                Text(badge)
+                                    .font(.caption2.bold())
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Color.orange.opacity(0.2))
+                                    .clipShape(Capsule())
+                            }
                         }
 
                         // Big countdown (count-up when smart paused)
@@ -4789,6 +4907,9 @@ struct FocusModeView: View {
         .onChange(of: activeBooks.count) { _, _ in
             buildQuotePool()
         }
+        .onChange(of: activeBooks.map { $0.id }) { _, _ in
+            buildQuotePool()
+        }
         .sheet(isPresented: $showSwapSheetFocus) {
             SwapTasksSheet(defaultA: focusSwapDefaults.0, defaultB: focusSwapDefaults.1) { a, b in
                 return onSwapTasks(a, b)
@@ -4865,7 +4986,7 @@ struct FocusModeView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(visibleEntries) { entry in
-                            SidebarEntryRow(entry: entry, nowMinutes: nowMinutes, onDelete: deleteEntry)
+                            SidebarEntryRow(entry: entry, nowMinutes: nowMinutes, selectedDate: selectedDate, onDelete: deleteEntry)
                         }
                     }
                     .padding(.top, 4)
@@ -4923,6 +5044,7 @@ struct FocusModeView: View {
 private struct SidebarEntryRow: View {
     let entry: ScheduleEntry
     let nowMinutes: Int
+    let selectedDate: Date
     let onDelete: (ScheduleEntry) -> Void
 
     private var sm: Int { entry.startMinutes ?? -1 }
@@ -4965,6 +5087,16 @@ private struct SidebarEntryRow: View {
                             .fontWeight((isCurrent || isReward) ? .semibold : .regular)
                             .foregroundColor(isReward && !isPast ? gold : (isCurrent ? .white : (isPast || entry.isStruck) ? .red.opacity(0.7) : .cyan))
                             .strikethrough(isPast || entry.isStruck, color: .red.opacity(0.7))
+                        if sm >= 0 && !entry.isStruck,
+                           let badge = DistractionTracker.shared.badgeText(date: selectedDate, startMin: sm, desc: task) {
+                            Text(badge)
+                                .font(.caption2.bold())
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.orange.opacity(0.15))
+                                .clipShape(Capsule())
+                        }
                     }
                 }
                 HStack(spacing: 6) {
@@ -5436,6 +5568,14 @@ struct AutoScheduleSheet: View {
                                         .font(.subheadline)
                                         .foregroundColor(isSelected ? .primary : .secondary)
                                     Spacer()
+                                    if let badge = DistractionTracker.shared.badgeTextByTitle(date: selectedDate, title: task.title) {
+                                        Text(badge)
+                                            .font(.caption2.bold())
+                                            .foregroundColor(.orange)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange.opacity(0.15), in: Capsule())
+                                    }
                                     if isSelected {
                                         Text("\(parsedDuration) min")
                                             .font(.caption2)
@@ -5475,6 +5615,14 @@ struct AutoScheduleSheet: View {
                                 Text(task.title)
                                     .font(.caption)
                                 Spacer()
+                                if let badge = DistractionTracker.shared.badgeTextByTitle(date: selectedDate, title: task.title) {
+                                    Text(badge)
+                                        .font(.caption2.bold())
+                                        .foregroundColor(.orange)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 2)
+                                        .background(Color.orange.opacity(0.15), in: Capsule())
+                                }
                                 Text("\(parsedDuration) min")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
