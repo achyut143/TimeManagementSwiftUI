@@ -225,6 +225,7 @@ struct InsightsSection: View {
     @State private var isSending = false
     @State private var errorMessage: String? = nil
     @FocusState private var inputFocused: Bool
+    @State private var keyboardHeight: CGFloat = 0
 
     private var items: [RepeatTaskItem] { uniqueRepeatItems(from: allTasks) }
 
@@ -274,6 +275,24 @@ struct InsightsSection: View {
             }
 
             inputBar
+        }
+        .padding(.bottom, keyboardHeight)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { n in
+            guard let frame = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+                  let duration = n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else { return }
+            let bottomInset = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }?.safeAreaInsets.bottom ?? 0
+            withAnimation(.easeOut(duration: duration)) {
+                keyboardHeight = frame.height - bottomInset
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
+            let duration = n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+            withAnimation(.easeOut(duration: duration)) {
+                keyboardHeight = 0
+            }
         }
     }
 
@@ -396,6 +415,17 @@ struct InsightsSection: View {
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
+            if inputFocused {
+                Button {
+                    inputFocused = false
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.system(size: 20))
+                        .foregroundColor(.secondary)
+                }
+                .transition(.opacity.combined(with: .scale))
+            }
+
             TextField("Ask about your habits…", text: $inputText, axis: .vertical)
                 .lineLimit(1...5)
                 .padding(.horizontal, 14).padding(.vertical, 10)
@@ -410,6 +440,7 @@ struct InsightsSection: View {
             }
             .disabled(!canSend)
         }
+        .animation(.easeInOut(duration: 0.2), value: inputFocused)
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Color(.systemBackground))
         .overlay(alignment: .top) { Divider() }

@@ -1,15 +1,15 @@
 import Foundation
 
 /// Tracks how many times the user left the app / closed Daily Notes while a task was active,
-/// and the total time they spent away from each task.
+/// and the total time they spent away from each task — correctly split across task boundaries.
 class DistractionTracker: ObservableObject {
     static let shared = DistractionTracker()
 
-    private let countKey    = "DistractionTracker.counts"
-    private let durationKey = "DistractionTracker.durations"
-    // Pending exit state — persisted so view dismissal doesn't lose it
-    private let exitTimeKey = "DistractionTracker.pendingExitTime"
-    private let exitKeyKey  = "DistractionTracker.pendingExitKey"
+    private let countKey       = "DistractionTracker.counts"
+    private let durationKey    = "DistractionTracker.durations"
+    private let exitTimeKey    = "DistractionTracker.pendingExitTime"
+    private let exitKeyKey     = "DistractionTracker.pendingExitKey"
+    private let exitScheduleKey = "DistractionTracker.pendingExitSchedule"
 
     private let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -17,7 +17,7 @@ class DistractionTracker: ObservableObject {
         return f
     }()
 
-    // MARK: - Private storage helpers
+    // MARK: - Private storage
 
     private var counts: [String: Int] {
         get { UserDefaults.standard.object(forKey: countKey) as? [String: Int] ?? [:] }
@@ -42,6 +42,24 @@ class DistractionTracker: ObservableObject {
     private var pendingExitKey: String? {
         get { UserDefaults.standard.string(forKey: exitKeyKey) }
         set { UserDefaults.standard.set(newValue, forKey: exitKeyKey) }
+    }
+    /// Stored as [[String: Any]] with keys "s" (startMin), "e" (endMin), "d" (desc).
+    private var pendingExitSchedule: [(startMin: Int, endMin: Int, desc: String)] {
+        get {
+            guard let raw = UserDefaults.standard.array(forKey: exitScheduleKey) as? [[String: Any]]
+            else { return [] }
+            return raw.compactMap {
+                guard let s = $0["s"] as? Int,
+                      let e = $0["e"] as? Int,
+                      let d = $0["d"] as? String
+                else { return nil }
+                return (s, e, d)
+            }
+        }
+        set {
+            let raw = newValue.map { ["s": $0.startMin, "e": $0.endMin, "d": $0.desc] as [String: Any] }
+            UserDefaults.standard.set(raw, forKey: exitScheduleKey)
+        }
     }
 
     // MARK: - Key
@@ -94,6 +112,7 @@ class DistractionTracker: ObservableObject {
     }
 
     private func addDuration(_ interval: TimeInterval, forKey k: String) {
+        guard interval > 0 else { return }
         var d = durations
         d[k] = (d[k] ?? 0) + interval
         durations = d
@@ -102,45 +121,124 @@ class DistractionTracker: ObservableObject {
     // MARK: - Exit / Return tracking
 
     /// Call when the user leaves DailyNotes or backgrounds the app.
-    func recordExit(date: Date, startMin: Int, desc: String) {
-        pendingExitTime = Date()
-        pendingExitKey  = makeKey(date: date, startMin: startMin, desc: desc)
+    /// `schedule` is the full non-struck task list so that on return we can split time across boundaries.
+    func recordExit(date: Date, startMin: Int, desc: String,
+                    schedule: [(startMin: Int, endMin: Int, desc: String)]) {
+        pendingExitTime     = Date()
+        pendingExitKey      = makeKey(date: date, startMin: startMin, desc: desc)
+        pendingExitSchedule = schedule
     }
 
     /// Call when the user returns to DailyNotes or the app comes to foreground.
-    /// Adds the elapsed time to accumulated duration and returns (date, startMin, desc) so the
-    /// caller can refresh notes text. Returns nil if no exit was pending.
-    func settleReturn() -> (date: Date, startMin: Int, desc: String)? {
-        guard let exitTime = pendingExitTime, let key = pendingExitKey else { return nil }
-        let elapsed = Date().timeIntervalSince(exitTime)
-        pendingExitTime = nil
-        pendingExitKey  = nil
-        if elapsed > 0 { addDuration(elapsed, forKey: key) }
-        DispatchQueue.main.async { self.objectWillChange.send() }
+    ///
+    /// Splits the elapsed absence time across every task whose window was active during the absence.
+    /// Returns one entry per affected task so the caller can refresh their notes lines.
+    /// Returns an empty array if no exit was pending.
+    ///
+    /// - Parameter selectedDate: Used to convert startMin/endMin integers to wall-clock Dates.
+    func settleReturn(selectedDate: Date) -> [(date: Date, startMin: Int, desc: String)] {
+        guard let exitTime = pendingExitTime, let key = pendingExitKey else { return [] }
+
+        let returnTime = Date()
+        let schedule   = pendingExitSchedule
+
+        // Clear persisted state immediately
+        pendingExitTime     = nil
+        pendingExitKey      = nil
+        pendingExitSchedule = []
+
+        // Parse the exit key back into components
         let parts = key.components(separatedBy: "|")
         guard parts.count >= 3,
-              let startMin = Int(parts[1]),
-              let date = dateFormatter.date(from: parts[0])
-        else { return nil }
-        return (date: date, startMin: startMin, desc: parts[2])
+              let exitStartMin = Int(parts[1]),
+              let exitDate     = dateFormatter.date(from: parts[0])
+        else { return [] }
+        let exitDesc = parts[2]
+
+        // Find the exit task in the schedule to get its endMin
+        let exitTask = schedule.first { $0.startMin == exitStartMin && $0.desc == exitDesc }
+
+        // Helper: convert a minute-of-day integer to a wall-clock Date on selectedDate.
+        // Minutes >= 1440 are treated as crossing midnight into the next day.
+        func wallDate(_ minutes: Int) -> Date {
+            let base = Calendar.current.startOfDay(for: selectedDate)
+            return base.addingTimeInterval(TimeInterval(minutes * 60))
+        }
+
+        var results: [(date: Date, startMin: Int, desc: String)] = []
+
+        // --- Attribute the exit task ---
+        let exitEndWall: Date
+        if let et = exitTask {
+            exitEndWall = wallDate(et.endMin)
+        } else {
+            // Unknown end — cap at return time
+            exitEndWall = returnTime
+        }
+        let exitSliceEnd = min(exitEndWall, returnTime)
+        let exitElapsed  = exitSliceEnd.timeIntervalSince(exitTime)
+        addDuration(exitElapsed, forKey: key)
+        results.append((date: exitDate, startMin: exitStartMin, desc: exitDesc))
+
+        // --- Attribute subsequent tasks whose windows overlapped the absence ---
+        // Walk tasks that start after the exit task, in order.
+        var cursor = exitSliceEnd
+        let subsequentTasks = schedule
+            .filter { $0.startMin > exitStartMin }
+            .sorted { $0.startMin < $1.startMin }
+
+        for task in subsequentTasks {
+            guard cursor < returnTime else { break }
+            let taskStartWall = wallDate(task.startMin)
+            let taskEndWall   = wallDate(task.endMin)
+            guard taskEndWall > cursor else { continue }   // window already passed
+
+            // Move cursor to the task's start if there was a gap
+            let sliceStart = max(cursor, taskStartWall)
+            guard sliceStart < returnTime else { break }
+
+            let sliceEnd  = min(taskEndWall, returnTime)
+            let elapsed   = sliceEnd.timeIntervalSince(sliceStart)
+            let taskKey   = makeKey(date: exitDate, startMin: task.startMin, desc: task.desc)
+
+            // Increment count — the user was absent during this task's window
+            var c = counts
+            c[taskKey] = (c[taskKey] ?? 0) + 1
+            counts = c
+
+            addDuration(elapsed, forKey: taskKey)
+            results.append((date: exitDate, startMin: task.startMin, desc: task.desc))
+            cursor = sliceEnd
+        }
+
+        DispatchQueue.main.async { self.objectWillChange.send() }
+        return results
+    }
+
+    // MARK: - Day totals
+
+    /// Returns (totalCount, totalSeconds) summed across ALL tasks on the given date.
+    func dayTotals(date: Date) -> (count: Int, seconds: TimeInterval) {
+        let prefix = "\(dateFormatter.string(from: date))|"
+        let totalCount = counts.filter { $0.key.hasPrefix(prefix) }.values.reduce(0, +)
+        let totalSecs  = durations.filter { $0.key.hasPrefix(prefix) }.values.reduce(0, +)
+        return (totalCount, totalSecs)
     }
 
     // MARK: - Badge text helpers
 
-    /// Returns formatted badge string "↗N ~Xm" (or "↗N" if no duration yet), nil if count == 0.
+    /// Returns formatted badge string e.g. "↗2 ~8m", nil if count == 0.
     func badgeText(date: Date, startMin: Int, desc: String) -> String? {
         let c = count(date: date, startMin: startMin, desc: desc)
         guard c > 0 else { return nil }
-        let secs = duration(date: date, startMin: startMin, desc: desc)
-        return formatted(count: c, seconds: secs)
+        return formatted(count: c, seconds: duration(date: date, startMin: startMin, desc: desc))
     }
 
     /// Same as badgeText but matches by title across all time slots on the given date.
     func badgeTextByTitle(date: Date, title: String) -> String? {
         let c = countByTitle(date: date, title: title)
         guard c > 0 else { return nil }
-        let secs = durationByTitle(date: date, title: title)
-        return formatted(count: c, seconds: secs)
+        return formatted(count: c, seconds: durationByTitle(date: date, title: title))
     }
 
     private func formatted(count: Int, seconds: TimeInterval) -> String {
@@ -148,16 +246,13 @@ class DistractionTracker: ObservableObject {
         guard totalMin > 0 else { return "↗\(count)" }
         if totalMin < 60 { return "↗\(count) ~\(totalMin)m" }
         let h = totalMin / 60, m = totalMin % 60
-        let durStr = m > 0 ? "~\(h)h \(m)m" : "~\(h)h"
-        return "↗\(count) \(durStr)"
+        return m > 0 ? "↗\(count) ~\(h)h \(m)m" : "↗\(count) ~\(h)h"
     }
 
     // MARK: - Notes suffix helpers
 
-    /// The regex pattern that matches the metrics suffix appended to task lines, e.g. " /2 ~8m".
     static let metricsSuffixPattern = #"\s*/\d+(\s*~\d+h\s*\d+m|\s*~\d+h|\s*~\d+m)?$"#
 
-    /// Builds the suffix string to append to a task line.
     func metricsSuffix(count: Int, seconds: TimeInterval) -> String {
         guard count > 0 else { return "" }
         var s = " /\(count)"
@@ -173,6 +268,44 @@ class DistractionTracker: ObservableObject {
     }
 
     // MARK: - Reset
+
+    /// Rebuilds counts and durations for a given date from parsed note task entries.
+    /// Each entry should carry the count and seconds already extracted from the "/N ~Xm" suffix.
+    func recalculateFromNotes(date: Date, entries: [(startMin: Int, desc: String, count: Int, seconds: TimeInterval)]) {
+        let prefix = "\(dateFormatter.string(from: date))|"
+        var c = counts
+        var d = durations
+        // Remove existing data for this date
+        c = c.filter { !$0.key.hasPrefix(prefix) }
+        d = d.filter { !$0.key.hasPrefix(prefix) }
+        // Rebuild from parsed entries
+        for entry in entries where entry.count > 0 {
+            let k = makeKey(date: date, startMin: entry.startMin, desc: entry.desc)
+            c[k] = entry.count
+            if entry.seconds > 0 { d[k] = entry.seconds }
+        }
+        counts    = c
+        durations = d
+        DispatchQueue.main.async { self.objectWillChange.send() }
+    }
+
+    /// Removes all distraction counts and durations for a given date.
+    func clearDay(date: Date) {
+        let prefix = "\(dateFormatter.string(from: date))|"
+        var c = counts
+        var d = durations
+        c = c.filter { !$0.key.hasPrefix(prefix) }
+        d = d.filter { !$0.key.hasPrefix(prefix) }
+        counts    = c
+        durations = d
+        // Also clear any pending exit for this date
+        if let key = pendingExitKey, key.hasPrefix(prefix) {
+            pendingExitTime     = nil
+            pendingExitKey      = nil
+            pendingExitSchedule = []
+        }
+        DispatchQueue.main.async { self.objectWillChange.send() }
+    }
 
     func reset(date: Date, startMin: Int, desc: String) {
         var c = counts

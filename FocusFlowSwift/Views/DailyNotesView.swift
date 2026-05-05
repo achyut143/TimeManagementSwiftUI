@@ -145,6 +145,7 @@ struct DailyNotesView: View {
     @State private var showTemplates = false
     @State private var showAutoGenSheet = false
     @State private var autoGenDuration: String = "10"
+    @State private var showAISchedulerSheet = false
     @Query private var allTasksQuery: [Task]
     @State private var showInterceptSheet = false
     @State private var showSwapSheet = false
@@ -155,6 +156,7 @@ struct DailyNotesView: View {
     @State private var pendingDeleteEnd: Int = 0
     @State private var pendingDeleteDesc: String = ""
     @State private var showCancelOptions = false
+    @State private var showAdjustOptions = false
     let selectedDate: Date
     
     private var todayNote: DailyNote? {
@@ -317,43 +319,14 @@ struct DailyNotesView: View {
                 }
 
                 Section("Daily Notes") {
-                    // Template toolbar
-                    HStack(spacing: 8) {
-                        Button(action: { showTemplates = true }) {
-                            Label("Templates", systemImage: "doc.on.doc.fill")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.indigo)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 8).fill(Color.indigo.opacity(0.1)))
-                        }
-                        .buttonStyle(PlainButtonStyle())
-
-                        Button(action: { showAutoGenSheet = true }) {
-                            Label("Auto-Schedule", systemImage: "wand.and.stars")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.orange)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.1)))
-                        }
-                        .buttonStyle(PlainButtonStyle())
-
+                    // Toolbar — icon buttons with short labels, always single row
+                    HStack(spacing: 6) {
+                        toolbarButton(icon: "doc.on.doc.fill",        label: "Templates",  color: .indigo)  { showTemplates       = true }
+                        toolbarButton(icon: "wand.and.stars",          label: "Schedule",   color: .orange)  { showAutoGenSheet    = true }
+                        toolbarButton(icon: "sparkles.rectangle.stack",label: "AI",         color: .purple)  { showAISchedulerSheet = true }
                         if hasSchedule, currentScheduleBlock != nil {
-                            Button(action: { showSaveTemplate = true }) {
-                                Label("Save as Template", systemImage: "square.and.arrow.down")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.green)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.1)))
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                            toolbarButton(icon: "square.and.arrow.down", label: "Save",     color: .green)   { showSaveTemplate    = true }
                         }
-
                         Spacer()
                     }
 
@@ -630,6 +603,16 @@ struct DailyNotesView: View {
                     }
                 )
             }
+            .sheet(isPresented: $showAISchedulerSheet) {
+                AISchedulerSheet(
+                    selectedDate: selectedDate,
+                    allTasks: allTasksQuery,
+                    startNumber: maxScheduleNumber() + 1,
+                    onInsert: { scheduleBlock in
+                        insertAISchedule(scheduleBlock)
+                    }
+                )
+            }
             .sheet(isPresented: $showSaveTemplate) {
                 if let block = currentScheduleBlock {
                     SaveTemplateSheet(scheduleContent: block)
@@ -677,6 +660,15 @@ struct DailyNotesView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
+            .confirmationDialog("Add Adjust (5 min) — start from?", isPresented: $showAdjustOptions, titleVisibility: .visible) {
+                Button("Current Task") {
+                    insertAdjustTask(fromStrikethrough: false)
+                }
+                Button("Last Completed Task") {
+                    insertAdjustTask(fromStrikethrough: true)
+                }
+                Button("Cancel", role: .cancel) {}
+            }
             .fullScreenCover(isPresented: $isFocusMode) {
                 FocusModeView(
                     isPresented: $isFocusMode,
@@ -693,18 +685,39 @@ struct DailyNotesView: View {
                     onStrikePast:         { strikeOutPastTimeSlots() },
                     onExtendTask:         { extendCurrentTask() },
                     onInterrupt:          { insertInterruptTask() },
+                    onAdjust:             { fromStrikethrough in insertAdjustTask(fromStrikethrough: fromStrikethrough) },
                     onEndAndNew:          { endAndStartNewTask() },
                     onCancelTask:         { cancelCurrentTask() },
                     onRemoveCurrentAdjust: { removeCurrentTaskFromNotes(adjustTime: true) },
                     onRemoveCurrentOnly:   { removeCurrentTaskFromNotes(adjustTime: false) },
                     onSwapTasks:           { a, b in swapScheduleTasks(numA: a, numB: b) },
                     onNotesModified:       { saveNotes() },
-                    computeSwapDefaults:   { currentAndNextTaskNums() }
+                    computeSwapDefaults:   { currentAndNextTaskNums() },
+                    onRecalculateDistractions: {
+                        let entries = parsedDistractionEntries()
+                        distractionTracker.recalculateFromNotes(date: selectedDate, entries: entries)
+                    }
                 )
             }
         }
     }
     
+    @ViewBuilder
+    private func toolbarButton(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundColor(color)
+            .frame(width: 58, height: 44)
+            .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(0.1)))
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
     private var cycleStatusView: some View {
         VStack(spacing: 12) {
             HStack {
@@ -923,6 +936,15 @@ struct DailyNotesView: View {
                     .buttonStyle(.bordered)
                     .tint(.red)
                     .help("Interrupt")
+
+                    // Adjust
+                    Button(action: { showAdjustOptions = true }) {
+                        Image(systemName: "clock.arrow.2.circlepath")
+                            .font(.title2)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.purple)
+                    .help("Adjust (+5 min)")
 
                     // End & New
                     Button(action: { endAndStartNewTask() }) {
@@ -1654,7 +1676,9 @@ struct DailyNotesView: View {
         if let existingNote = getNoteForDate(date) {
             notesText = existingNote.content
         } else {
+            // No note exists for this date — clear any stale distraction data too
             notesText = ""
+            distractionTracker.clearDay(date: date)
         }
         editorKey = UUID()
         showFormattedSchedule = hasSchedule
@@ -1880,19 +1904,24 @@ struct DailyNotesView: View {
     /// Increment the distraction count for whatever task is current right now and record the exit time.
     private func trackDistraction() {
         guard let info = currentActiveTaskInfo() else { return }
+        let schedule = parseFormattedTaskItems()
+            .filter { !$0.struck }
+            .map { (startMin: $0.start, endMin: $0.end, desc: $0.desc) }
         distractionTracker.increment(date: selectedDate, startMin: info.startMin, desc: info.desc)
-        distractionTracker.recordExit(date: selectedDate, startMin: info.startMin, desc: info.desc)
-        // Write updated count (duration will be added on return via handleReturn)
+        distractionTracker.recordExit(date: selectedDate, startMin: info.startMin, desc: info.desc,
+                                      schedule: schedule)
+        // Write updated count immediately; duration is finalised on return via handleReturn
         writeMetricsToNotesText(startMin: info.startMin, desc: info.desc)
     }
 
     /// Called when the user returns to DailyNotes (onAppear or didBecomeActive).
-    /// Settles the pending exit — adds elapsed time to tracker and updates the notes line.
+    /// Settles the pending exit — splits elapsed time across task boundaries and updates all affected lines.
     private func handleReturn() {
-        guard let result = distractionTracker.settleReturn() else { return }
-        // Only update this view's notes if the exit was for the same date
-        guard Calendar.current.isDate(result.date, inSameDayAs: selectedDate) else { return }
-        writeMetricsToNotesText(startMin: result.startMin, desc: result.desc)
+        let affected = distractionTracker.settleReturn(selectedDate: selectedDate)
+        for result in affected {
+            guard Calendar.current.isDate(result.date, inSameDayAs: selectedDate) else { continue }
+            writeMetricsToNotesText(startMin: result.startMin, desc: result.desc)
+        }
     }
 
     /// Writes (or updates) the metrics suffix " /N ~Xm" on the matching task line in notes text.
@@ -1929,6 +1958,55 @@ struct DailyNotesView: View {
         }
         notesText = lines.joined(separator: "\n")
         saveNotes()
+    }
+
+    /// Parses all task lines in the notes and extracts distraction metrics from "/N ~Xm" suffixes.
+    func parsedDistractionEntries() -> [(startMin: Int, desc: String, count: Int, seconds: TimeInterval)] {
+        var results: [(startMin: Int, desc: String, count: Int, seconds: TimeInterval)] = []
+        let allLines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil, eIdx: Int? = nil
+        for (i, line) in allLines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return [] }
+        var prevEnd: Int? = nil
+        for i in (s + 1)..<e {
+            let trimmed = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            // Extract the raw suffix before stripping it via parseTimeEntrySequential
+            var count = 0
+            var seconds: TimeInterval = 0
+            if let suffixRange = parseLine.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
+                let suffix = String(parseLine[suffixRange])
+                // Parse count: /N
+                if let countRange = suffix.range(of: #"/(\d+)"#, options: .regularExpression),
+                   let n = Int(suffix[countRange].dropFirst()) { count = n }
+                // Parse hours + minutes: ~Xh Ym or ~Xh or ~Ym
+                if let hmRange = suffix.range(of: #"~(\d+)h\s*(\d+)m"#, options: .regularExpression) {
+                    let parts = suffix[hmRange].replacingOccurrences(of: "~", with: "")
+                        .components(separatedBy: CharacterSet.letters).compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                    if parts.count >= 2 { seconds = TimeInterval(parts[0] * 3600 + parts[1] * 60) }
+                } else if let hRange = suffix.range(of: #"~(\d+)h"#, options: .regularExpression) {
+                    let digits = suffix[hRange].filter { $0.isNumber }
+                    if let h = Int(digits) { seconds = TimeInterval(h * 3600) }
+                } else if let mRange = suffix.range(of: #"~(\d+)m"#, options: .regularExpression) {
+                    let digits = suffix[mRange].filter { $0.isNumber }
+                    if let m = Int(digits) { seconds = TimeInterval(m * 60) }
+                }
+            }
+            // parseTimeEntrySequential skips struck lines, so pass the unwrapped parseLine directly
+            if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
+                if count > 0 {
+                    results.append((startMin: entry.startMinutes, desc: entry.description, count: count, seconds: seconds))
+                }
+                prevEnd = entry.endMinutes
+            }
+        }
+        return results
     }
 
     /// Returns the highest task number currently in notesText (pattern "N) ").
@@ -2011,6 +2089,35 @@ struct DailyNotesView: View {
         }
     }
     
+    /// Inserts an AI-generated START…END schedule block into the notes.
+    /// If a block already exists the new lines are merged at the end; otherwise a new block is created.
+    private func insertAISchedule(_ block: String) {
+        let blockLines = block.components(separatedBy: .newlines)
+        // Strip the START / END wrapper — just the numbered task lines
+        let newLines = blockLines.filter { l in
+            let t = l.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !t.isEmpty && t != "START" && t != "END"
+        }
+        guard !newLines.isEmpty else { return }
+
+        var lines = notesText.components(separatedBy: .newlines)
+        if let eIdx = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "END" }) {
+            // Insert before END
+            lines.insert(contentsOf: newLines, at: eIdx)
+        } else if let sIdx = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "START" }) {
+            lines.insert(contentsOf: newLines + ["END"], at: sIdx + 1)
+        } else {
+            // No block yet — create one
+            if lines.last?.isEmpty == false { lines.append("") }
+            lines.append("START")
+            lines.append(contentsOf: newLines)
+            lines.append("END")
+        }
+        notesText = lines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+    }
+
     private func adjustTimesInNotes() {
         guard let minutes = Int(adjustmentMinutes) else { 
             print("Invalid minutes input: \(adjustmentMinutes)")
@@ -4099,6 +4206,144 @@ struct DailyNotesView: View {
         else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
+    // MARK: - Adjust Schedule (+5 min adjust block)
+
+    private func insertAdjustTask(fromStrikethrough: Bool) {
+        let now = Date()
+        let cal = Calendar.current
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        let adjustDuration = 5
+
+        guard let startTagRange = notesText.range(of: "START"),
+              let endTagRange   = notesText.range(of: "END") else { return }
+
+        let content = String(notesText[startTagRange.upperBound..<endTagRange.lowerBound])
+        let lines   = content.components(separatedBy: .newlines)
+        var result: [String] = []
+        var prevEnd: Int? = nil
+
+        if fromStrikethrough {
+            // Shift all non-struck tasks so the first one starts at now
+            var firstNonStruckStart: Int? = nil
+            var scanPrev: Int? = nil
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~") {
+                    let inner = String(trimmed.dropFirst(2).dropLast(2))
+                    if let e = parseTimeEntrySequential(inner, previousEndMinutes: scanPrev) { scanPrev = e.endMinutes }
+                    continue
+                }
+                if trimmed.contains("~~") { continue }
+                if let e = parseTimeEntrySequential(line, previousEndMinutes: scanPrev) {
+                    firstNonStruckStart = e.startMinutes
+                    break
+                }
+            }
+
+            guard let firstStart = firstNonStruckStart else { return }
+            let shiftAmount = nowMin - firstStart
+            guard shiftAmount > 0 else { return }
+
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~") {
+                    result.append(line)
+                    let inner = String(trimmed.dropFirst(2).dropLast(2))
+                    if let e = parseTimeEntrySequential(inner, previousEndMinutes: prevEnd) { prevEnd = e.endMinutes }
+                    continue
+                }
+                if trimmed.contains("~~") { result.append(line); continue }
+                if let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) {
+                    if !entry.isFixed {
+                        var numStr = ""
+                        if let pIdx = trimmed.firstIndex(of: ")"),
+                           let n = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
+                            numStr = "\(n)) "
+                        }
+                        let newStart = safeMinutesToTime(entry.startMinutes + shiftAmount)
+                        let newEnd   = safeMinutesToTime(entry.endMinutes + shiftAmount)
+                        result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
+                        prevEnd = entry.endMinutes + shiftAmount
+                    } else {
+                        result.append(line)
+                        prevEnd = entry.endMinutes
+                    }
+                } else {
+                    result.append(line)
+                }
+            }
+
+            speechManager.speak("Schedule adjusted from last completed task")
+
+        } else {
+            // Insert 5-min adjust block before the current task; shift current + future tasks
+            let timeEntries = extractTimeEntriesFromNotes()
+            guard let currentEntry = findBestCurrentTask(at: nowMin, in: timeEntries) else { return }
+
+            var foundCurrent = false
+            let shiftAmount = (nowMin + adjustDuration) - currentEntry.startMinutes
+
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if (trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")) || trimmed.contains("~~") {
+                    result.append(line)
+                    continue
+                }
+
+                if let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) {
+                    let isCurrentTask = entry.startMinutes == currentEntry.startMinutes &&
+                                        entry.endMinutes   == currentEntry.endMinutes &&
+                                        entry.description  == currentEntry.description
+
+                    if isCurrentTask {
+                        foundCurrent = true
+                        var baseNum: Int? = nil
+                        if let pIdx = trimmed.firstIndex(of: ")") {
+                            baseNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces))
+                        }
+                        let adjustNum = baseNum.map { "\($0)) " } ?? ""
+                        result.append("\(adjustNum)\(safeMinutesToTime(nowMin)) - \(safeMinutesToTime(nowMin + adjustDuration)) - adjust")
+
+                        let taskNum = baseNum.map { "\($0 + 1)) " } ?? ""
+                        let taskDuration = entry.endMinutes - entry.startMinutes
+                        result.append("\(taskNum)\(safeMinutesToTime(nowMin + adjustDuration)) - \(safeMinutesToTime(nowMin + adjustDuration + taskDuration)) - \(entry.description)")
+                        prevEnd = nowMin + adjustDuration + taskDuration
+
+                    } else if foundCurrent && entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
+                        var shiftedNum: Int? = nil
+                        if let pIdx = trimmed.firstIndex(of: ")") {
+                            shiftedNum = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)).map { $0 + 1 }
+                        }
+                        let numStr   = shiftedNum.map { "\($0)) " } ?? ""
+                        let newStart = safeMinutesToTime(entry.startMinutes + shiftAmount)
+                        let newEnd   = safeMinutesToTime(entry.endMinutes   + shiftAmount)
+                        result.append("\(numStr)\(newStart) - \(newEnd) - \(entry.description)")
+                        prevEnd = entry.endMinutes + shiftAmount
+
+                    } else {
+                        result.append(line)
+                        prevEnd = entry.endMinutes
+                    }
+                } else {
+                    result.append(line)
+                }
+            }
+
+            currentTaskName = "adjust"
+            settings.nextAlertDate = now.addingTimeInterval(TimeInterval(adjustDuration * 60))
+            speechManager.speak("Adjust added")
+            if settings.isPlaying { settings.scheduleIntervalTimer() }
+        }
+
+        let beforeStart = String(notesText[..<startTagRange.lowerBound])
+        let afterEnd    = String(notesText[endTagRange.upperBound...])
+        notesText = beforeStart + "START" + result.joined(separator: "\n") + "END" + afterEnd
+        editorKey = UUID()
+        saveNotes()
+        if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
+    }
+
     // MARK: - End Current Task and Start New
 
     private func endAndStartNewTask() {
@@ -4539,6 +4784,7 @@ struct FocusModeView: View {
     let onStrikePast: () -> Void
     let onExtendTask: () -> Void
     let onInterrupt: () -> Void
+    let onAdjust: (Bool) -> Void
     let onEndAndNew: () -> Void
     let onCancelTask: () -> Void
     let onRemoveCurrentAdjust: () -> Void
@@ -4546,9 +4792,11 @@ struct FocusModeView: View {
     let onSwapTasks: (Int, Int) -> Bool
     let onNotesModified: () -> Void
     let computeSwapDefaults: () -> (Int?, Int?)
+    let onRecalculateDistractions: () -> Void
 
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
+    @AppStorage("display.quotesVisible") private var quotesVisible: Bool = true
 
     @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
     @State private var currentIndex: Int = 0
@@ -4560,12 +4808,44 @@ struct FocusModeView: View {
     @State private var showSwapSheetFocus = false
     @State private var focusSwapDefaults: (Int?, Int?) = (nil, nil)
     @State private var showCancelMenuFocus = false
+    @State private var showAdjustOptionsFocus = false
+    @State private var showClearDistractionsConfirm = false
     @AppStorage("focusSidebar.showActiveOnly") private var showActiveOnly: Bool = false
 
     private var timeRemainingFormatted: String {
         let minutes = Int(timeRemaining) / 60
         let seconds = Int(timeRemaining) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private var focusBadge: String? {
+        let nowMin = nowMinutes
+        let activeEntry = scheduleEntries.first { e in
+            guard !e.isStruck,
+                  let sm = e.startMinutes, let em = e.endMinutes else { return false }
+            var taskClean = e.task ?? ""
+            taskClean = taskClean.replacingOccurrences(of: " [🎁]", with: "")
+            if let r = taskClean.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
+                taskClean.removeSubrange(r)
+            }
+            return nowMin >= sm && nowMin < em && taskClean == currentTaskName
+        }
+        guard let sm = activeEntry?.startMinutes else { return nil }
+        return DistractionTracker.shared.badgeText(date: selectedDate, startMin: sm, desc: currentTaskName)
+    }
+
+    private var dayTotalsBanner: (count: Int, durStr: String)? {
+        let totals = DistractionTracker.shared.dayTotals(date: selectedDate)
+        guard totals.count > 0 else { return nil }
+        let totalMin = Int(totals.seconds / 60)
+        let durStr: String
+        if totalMin <= 0 { durStr = "" }
+        else if totalMin < 60 { durStr = " · \(totalMin)m away" }
+        else {
+            let h = totalMin / 60, m = totalMin % 60
+            durStr = m > 0 ? " · \(h)h \(m)m away" : " · \(h)h away"
+        }
+        return (totals.count, durStr)
     }
 
     private var pauseCountUpFormatted: String {
@@ -4690,6 +4970,21 @@ struct FocusModeView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
 
+                // Day-total distraction summary
+                if let banner = dayTotalsBanner {
+                    HStack(spacing: 8) {
+                        Text("Today: \(banner.count) distraction\(banner.count == 1 ? "" : "s")\(banner.durStr)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(.orange.opacity(0.85))
+                        Button(action: { showClearDistractionsConfirm = true }) {
+                            Image(systemName: "arrow.counterclockwise.circle")
+                                .font(.caption)
+                                .foregroundColor(.orange.opacity(0.7))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 Spacer()
 
                 // Large timer + smart pause — shown above quotes when a cycle is active
@@ -4712,22 +5007,6 @@ struct FocusModeView: View {
                                 .fontWeight(.semibold)
                                 .foregroundColor(.cyan)
                                 .tracking(1)
-                            let focusBadge: String? = {
-                                // Find the exact entry by start minute — strip /N ~Xm and [🎁] before comparing.
-                                let nowMin = nowMinutes
-                                let activeEntry = scheduleEntries.first { e in
-                                    guard !e.isStruck,
-                                          let sm = e.startMinutes, let em = e.endMinutes else { return false }
-                                    var taskClean = e.task ?? ""
-                                    taskClean = taskClean.replacingOccurrences(of: " [🎁]", with: "")
-                                    if let r = taskClean.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
-                                        taskClean.removeSubrange(r)
-                                    }
-                                    return nowMin >= sm && nowMin < em && taskClean == currentTaskName
-                                }
-                                guard let sm = activeEntry?.startMinutes else { return nil }
-                                return DistractionTracker.shared.badgeText(date: selectedDate, startMin: sm, desc: currentTaskName)
-                            }()
                             if let badge = focusBadge {
                                 Text(badge)
                                     .font(.caption2.bold())
@@ -4752,21 +5031,12 @@ struct FocusModeView: View {
                         // Smart pause / resume + extend row
                         HStack(spacing: 12) {
                             Button(action: onSmartPause) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isSmartPaused ? "play.circle.fill" : "pause.circle.fill")
-                                        .font(.title2)
-                                    Text(isSmartPaused ? "Smart Resume" : "Smart Pause")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                }
-                                .foregroundColor(isSmartPaused ? .green : .orange)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 10)
-                                .background(
-                                    Capsule()
-                                        .fill((isSmartPaused ? Color.green : Color.orange).opacity(0.15))
-                                )
+                                Image(systemName: isSmartPaused ? "play.circle.fill" : "pause.circle.fill")
+                                    .font(.title)
+                                    .foregroundColor(isSmartPaused ? .green : .orange)
                             }
+                            .padding(10)
+                            .background(Capsule().fill((isSmartPaused ? Color.green : Color.orange).opacity(0.15)))
 
                             if !isTransitioning && !currentTaskName.isEmpty {
                                 HStack(spacing: 14) {
@@ -4787,6 +5057,15 @@ struct FocusModeView: View {
                                     }
                                     .padding(10)
                                     .background(Capsule().fill(Color.red.opacity(0.15)))
+
+                                    // Adjust
+                                    Button(action: { showAdjustOptionsFocus = true }) {
+                                        Image(systemName: "clock.arrow.2.circlepath")
+                                            .font(.title)
+                                            .foregroundColor(.purple)
+                                    }
+                                    .padding(10)
+                                    .background(Capsule().fill(Color.purple.opacity(0.15)))
 
                                     // End & New
                                     Button(action: onEndAndNew) {
@@ -4814,7 +5093,7 @@ struct FocusModeView: View {
                 }
 
                 // Large quote
-                if quotePool.isEmpty {
+                if quotesVisible && quotePool.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "books.vertical")
                             .font(.largeTitle)
@@ -4825,7 +5104,7 @@ struct FocusModeView: View {
                             .multilineTextAlignment(.center)
                     }
                     .padding()
-                } else {
+                } else if quotesVisible {
                     let quote = quotePool[currentIndex]
                     VStack(spacing: 24) {
                         Image(systemName: "quote.opening")
@@ -4920,6 +5199,19 @@ struct FocusModeView: View {
             Button("Remove & Adjust Times") { onRemoveCurrentAdjust() }
             Button("Just Remove") { onRemoveCurrentOnly() }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Add Adjust (5 min) — start from?", isPresented: $showAdjustOptionsFocus, titleVisibility: .visible) {
+            Button("Current Task") { onAdjust(false) }
+            Button("Last Completed Task") { onAdjust(true) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Recalculate Distractions", isPresented: $showClearDistractionsConfirm, titleVisibility: .visible) {
+            Button("Recalculate from Notes") {
+                onRecalculateDistractions()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rebuilds distraction counts and time-away from the /N ~Xm values saved in your notes.")
         }
     }
 
@@ -5514,6 +5806,35 @@ struct AutoScheduleSheet: View {
     var body: some View {
         NavigationView {
             Form {
+                let dayTotals = DistractionTracker.shared.dayTotals(date: selectedDate)
+                if dayTotals.count > 0 {
+                    Section {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.up.forward.app")
+                                .foregroundColor(.orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Total distractions today: \(dayTotals.count)")
+                                    .font(.subheadline)
+                                    .foregroundColor(.primary)
+                                let totalMin = Int(dayTotals.seconds / 60)
+                                if totalMin > 0 {
+                                    let durStr: String = {
+                                        if totalMin < 60 { return "\(totalMin) min away" }
+                                        let h = totalMin / 60, m = totalMin % 60
+                                        return m > 0 ? "\(h)h \(m)m away" : "\(h)h away"
+                                    }()
+                                    Text("Total time: \(durStr)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    } header: {
+                        Text("Distraction Summary")
+                    }
+                }
+
                 Section("Start Time") {
                     TextField("e.g. 12:30 PM", text: $startTime)
                         .focused($focusedField, equals: .startTime)
@@ -5683,6 +6004,228 @@ private func minutesToTimeString(_ minutes: Int) -> String {
     let h12 = h24 % 12 == 0 ? 12 : h24 % 12
     let ampm = h24 < 12 ? "AM" : "PM"
     return String(format: "%d:%02d %@", h12, m, ampm)
+}
+
+// MARK: - AI Scheduler Sheet
+
+struct AISchedulerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedDate: Date
+    let allTasks: [Task]
+    let startNumber: Int
+    let onInsert: (String) -> Void
+
+    @State private var generatedBlock: String = ""
+    @State private var isLoading = false
+    @State private var errorMessage: String? = nil
+    @State private var selectedIDs: Set<PersistentIdentifier> = []
+    @State private var hasGenerated = false
+
+    private var candidateTasks: [Task] {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: selectedDate)
+        let end   = cal.date(byAdding: .day, value: 1, to: start)!
+        // Timed tasks for this date + untimed tasks for this date
+        return allTasks.filter { t in
+            guard !t.completed && !t.notCompleted else { return false }
+            guard let d = t.date else { return false }
+            return d >= start && d < end
+        }
+    }
+
+    private var selectedTasks: [Task] {
+        candidateTasks.filter { selectedIDs.contains($0.id) }
+    }
+
+    private func priorityLabel(_ t: Task) -> String {
+        t.five ? "⭐" : t.priority
+    }
+
+    private func estimatedMin(_ t: Task) -> Int {
+        AISchedulerService.estimatedMinutes(
+            startTime: t.startTime, endTime: t.endTime,
+            timeSpent: t.timeSpent, elapsedTime: t.elapsedTime)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                // Task selection
+                Section {
+                    if candidateTasks.isEmpty {
+                        Text("No incomplete tasks found for this date.")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    } else {
+                        ForEach(candidateTasks) { task in
+                            Button(action: {
+                                if selectedIDs.contains(task.id) { selectedIDs.remove(task.id) }
+                                else { selectedIDs.insert(task.id) }
+                            }) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: selectedIDs.contains(task.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(selectedIDs.contains(task.id) ? .purple : .secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(task.title)
+                                                .font(.subheadline)
+                                                .foregroundColor(.primary)
+                                            if task.five {
+                                                Text("⭐")
+                                                    .font(.caption2)
+                                            } else {
+                                                Text(task.priority)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        let mins = estimatedMin(task)
+                                        let timedLabel = task.startTime.isEmpty ? "untimed" : "timed"
+                                        Text("~\(mins) min · \(timedLabel)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Tasks to Schedule (\(selectedIDs.count)/\(candidateTasks.count))")
+                        Spacer()
+                        if !candidateTasks.isEmpty {
+                            Button(selectedIDs.count == candidateTasks.count ? "Deselect All" : "Select All") {
+                                if selectedIDs.count == candidateTasks.count {
+                                    selectedIDs.removeAll()
+                                } else {
+                                    selectedIDs = Set(candidateTasks.map { $0.id })
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundColor(.purple)
+                        }
+                    }
+                } footer: {
+                    Text("AI will split tasks >40 min, add breaks & fun activities, and respect your 11 PM sleep time.")
+                        .font(.caption)
+                }
+
+                // Generate button
+                if !selectedIDs.isEmpty {
+                    Section {
+                        Button(action: generate) {
+                            HStack {
+                                Spacer()
+                                if isLoading {
+                                    ProgressView()
+                                        .tint(.purple)
+                                    Text("Generating…")
+                                        .foregroundColor(.purple)
+                                } else {
+                                    Image(systemName: "sparkles")
+                                    Text(hasGenerated ? "Regenerate" : "Generate Schedule")
+                                }
+                                Spacer()
+                            }
+                        }
+                        .disabled(isLoading)
+                        .foregroundColor(.purple)
+                    }
+                }
+
+                // Error
+                if let err = errorMessage {
+                    Section {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    } header: { Text("Error") }
+                }
+
+                // Preview
+                if hasGenerated && !generatedBlock.isEmpty {
+                    Section {
+                        ScrollView {
+                            Text(generatedBlock)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                        }
+                        .frame(maxHeight: 300)
+                    } header: { Text("Preview") }
+
+                    Section {
+                        Button(action: {
+                            onInsert(generatedBlock)
+                            dismiss()
+                        }) {
+                            HStack {
+                                Spacer()
+                                Label("Insert into Daily Notes", systemImage: "square.and.pencil")
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .listRowBackground(Color.purple)
+                    }
+                }
+            }
+            .navigationTitle("AI Scheduler")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                // Pre-select all tasks
+                selectedIDs = Set(candidateTasks.map { $0.id })
+            }
+        }
+    }
+
+    private func generate() {
+        guard !selectedTasks.isEmpty else { return }
+        isLoading = true
+        errorMessage = nil
+
+        let inputs = selectedTasks.map { t in
+            AISchedulerService.TaskInput(
+                title: t.title,
+                estimatedMinutes: estimatedMin(t),
+                priority: priorityLabel(t),
+                isTimed: !t.startTime.isEmpty
+            )
+        }
+        let service = AISchedulerService()
+        let date = selectedDate
+        let num  = startNumber
+
+        _Concurrency.Task {
+            do {
+                let block = try await service.generateSchedule(
+                    tasks: inputs,
+                    currentTime: Date(),
+                    selectedDate: date,
+                    startNumber: num
+                )
+                await MainActor.run {
+                    generatedBlock = block
+                    hasGenerated   = true
+                    isLoading      = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoading    = false
+                }
+            }
+        }
+    }
 }
 
 #Preview {
