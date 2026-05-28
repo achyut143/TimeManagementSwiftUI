@@ -24,7 +24,8 @@ class Task: Transferable {
     var copySubtasks: Bool = false // Toggle to copy subtasks when repeat task is created
     var whyStatement: String? // AI-generated why statement
     var whyStatementPinned: Bool = true // Whether the why statement is pinned (won't regenerate) - default true
-    
+    var goal: Goal?
+
     @Relationship(deleteRule: .cascade, inverse: \Subtask.parentTask)
     var subtasks: [Subtask]? = []
     
@@ -34,7 +35,7 @@ class Task: Transferable {
     @Relationship(deleteRule: .cascade)
     var attachments: [TaskAttachment]?
     
-    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false, whyStatement: String? = nil, whyStatementPinned: Bool = true) {
+    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, persistentNotes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false, whyStatement: String? = nil, whyStatementPinned: Bool = true, goal: Goal? = nil) {
         self.id = UUID()
         self.title = title
         self.taskDescription = taskDescription
@@ -55,6 +56,7 @@ class Task: Transferable {
         self.copySubtasks = copySubtasks
         self.whyStatement = whyStatement
         self.whyStatementPinned = whyStatementPinned
+        self.goal = goal
     }
     
     // Migration helper to ensure all tasks have unique UUIDs

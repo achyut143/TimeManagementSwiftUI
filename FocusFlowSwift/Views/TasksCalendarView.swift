@@ -40,7 +40,9 @@ struct TasksCalendarView: View {
     @State private var showMarkAllNotCompletedConfirmation = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
-    
+    @Query(sort: \Goal.name) private var goals: [Goal]
+    @State private var selectedGoalForNewTask: Goal?
+
     var body: some View {
         VStack(spacing: 0) {
             PointsIndicatorView(tasks: getAllTasksForDate())
@@ -274,6 +276,22 @@ struct TasksCalendarView: View {
                         .padding(.horizontal)
                         .font(.caption)
                 }
+
+                if !goals.isEmpty {
+                    HStack {
+                        Text("Goal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Goal", selection: $selectedGoalForNewTask) {
+                            Text("None").tag(Optional<Goal>.none)
+                            ForEach(goals) { goal in
+                                Text(goal.name).tag(Optional(goal))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    .padding(.horizontal)
+                }
             }
         }
         .padding()
@@ -410,7 +428,19 @@ struct TasksCalendarView: View {
                         .background(Color.blue.opacity(0.1))
                         .clipShape(Capsule())
                 }
-                
+
+                if let goal = task.goal {
+                    Text(goal.name)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.teal)
+                        .clipShape(Capsule())
+                        .lineLimit(1)
+                }
+
                 HStack(spacing: 8) {
                     Text(String(format: "%.1f", task.weight))
                         .font(.caption)
@@ -739,6 +769,18 @@ struct TasksCalendarView: View {
                                 print("Failed to save reassign flag:", error)
                             }
                         }
+                }
+
+                if let goal = task.goal {
+                    Text(goal.name)
+                        .font(.system(size: 8))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.teal)
+                        .clipShape(Capsule())
+                        .lineLimit(1)
                 }
             }
         }
@@ -1140,15 +1182,16 @@ struct TasksCalendarView: View {
             scheduleTaskNotifications(for: task)
         }
         
+        task.goal = selectedGoalForNewTask
         modelContext.insert(task)
-        
+
         do {
             try modelContext.save()
             updateQuery()
         } catch {
             print("Error saving task: \(error)")
         }
-        
+
         // Reset form
         taskTitle = ""
         taskTags = ""
@@ -1157,8 +1200,9 @@ struct TasksCalendarView: View {
         taskPriority = "P3"
         isUntimedTask = false
         copySubtasks = false
+        selectedGoalForNewTask = nil
     }
-    
+
     private func createQuickTask(from parsed: QuickTaskParser.ParsedTask) {
         let task = Task(
             title: parsed.title,
@@ -1261,9 +1305,10 @@ struct TasksCalendarView: View {
             copySubtasks: task.copySubtasks
             // timeSpent is intentionally not copied for repeat tasks
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
-        
+
         // Copy reward workflows from original task
         if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
             for link in rewardLinks {
@@ -1273,17 +1318,17 @@ struct TasksCalendarView: View {
                 }
             }
         }
-        
+
         // Copy subtasks if the toggle is enabled
         if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
             for subtask in subtasks {
                 copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
             }
         }
-        
+
         try? modelContext.save()
     }
-    
+
     private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
         let newSubtask = Subtask(
             name: subtask.name,
@@ -1338,19 +1383,20 @@ struct TasksCalendarView: View {
             whyStatement: task.whyStatement,
             whyStatementPinned: task.whyStatementPinned
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
-        
+
         // Copy subtasks if the toggle is enabled
         if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
             for subtask in subtasks {
                 copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
             }
         }
-        
+
         try? modelContext.save()
     }
-    
+
     private func updateTaskTime(_ task: Task, to slot: TimeSlot) {
         let startMinutes = slot.hour * 60 + slot.minute
         let endMinutes = startMinutes + 60
@@ -1430,7 +1476,8 @@ struct EditTaskView: View {
     let task: Task
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    
+    @Query(sort: \Goal.name) private var goals: [Goal]
+
     @State private var title: String
     @State private var description: String
     @State private var startTime: Date
@@ -1443,14 +1490,15 @@ struct EditTaskView: View {
     @State private var timeSpent: Double
     @State private var elapsedTime: Double
     @State private var copySubtasks: Bool
-    
+    @State private var selectedGoal: Goal?
+
     init(task: Task) {
         self.task = task
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.taskDescription)
         _taskDate = State(initialValue: task.date)
         _isUntimed = State(initialValue: task.startTime.isEmpty && task.endTime.isEmpty)
-        
+
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         _startTime = State(initialValue: formatter.date(from: task.startTime) ?? Date())
@@ -1461,6 +1509,7 @@ struct EditTaskView: View {
         _timeSpent = State(initialValue: task.timeSpent ?? 0.0)
         _elapsedTime = State(initialValue: task.elapsedTime ?? 0.0)
         _copySubtasks = State(initialValue: task.copySubtasks)
+        _selectedGoal = State(initialValue: task.goal)
     }
     
     var body: some View {
@@ -1539,7 +1588,7 @@ struct EditTaskView: View {
                 if repeatDays > 0 {
                     Toggle("Copy Subtasks on Repeat", isOn: $copySubtasks)
                 }
-                
+
                 HStack {
                     Text("Priority")
                     Picker("Priority", selection: $priority) {
@@ -1549,6 +1598,16 @@ struct EditTaskView: View {
                         Text("P4").tag("P4")
                     }
                     .pickerStyle(.segmented)
+                }
+
+                Section("Goal") {
+                    Picker("Goal", selection: $selectedGoal) {
+                        Text("No Goal").tag(Optional<Goal>.none)
+                        ForEach(goals) { goal in
+                            Text(goal.name).tag(Optional(goal))
+                        }
+                    }
+                    .pickerStyle(.menu)
                 }
             }
             .navigationTitle("Edit Task")
@@ -1597,7 +1656,8 @@ struct EditTaskView: View {
         task.weight = weight
         task.priority = priority
         task.copySubtasks = copySubtasks
-        
+        task.goal = selectedGoal
+
         // Update reward points if task is completed and effective weight changed
         if task.completed {
             let newEffectiveWeight = task.effectiveWeight
@@ -2048,9 +2108,10 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             whyStatementPinned: task.whyStatementPinned // Copy pin status
             // timeSpent is intentionally not copied for repeat tasks
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
-        
+
         // Copy reward workflows from original task
         if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
             for link in rewardLinks {
@@ -2060,17 +2121,17 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
                 }
             }
         }
-        
+
         // Copy subtasks if the toggle is enabled
         if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
             for subtask in subtasks {
                 copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
             }
         }
-        
+
         try? modelContext.save()
     }
-    
+
     private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
         let newSubtask = Subtask(
             name: subtask.name,
@@ -2126,19 +2187,20 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             whyStatementPinned: task.whyStatementPinned // Copy pin status
             // timeSpent is intentionally not copied for repeat tasks
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
-        
+
         // Copy subtasks if the toggle is enabled
         if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
             for subtask in subtasks {
                 copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
             }
         }
-        
+
         try? modelContext.save()
     }
-    
+
     private func deleteTask() {
         modelContext.delete(task)
         try? modelContext.save()
@@ -2160,7 +2222,8 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             copySubtasks: copied.copySubtasks
             // timeSpent is intentionally not copied when pasting tasks
         )
-        
+        newTask.goal = copied.goal
+
         modelContext.insert(newTask)
         try? modelContext.save()
         onTaskDeleted()

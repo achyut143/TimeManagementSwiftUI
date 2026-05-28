@@ -664,9 +664,10 @@ struct UntimedTasksView: View {
             elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
-        
+
         // Copy reward workflows from original task
         if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
             for link in rewardLinks {
@@ -676,10 +677,10 @@ struct UntimedTasksView: View {
                 }
             }
         }
-        
+
         try? modelContext.save()
     }
-    
+
     private func createRepeatTaskFromActions(from task: Task) {
         guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
         
@@ -712,11 +713,12 @@ struct UntimedTasksView: View {
             elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
         try? modelContext.save()
     }
-    
+
     private func createIncompleteTask(from task: Task) {
         guard let currentDate = task.date else { return }
         
@@ -750,7 +752,8 @@ struct UntimedTasksView: View {
             elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
-        
+        newTask.goal = task.goal
+
         modelContext.insert(newTask)
         try? modelContext.save()
     }

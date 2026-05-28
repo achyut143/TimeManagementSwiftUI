@@ -554,19 +554,22 @@ struct HabitOverviewView: View {
                 }
             }
             
-            // Ultra-compact stats row
+            // Ultra-compact stats row — single pass over allScores
+            let totalDone = allScores.reduce(0) { $0 + $1.completedDays }
+            let totalPenalty = allScores.reduce(0.0) { $0 + $1.decayPenalty }
+            let maxStreak = allScores.reduce(0) { max($0, $1.currentStreak) }
             HStack(spacing: 8) {
                 HStack(spacing: 2) {
-                    Text("\(allScores.map(\.completedDays).reduce(0, +))")
+                    Text("\(totalDone)")
                         .font(.caption2)
                         .fontWeight(.bold)
                     Text("done")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
-                
+
                 HStack(spacing: 2) {
-                    Text(String(format: "%.1f", allScores.map(\.decayPenalty).reduce(0, +)))
+                    Text(String(format: "%.1f", totalPenalty))
                         .font(.caption2)
                         .fontWeight(.bold)
                         .foregroundColor(.red)
@@ -574,9 +577,9 @@ struct HabitOverviewView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
-                
+
                 HStack(spacing: 2) {
-                    Text("\(allScores.map(\.currentStreak).max() ?? 0)")
+                    Text("\(maxStreak)")
                         .font(.caption2)
                         .fontWeight(.bold)
                         .foregroundColor(.orange)
@@ -624,42 +627,32 @@ struct HabitOverviewView: View {
     }
     
     private var filteredHabitNames: [String] {
-        let allHabitNames = Array(Set(habitTasks.map { $0.title })).sorted()
-        
+        // Build lookup dictionary once — avoids re-filtering tasks for every habit name
+        var tasksByTitle: [String: [Task]] = [:]
+        for task in tasks where task.repeatAgain != nil {
+            tasksByTitle[task.title, default: []].append(task)
+        }
+        let allHabitNames = tasksByTitle.keys.sorted()
+
         return allHabitNames
             .filter { name in
-                // Apply repeat frequency filter if selected
-                if let selectedRepeat = selectedRepeatFilter {
-                    let habitTasks = tasks.filter { $0.title == name && $0.repeatAgain != nil }
-                    let habitRepeatValues = Set(habitTasks.compactMap { $0.repeatAgain })
-                    
-                    // Show habits with repeat values <= selectedRepeat
-                    return habitRepeatValues.contains { $0 <= selectedRepeat }
-                }
-                return true
+                guard let selectedRepeat = selectedRepeatFilter else { return true }
+                let repeatValues = Set(tasksByTitle[name]!.compactMap { $0.repeatAgain })
+                return repeatValues.contains { $0 <= selectedRepeat }
             }
             .filter { name in
-                // Apply tags filter if selected
-                if !selectedTagsFilter.isEmpty {
-                    let habitTasks = tasks.filter { $0.title == name && $0.repeatAgain != nil }
-                    
-                    // Check if any habit task has at least one of the selected tags
-                    return habitTasks.contains { task in
-                        // Handle empty tag selection
-                        if selectedTagsFilter.contains("") && task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
-                            return true
-                        }
-                        
-                        // Split taskDescription by commas and check for matches
-                        let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                        return !Set(taskTags).isDisjoint(with: selectedTagsFilter)
+                guard !selectedTagsFilter.isEmpty else { return true }
+                return tasksByTitle[name]!.contains { task in
+                    if selectedTagsFilter.contains("") && task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
+                        return true
                     }
+                    let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    return !Set(taskTags).isDisjoint(with: selectedTagsFilter)
                 }
-                return true
             }
             .filter { appliedSearch.isEmpty || $0.localizedCaseInsensitiveContains(appliedSearch) }
             .filter { name in
-                if percentageFilter == "all" { return true }
+                guard percentageFilter != "all" else { return true }
                 let pct = cachedStats[name]?.percentage ?? 0
                 return percentageFilter == "above" ? pct >= 85 : pct < 85
             }
@@ -726,71 +719,49 @@ struct HabitOverviewView: View {
     // MARK: - Helper Methods
     
     private func calculateDisciplineScoreForHabit(_ habitName: String) -> DisciplineMuscleScore {
-        // Get tasks for this specific habit
-        let habitSpecificTasks = tasks.filter { task in
-            guard task.repeatAgain != nil && task.title == habitName else { return false }
-            return true // Show all repeating tasks for discipline calculation
-        }
-        
-        // Get the repeat interval from the first task (assuming all tasks with same name have same interval)
+        let cal = Calendar.current
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
         let repeatInterval = habitSpecificTasks.first?.repeatAgain ?? 1
-        
-        // Create array to track daily completion status - ONLY for days where tasks exist
+
+        // Index tasks by day once — avoids O(dates × tasks) nested filter
+        let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
+
         var dailyCompletions: [(Date, Bool)] = []
-        
-        // Calculate completions for each date in range - ONLY count days with actual tasks
         for date in dateRange {
-            let dayTasks = habitSpecificTasks.filter { task in
-                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
-            }
-            
-            // Only add to dailyCompletions if there are actual tasks on this day
-            if !dayTasks.isEmpty {
-                let isCompleted = dayTasks.contains(where: { $0.completed })
-                dailyCompletions.append((date, isCompleted))
-            }
+            let day = cal.startOfDay(for: date)
+            guard let dayTasks = tasksByDay[day], !dayTasks.isEmpty else { continue }
+            dailyCompletions.append((date, dayTasks.contains(where: { $0.completed })))
         }
-        
-        // Use DisciplineMuscleCalculator to get the score with repeat interval
-        // Pass the actual number of days with tasks, not the total date range
+
         return DisciplineMuscleCalculator.calculateScore(
             completions: dailyCompletions,
-            totalDays: dailyCompletions.count, // Use actual task days, not dateRange.count
+            totalDays: dailyCompletions.count,
             repeatInterval: repeatInterval
         )
     }
-    
+
     private func calculateStatsForHabit(_ habitName: String) -> HabitStats {
         var completed = 0
         var missed = 0
-        
-        // Get tasks for this specific habit
-        let habitSpecificTasks = tasks.filter { task in
-            guard task.repeatAgain != nil && task.title == habitName else { return false }
-            return true // Show all repeating tasks
-        }
-        
-        // Create array to track daily completion status for streak calculation - ONLY for days with tasks
+        let cal = Calendar.current
+
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
+
+        // Index tasks by day once — avoids O(dates × tasks) nested filter
+        let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
+
         var dailyCompletions: [(Date, Bool)] = []
-        
-        // Calculate stats for each date in range - ONLY count days with actual tasks
         for date in dateRange {
-            let dayTasks = habitSpecificTasks.filter { task in
-                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
-            }
-            
-            // Only process days where tasks actually exist
-            if !dayTasks.isEmpty {
-                let isCompleted = dayTasks.contains(where: { $0.completed })
-                let isMissed = dayTasks.contains(where: { $0.notCompleted })
-                
-                if isCompleted {
-                    completed += 1
-                    dailyCompletions.append((date, true))
-                } else if isMissed {
-                    missed += 1
-                    dailyCompletions.append((date, false))
-                }
+            let day = cal.startOfDay(for: date)
+            guard let dayTasks = tasksByDay[day], !dayTasks.isEmpty else { continue }
+            let isCompleted = dayTasks.contains(where: { $0.completed })
+            let isMissed = dayTasks.contains(where: { $0.notCompleted })
+            if isCompleted {
+                completed += 1
+                dailyCompletions.append((date, true))
+            } else if isMissed {
+                missed += 1
+                dailyCompletions.append((date, false))
             }
         }
         
@@ -813,29 +784,21 @@ struct HabitOverviewView: View {
     }
     
     private func calculatePointsForHabit(_ habitName: String) -> (earned: Double, allocated: Double) {
-        let habitSpecificTasks = tasks.filter { task in
-            guard task.repeatAgain != nil && task.title == habitName else { return false }
-            return true // Show all repeating tasks
-        }
-        
-        var earnedPoints: Double = 0
-        var allocatedPoints: Double = 0
-        
-        // Calculate points for each date in range - ONLY for days with actual tasks
+        let cal = Calendar.current
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
+
+        // Index by day once — avoids O(dates × tasks) nested filter
+        let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
+
+        var earnedPoints = 0.0
+        var allocatedPoints = 0.0
         for date in dateRange {
-            let dayTasks = habitSpecificTasks.filter { task in
-                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
-            }
-            
-            // Only process days where tasks actually exist
-            for task in dayTasks {
+            let day = cal.startOfDay(for: date)
+            for task in tasksByDay[day] ?? [] {
                 allocatedPoints += task.weight
-                if task.completed {
-                    earnedPoints += task.effectiveWeight
-                }
+                if task.completed { earnedPoints += task.effectiveWeight }
             }
         }
-        
         return (earned: earnedPoints, allocated: allocatedPoints)
     }
     
@@ -1341,38 +1304,26 @@ struct HabitOverviewView: View {
     }
     
     private func calculateEventStatsForHabit(_ habitName: String) -> (eventDays: Int, nonEventMisses: Int) {
-        // Get tasks for this specific habit
-        let habitSpecificTasks = tasks.filter { task in
-            guard task.repeatAgain != nil && task.title == habitName else { return false }
-            return true
-        }
-        
+        let cal = Calendar.current
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
+
+        // Index habit tasks and event days by startOfDay — avoids O(n²) nested search
+        let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
+        let eventDaySet = Set(eventDays.compactMap { $0.hasAnyEvent ? cal.startOfDay(for: $0.date) : nil })
+
         var eventDaysCount = 0
         var nonEventMissesCount = 0
-        
-        // Calculate stats for each date in range
         for date in dateRange {
-            let dayTasks = habitSpecificTasks.filter { task in
-                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
-            }
-            
-            // Only process days where tasks actually exist
-            if !dayTasks.isEmpty {
-                let isEventDay = eventDays.contains { eventDay in
-                    Calendar.current.isDate(eventDay.date, inSameDayAs: date) && eventDay.hasAnyEvent
-                }
-                
-                let isCompleted = dayTasks.contains(where: { $0.completed })
-                let isMissed = dayTasks.contains(where: { $0.notCompleted })
-                
-                if isEventDay {
-                    eventDaysCount += 1
-                } else if isMissed && !isCompleted {
-                    nonEventMissesCount += 1
-                }
+            let day = cal.startOfDay(for: date)
+            guard let dayTasks = tasksByDay[day], !dayTasks.isEmpty else { continue }
+            let isCompleted = dayTasks.contains(where: { $0.completed })
+            let isMissed = dayTasks.contains(where: { $0.notCompleted })
+            if eventDaySet.contains(day) {
+                eventDaysCount += 1
+            } else if isMissed && !isCompleted {
+                nonEventMissesCount += 1
             }
         }
-        
         return (eventDays: eventDaysCount, nonEventMisses: nonEventMissesCount)
     }
     

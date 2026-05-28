@@ -93,6 +93,16 @@ struct TaskTableView: View {
         let rangeStart = effectiveStart
         let rangeEnd = effectiveEnd
 
+        // Pre-compute metrics for habit tasks once — avoids calling calculateMetrics inside the filter (O(n²))
+        var completionRateCache: [ObjectIdentifier: Double] = [:]
+        if percentageFilter != "all" {
+            let allTasksArray = Array(tasks)
+            for task in tasks where task.repeatAgain != nil {
+                let m = task.calculateMetrics(days: metricDays, allTasks: allTasksArray, referenceDate: task.date ?? Date())
+                completionRateCache[ObjectIdentifier(task)] = m.completionRate
+            }
+        }
+
         return tasks.filter { task in
             guard let taskDate = task.date else { return false }
             guard taskDate >= rangeStart && taskDate < rangeEnd else { return false }
@@ -102,9 +112,9 @@ struct TaskTableView: View {
             guard taskMatchesStatus(completed: task.completed, notCompleted: task.notCompleted) else { return false }
             guard taskMatchesTags(description: task.taskDescription) else { return false }
             if percentageFilter != "all" && task.repeatAgain != nil {
-                let metrics = task.calculateMetrics(days: metricDays, allTasks: Array(tasks), referenceDate: task.date ?? Date())
-                if percentageFilter == "above" { guard metrics.completionRate >= 85 else { return false } }
-                else { guard metrics.completionRate < 85 else { return false } }
+                let rate = completionRateCache[ObjectIdentifier(task)] ?? 0
+                if percentageFilter == "above" { guard rate >= 85 else { return false } }
+                else { guard rate < 85 else { return false } }
             }
             return true
         }.sorted { ($0.date ?? Date()) > ($1.date ?? Date()) }
@@ -538,6 +548,17 @@ struct TaskRowView: View {
                     }
                 }
                 SubtaskCountButton(task: task)
+                if let goal = task.goal {
+                    Text(goal.name)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.teal)
+                        .clipShape(Capsule())
+                        .lineLimit(1)
+                }
                 Spacer()
                 let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 if !taskTags.isEmpty {

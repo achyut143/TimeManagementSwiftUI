@@ -21,12 +21,12 @@ struct HabitGridView: View {
     // MARK: - Caches
     @State private var cachedDateRange: [Date] = []
     @State private var cachedHabitNames: [String] = []
-    @State private var cachedStatsMap: [String: (streak: Int, best: Int, completed: Int, total: Int)] = [:]
-    @State private var cachedStatusGrid: [String: CellStatus] = [:]  // key: "habitName|dateISO"
+    @State private var cachedStatsMap: [String: GridHabitStats] = [:]
+    @State private var cachedStatusGrid: [String: CellStatus] = [:]  // key: "habitName|timeInterval"
 
     private let leftWidth: CGFloat = 170
     private let cellWidth: CGFloat = 44
-    private let rowHeight: CGFloat = 52
+    private let rowHeight: CGFloat = 68
 
     // MARK: - Computed (use caches)
 
@@ -34,17 +34,68 @@ struct HabitGridView: View {
     private var habitNames: [String] { cachedHabitNames }
     private var dateRange: [Date] { cachedDateRange }
 
-    // MARK: - Helpers
+    // MARK: - Data Types
 
-    private enum CellStatus { case completed, missed, noData }
+    private struct GridHabitStats {
+        var streak: Int = 0
+        var best: Int = 0
+        var completed: Int = 0
+        var total: Int = 0
+        var ideal: Int = 0
+        var good: Int = 0
+        var survival: Int = 0
+        var idle: Int = 0
+    }
+
+    // Completion states based on timeSpent / allocatedTime ratio:
+    //   ideal    ≥ 75%
+    //   good     30–75%
+    //   survival 10–30%
+    //   idle     < 10% or no time data (backward-compatible default = green)
+    private enum CellStatus {
+        case completedIdeal
+        case completedGood
+        case completedSurvival
+        case completedIdle
+        case missed
+        case noData
+
+        var isCompleted: Bool {
+            switch self {
+            case .completedIdeal, .completedGood, .completedSurvival, .completedIdle: return true
+            default: return false
+            }
+        }
+    }
+
+    // MARK: - Helpers
 
     private func status(habit: String, on date: Date) -> CellStatus {
         let key = "\(habit)|\(date.timeIntervalSince1970)"
         return cachedStatusGrid[key] ?? .noData
     }
 
-    private func stats(habit: String) -> (streak: Int, best: Int, completed: Int, total: Int) {
-        cachedStatsMap[habit] ?? (streak: 0, best: 0, completed: 0, total: 0)
+    private func stats(habit: String) -> GridHabitStats {
+        cachedStatsMap[habit] ?? GridHabitStats()
+    }
+
+    /// Determine the completion state for a day's tasks using time ratio.
+    /// Falls back to .completedIdle when timeSpent is missing or zero (backward compat).
+    private func completionStatus(for dayTasks: [Task]) -> CellStatus {
+        guard let completedTask = dayTasks.first(where: { $0.completed }) else {
+            return dayTasks.contains(where: { $0.notCompleted }) ? .missed : .noData
+        }
+
+        let allocated = completedTask.allocatedTimeInMinutes
+        guard let spent = completedTask.timeSpent, spent > 0, allocated > 0 else {
+            return .completedIdle
+        }
+
+        let ratio = spent / allocated
+        if ratio >= 0.75 { return .completedIdeal }
+        if ratio >= 0.30 { return .completedGood }
+        if ratio >= 0.10 { return .completedSurvival }
+        return .completedIdle
     }
 
     // MARK: - Grid Recomputation
@@ -66,18 +117,18 @@ struct HabitGridView: View {
         }
         cachedHabitNames = names
 
-        // Build task lookup by habit name for fast access
         var tasksByHabit: [String: [Task]] = [:]
         for task in ht {
             tasksByHabit[task.title, default: []].append(task)
         }
 
-        var statsMap: [String: (streak: Int, best: Int, completed: Int, total: Int)] = [:]
+        var statsMap: [String: GridHabitStats] = [:]
         var statusGrid: [String: CellStatus] = [:]
 
         for habit in names {
             let habitTasks = tasksByHabit[habit] ?? []
             var completions: [(Date, Bool)] = []
+            var idealCount = 0, goodCount = 0, survivalCount = 0, idleCount = 0
 
             for date in dates {
                 let day = habitTasks.filter { cal.isDate($0.date ?? .distantPast, inSameDayAs: date) }
@@ -86,14 +137,21 @@ struct HabitGridView: View {
                     statusGrid[key] = .noData
                     continue
                 }
-                if day.contains(where: { $0.completed }) {
-                    statusGrid[key] = .completed
-                    completions.append((date, true))
-                } else if day.contains(where: { $0.notCompleted }) {
-                    statusGrid[key] = .missed
+                let cellStatus = completionStatus(for: day)
+                statusGrid[key] = cellStatus
+                switch cellStatus {
+                case .completedIdeal:
+                    completions.append((date, true)); idealCount += 1
+                case .completedGood:
+                    completions.append((date, true)); goodCount += 1
+                case .completedSurvival:
+                    completions.append((date, true)); survivalCount += 1
+                case .completedIdle:
+                    completions.append((date, true)); idleCount += 1
+                case .missed:
                     completions.append((date, false))
-                } else {
-                    statusGrid[key] = .noData
+                case .noData:
+                    break
                 }
             }
 
@@ -103,7 +161,12 @@ struct HabitGridView: View {
             var current = 0
             for (_, done) in sorted.reversed() { if done { current += 1 } else { break } }
             let completedCount = sorted.filter { $0.1 }.count
-            statsMap[habit] = (streak: current, best: best, completed: completedCount, total: sorted.count)
+            statsMap[habit] = GridHabitStats(
+                streak: current, best: best,
+                completed: completedCount, total: sorted.count,
+                ideal: idealCount, good: goodCount,
+                survival: survivalCount, idle: idleCount
+            )
         }
 
         cachedStatsMap = statsMap
@@ -227,7 +290,6 @@ struct HabitGridView: View {
         VStack(spacing: 0) {
             // Sticky header row (outside vertical scroll)
             HStack(spacing: 0) {
-                // Left column header cell
                 Text("Habit")
                     .font(.caption.bold())
                     .foregroundColor(.secondary)
@@ -236,7 +298,6 @@ struct HabitGridView: View {
                     .background(Color(.systemGroupedBackground))
                     .shadow(color: .black.opacity(0.06), radius: 3, x: 2, y: 0)
 
-                // Date header — fixed frame, content offset inside it to mirror scroll
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .frame(height: rowHeight)
@@ -266,6 +327,8 @@ struct HabitGridView: View {
                     }
                 }
             }
+
+            statsFooter
         }
     }
 
@@ -273,7 +336,7 @@ struct HabitGridView: View {
         VStack(spacing: 0) {
             ForEach(habitNames, id: \.self) { habit in
                 let s = stats(habit: habit)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(habit)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
@@ -284,6 +347,19 @@ struct HabitGridView: View {
                             .font(.caption2).foregroundColor(Color(hue: 0.12, saturation: 0.9, brightness: 0.85))
                         Text("\(s.completed)/\(s.total)")
                             .font(.caption2).fontWeight(.bold).foregroundColor(.primary)
+                    }
+                    if s.ideal + s.good + s.survival > 0 {
+                        HStack(spacing: 5) {
+                            if s.ideal > 0 {
+                                Text("I:\(s.ideal)").font(.caption2).foregroundColor(.teal)
+                            }
+                            if s.good > 0 {
+                                Text("G:\(s.good)").font(.caption2).foregroundColor(.yellow)
+                            }
+                            if s.survival > 0 {
+                                Text("S:\(s.survival)").font(.caption2).foregroundColor(.orange)
+                            }
+                        }
                     }
                 }
                 .frame(width: leftWidth, height: rowHeight, alignment: .leading)
@@ -323,7 +399,16 @@ struct HabitGridView: View {
     @ViewBuilder
     private func cellView(_ s: CellStatus) -> some View {
         switch s {
-        case .completed:
+        case .completedIdeal:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.teal).font(.system(size: 18))
+        case .completedGood:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.yellow).font(.system(size: 18))
+        case .completedSurvival:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.orange).font(.system(size: 18))
+        case .completedIdle:
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(.green).font(.system(size: 18))
         case .missed:
@@ -332,5 +417,45 @@ struct HabitGridView: View {
         case .noData:
             Text("–").font(.caption).foregroundColor(.secondary.opacity(0.4))
         }
+    }
+
+    // MARK: - Stats Footer
+
+    private var statsFooter: some View {
+        let totals = habitNames.reduce((ideal: 0, good: 0, survival: 0, idle: 0)) { acc, habit in
+            let s = stats(habit: habit)
+            return (acc.ideal + s.ideal, acc.good + s.good, acc.survival + s.survival, acc.idle + s.idle)
+        }
+
+        return VStack(spacing: 6) {
+            Divider()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.teal).frame(width: 8, height: 8)
+                        Text("Ideal (≥75%)").font(.caption2).foregroundColor(.secondary)
+                        Text("\(totals.ideal)").font(.caption2).fontWeight(.bold).foregroundColor(.teal)
+                    }
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.yellow).frame(width: 8, height: 8)
+                        Text("Good (30-75%)").font(.caption2).foregroundColor(.secondary)
+                        Text("\(totals.good)").font(.caption2).fontWeight(.bold).foregroundColor(.yellow)
+                    }
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.orange).frame(width: 8, height: 8)
+                        Text("Survival (10-30%)").font(.caption2).foregroundColor(.secondary)
+                        Text("\(totals.survival)").font(.caption2).fontWeight(.bold).foregroundColor(.orange)
+                    }
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.green).frame(width: 8, height: 8)
+                        Text("Idle (no time data)").font(.caption2).foregroundColor(.secondary)
+                        Text("\(totals.idle)").font(.caption2).fontWeight(.bold).foregroundColor(.green)
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .padding(.vertical, 8)
+        }
+        .background(Color(.systemGroupedBackground))
     }
 }

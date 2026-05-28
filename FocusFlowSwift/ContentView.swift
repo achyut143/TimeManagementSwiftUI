@@ -172,6 +172,22 @@ struct ContentView: View {
                 }
                 
                 NavigationStack {
+                    GoalListView()
+                }
+                .tabItem {
+                    Image(systemName: "target")
+                    Text("Goals")
+                }
+
+                NavigationStack {
+                    DayBlocksView()
+                }
+                .tabItem {
+                    Image(systemName: "shield.fill")
+                    Text("Battles")
+                }
+
+                NavigationStack {
                     OKRInsightsView()
                 }
                 .tabItem {
@@ -280,5 +296,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, Reward.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, Reward.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self], inMemory: true)
 }

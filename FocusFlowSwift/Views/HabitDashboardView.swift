@@ -313,7 +313,7 @@ struct HabitDashboardView: View {
             }
             .frame(width: 40, height: 40)
             .background(colorForStatus(status))
-            .foregroundColor(status == .noData ? .primary : .white)
+            .foregroundColor(status == .noData || status == .completedGood ? .primary : .white)
             .cornerRadius(6)
             
             // Event day halos - circular glowing rings with gaps
@@ -385,54 +385,119 @@ struct HabitDashboardView: View {
     
     private var statsView: some View {
         let stats = calculateStatsForHabit(selectedHabit)
-        let percentage = stats.total > 0 ? Int((Double(stats.completed) / Double(stats.total)) * 100) : 0
-        
-        return VStack(spacing: 16) {
-            // First row: Completed and Missed
-            HStack(spacing: 20) {
-                statItem(title: "Completed", value: stats.completed, color: .green)
-                statItem(title: "Missed", value: stats.missed, color: .red)
-            }
-            
-            // Second row: Streaks
-            HStack(spacing: 20) {
-                statItem(title: "Current Streak", value: stats.currentStreak, color: .blue)
-                statItem(title: "Max Streak", value: stats.maxStreak, color: .purple)
-            }
-            
-            // Completion rate
-            Text("\(percentage)% Completion Rate")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(percentage >= 80 ? .green : percentage >= 60 ? .orange : .red)
+        let timeStats = calculateTimeStatsForHabit(selectedHabit)
+        let totalCompleted = stats.completed
+        let completionRate = stats.total > 0 ? Int(Double(stats.completed) / Double(stats.total) * 100) : 0
+
+        func pct(_ n: Int) -> String {
+            totalCompleted > 0 ? "\(Int(Double(n) / Double(totalCompleted) * 100))%" : "–"
         }
-        .padding()
-    }
-    
-    private func statItem(title: String, value: Int, color: Color) -> some View {
-        VStack(spacing: 4) {
-            HStack {
-                if title.contains("Streak") {
-                    Image(systemName: title.contains("Current") ? "flame.fill" : "trophy.fill")
-                        .foregroundColor(color)
-                        .font(.caption)
-                } else {
-                    Rectangle()
-                        .fill(color)
-                        .frame(width: 15, height: 15)
-                        .cornerRadius(2)
+
+        return VStack(spacing: 10) {
+            // Time-state breakdown table
+            VStack(spacing: 0) {
+                HStack {
+                    Text("State").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Times").frame(width: 52, alignment: .trailing)
+                    Text("% of Done").frame(width: 72, alignment: .trailing)
                 }
-                
-                Text("\(value)")
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .foregroundColor(color)
-            }
-            
-            Text(title)
-                .font(.caption)
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(Color(.systemGray6))
+
+                Divider()
+                timeStatRow("Ideal (≥75%)", color: .teal, count: timeStats.ideal, pct: pct(timeStats.ideal))
+                Divider().padding(.leading, 14)
+                timeStatRow("Good (30–75%)", color: Color(hue: 0.14, saturation: 0.85, brightness: 0.90), count: timeStats.good, pct: pct(timeStats.good))
+                Divider().padding(.leading, 14)
+                timeStatRow("Survival (10–30%)", color: .orange, count: timeStats.survival, pct: pct(timeStats.survival))
+                Divider().padding(.leading, 14)
+                timeStatRow("Idle (no time data)", color: .green, count: timeStats.idle, pct: pct(timeStats.idle))
+                Divider()
+
+                HStack {
+                    Text("Total Completed")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("\(totalCompleted)")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.primary)
+                        .frame(width: 52, alignment: .trailing)
+                    Text("\(completionRate)% rate")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(completionRate >= 80 ? .green : completionRate >= 60 ? .orange : .red)
+                        .frame(width: 72, alignment: .trailing)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6).opacity(0.6))
+            }
+            .background(Color(.systemBackground))
+            .cornerRadius(10)
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.systemGray4), lineWidth: 0.5))
+
+            // Streaks row
+            HStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "flame.fill").foregroundColor(.orange)
+                    VStack(spacing: 2) {
+                        Text("\(stats.currentStreak)")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.orange)
+                        Text("Current Streak")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                Rectangle()
+                    .fill(Color(.systemGray4))
+                    .frame(width: 0.5, height: 44)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "trophy.fill").foregroundColor(.purple)
+                    VStack(spacing: 2) {
+                        Text("\(stats.maxStreak)")
+                            .font(.title3.weight(.bold))
+                            .foregroundColor(.purple)
+                        Text("Max Streak")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 12)
+            .background(Color(.systemBackground))
+            .cornerRadius(10)
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.systemGray4), lineWidth: 0.5))
         }
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+    }
+
+    private func timeStatRow(_ label: String, color: Color, count: Int, pct: String) -> some View {
+        HStack {
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 9, height: 9)
+                Text(label).font(.caption).foregroundColor(.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(count)")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(count > 0 ? color : .secondary)
+                .frame(width: 52, alignment: .trailing)
+            Text(pct)
+                .font(.caption)
+                .foregroundColor(count > 0 ? .primary : .secondary)
+                .frame(width: 72, alignment: .trailing)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
     
     private var overallStreakSummary: some View {
@@ -550,23 +615,38 @@ struct HabitDashboardView: View {
     
     // MARK: - Helper Methods
     
+    private func completionStatusForTasks(_ tasks: [Task]) -> HabitStatus {
+        guard let completedTask = tasks.first(where: { $0.completed }) else {
+            return tasks.contains(where: { $0.notCompleted }) ? .missed : .noData
+        }
+        let allocated = completedTask.allocatedTimeInMinutes
+        guard let spent = completedTask.timeSpent, spent > 0, allocated > 0 else {
+            return .completedIdle
+        }
+        let ratio = spent / allocated
+        if ratio >= 0.75 { return .completedIdeal }
+        if ratio >= 0.30 { return .completedGood }
+        if ratio >= 0.10 { return .completedSurvival }
+        return .completedIdle
+    }
+
     private func getStatusForDay(date: Date) -> HabitStatus {
         let dayTasks = filteredHabitTasks.filter { task in
             task.title == selectedHabit &&
             Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
         }
-        
         if dayTasks.isEmpty { return .noData }
-        if dayTasks.contains(where: { $0.completed }) { return .completed }
-        if dayTasks.contains(where: { $0.notCompleted }) { return .missed }
-        return .noData
+        return completionStatusForTasks(dayTasks)
     }
-    
+
     private func colorForStatus(_ status: HabitStatus) -> Color {
         switch status {
-        case .completed: return .green
-        case .missed: return .red
-        case .noData: return .gray.opacity(0.3)
+        case .completedIdeal:    return .teal
+        case .completedGood:     return Color(hue: 0.14, saturation: 0.85, brightness: 0.90)
+        case .completedSurvival: return .orange
+        case .completedIdle:     return .green
+        case .missed:            return .red
+        case .noData:            return .gray.opacity(0.3)
         }
     }
     
@@ -631,6 +711,26 @@ struct HabitDashboardView: View {
         )
     }
     
+    private func calculateTimeStatsForHabit(_ habitName: String) -> (ideal: Int, good: Int, survival: Int, idle: Int) {
+        let cal = Calendar.current
+        let habitSpecificTasks = filteredHabitTasks.filter { $0.title == habitName }
+        let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
+
+        var ideal = 0, good = 0, survival = 0, idle = 0
+        for date in dateRange {
+            let day = cal.startOfDay(for: date)
+            guard let dayTasks = tasksByDay[day], !dayTasks.isEmpty else { continue }
+            switch completionStatusForTasks(dayTasks) {
+            case .completedIdeal:    ideal += 1
+            case .completedGood:     good += 1
+            case .completedSurvival: survival += 1
+            case .completedIdle:     idle += 1
+            default: break
+            }
+        }
+        return (ideal: ideal, good: good, survival: survival, idle: idle)
+    }
+
     // Helper method to calculate current and max streaks
     private func calculateStreaks(from dailyCompletions: [(Date, Bool)]) -> (current: Int, max: Int) {
         guard !dailyCompletions.isEmpty else { return (0, 0) }
@@ -702,7 +802,19 @@ struct HabitDashboardView: View {
 }
 
 enum HabitStatus {
-    case completed, missed, noData
+    case completedIdeal    // ≥75% time ratio
+    case completedGood     // 30–75% time ratio
+    case completedSurvival // 10–30% time ratio
+    case completedIdle     // no time data or <10% (backward-compat default)
+    case missed
+    case noData
+
+    var isCompleted: Bool {
+        switch self {
+        case .completedIdeal, .completedGood, .completedSurvival, .completedIdle: return true
+        default: return false
+        }
+    }
 }
 
 struct HabitStats {

@@ -120,6 +120,19 @@ class DistractionTracker: ObservableObject {
 
     // MARK: - Exit / Return tracking
 
+    var hasPendingExit: Bool { pendingExitTime != nil }
+
+    var pendingAbsenceSeconds: TimeInterval {
+        guard let t = pendingExitTime else { return 0 }
+        return Date().timeIntervalSince(t)
+    }
+
+    func cancelPendingExit() {
+        pendingExitTime     = nil
+        pendingExitKey      = nil
+        pendingExitSchedule = []
+    }
+
     /// Call when the user leaves DailyNotes or backgrounds the app.
     /// `schedule` is the full non-struck task list so that on return we can split time across boundaries.
     func recordExit(date: Date, startMin: Int, desc: String,
@@ -242,24 +255,33 @@ class DistractionTracker: ObservableObject {
     }
 
     private func formatted(count: Int, seconds: TimeInterval) -> String {
-        let totalMin = Int(seconds / 60)
-        guard totalMin > 0 else { return "↗\(count)" }
-        if totalMin < 60 { return "↗\(count) ~\(totalMin)m" }
+        let totalSec = Int(seconds)
+        guard totalSec > 0 else { return "↗\(count)" }
+        let totalMin = totalSec / 60
+        let remSec   = totalSec % 60
+        if totalMin == 0 { return "↗\(count) ~\(remSec)s" }
+        if totalMin < 60 {
+            return remSec > 0 ? "↗\(count) ~\(totalMin)m \(remSec)s" : "↗\(count) ~\(totalMin)m"
+        }
         let h = totalMin / 60, m = totalMin % 60
         return m > 0 ? "↗\(count) ~\(h)h \(m)m" : "↗\(count) ~\(h)h"
     }
 
     // MARK: - Notes suffix helpers
 
-    static let metricsSuffixPattern = #"\s*/\d+(\s*~\d+h\s*\d+m|\s*~\d+h|\s*~\d+m)?$"#
+    static let metricsSuffixPattern = #"\s*/\d+(\s*~\d+h\s*\d+m|\s*~\d+h|\s*~\d+m\s*\d+s|\s*~\d+m|\s*~\d+s)?$"#
 
     func metricsSuffix(count: Int, seconds: TimeInterval) -> String {
         guard count > 0 else { return "" }
         var s = " /\(count)"
-        let totalMin = Int(seconds / 60)
-        if totalMin > 0 {
-            if totalMin < 60 { s += " ~\(totalMin)m" }
-            else {
+        let totalSec = Int(seconds)
+        if totalSec > 0 {
+            let totalMin = totalSec / 60
+            let remSec   = totalSec % 60
+            if totalMin == 0 { s += " ~\(remSec)s" }
+            else if totalMin < 60 {
+                s += remSec > 0 ? " ~\(totalMin)m \(remSec)s" : " ~\(totalMin)m"
+            } else {
                 let h = totalMin / 60, m = totalMin % 60
                 s += m > 0 ? " ~\(h)h \(m)m" : " ~\(h)h"
             }

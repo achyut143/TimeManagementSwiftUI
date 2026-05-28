@@ -13,71 +13,54 @@ struct TagAnalyticsView: View {
         Array(Set(tasks.flatMap { $0.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } })).sorted()
     }
     
-    var chartData: [(Date, Double)] {
-        let filteredTasks = tasks.filter { task in
-            guard let taskDate = task.date, task.completed else { return false }
-            let dateInRange = taskDate >= startDate && taskDate <= endDate
-            if selectedTags.isEmpty { return dateInRange }
-            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
-            return dateInRange && !taskTags.isDisjoint(with: selectedTags)
-        }
-        
-        let dateRange = generateDateRange()
-        let groupedByDate = Dictionary(grouping: filteredTasks) { task in
-            Calendar.current.startOfDay(for: task.date ?? Date())
-        }
-        
-        return dateRange.map { date in
-            let tasksForDate = groupedByDate[date] ?? []
-            let timeSpent = tasksForDate.reduce(0.0) { total, task in
-                return total + task.effectiveTimeInMinutes
-            }
-            return (date, timeSpent / 60.0)
-        }
-    }
-    
-    var pointsData: [(Date, Double)] {
-        let filteredTasks = tasks.filter { task in
-            guard let taskDate = task.date, task.completed else { return false }
-            let dateInRange = taskDate >= startDate && taskDate <= endDate
-            if selectedTags.isEmpty { return dateInRange }
-            let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
-            return dateInRange && !taskTags.isDisjoint(with: selectedTags)
-        }
-        
-        let dateRange = generateDateRange()
-        let groupedByDate = Dictionary(grouping: filteredTasks) { task in
-            Calendar.current.startOfDay(for: task.date ?? Date())
-        }
-        
-        return dateRange.map { date in
-            let tasksForDate = groupedByDate[date] ?? []
-            let points = tasksForDate.reduce(0.0) { total, task in
-                return total + task.effectiveWeight
-            }
-            return (date, points)
-        }
-    }
-    
-    private func generateDateRange() -> [Date] {
+    // Single computation for both hours and points — filter and group tasks once
+    private var computedData: (chart: [(Date, Double)], points: [(Date, Double)], totalHours: Double, totalPoints: Double) {
+        let cal = Calendar.current
+        let rangeStart = cal.startOfDay(for: startDate)
+        let rangeEnd = cal.startOfDay(for: endDate)
+
+        // Build date range
         var dates: [Date] = []
-        var currentDate = Calendar.current.startOfDay(for: startDate)
-        let endOfDay = Calendar.current.startOfDay(for: endDate)
-        
-        while currentDate <= endOfDay {
-            dates.append(currentDate)
-            currentDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        var cur = rangeStart
+        while cur <= rangeEnd {
+            dates.append(cur)
+            cur = cal.date(byAdding: .day, value: 1, to: cur) ?? cur
         }
-        return dates
+
+        // Group filtered tasks by day — single pass
+        var hoursByDay: [Date: Double] = [:]
+        var pointsByDay: [Date: Double] = [:]
+        for task in tasks {
+            guard let taskDate = task.date, task.completed else { continue }
+            let day = cal.startOfDay(for: taskDate)
+            guard day >= rangeStart && day <= rangeEnd else { continue }
+            if !selectedTags.isEmpty {
+                let taskTags = Set(task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
+                guard !taskTags.isDisjoint(with: selectedTags) else { continue }
+            }
+            hoursByDay[day, default: 0] += task.effectiveTimeInMinutes / 60.0
+            pointsByDay[day, default: 0] += task.effectiveWeight
+        }
+
+        var totalHours = 0.0
+        var totalPoints = 0.0
+        let chart = dates.map { date -> (Date, Double) in
+            let h = hoursByDay[date] ?? 0
+            totalHours += h
+            return (date, h)
+        }
+        let points = dates.map { date -> (Date, Double) in
+            let p = pointsByDay[date] ?? 0
+            totalPoints += p
+            return (date, p)
+        }
+        return (chart, points, totalHours, totalPoints)
     }
-    
-    var totalHours: Double {
-        chartData.reduce(0) { $0 + $1.1 }
-    }
-    
-    var totalPoints: Double {
-        pointsData.reduce(0) { $0 + $1.1 }
-    }
+
+    var chartData: [(Date, Double)] { computedData.chart }
+    var pointsData: [(Date, Double)] { computedData.points }
+    var totalHours: Double { computedData.totalHours }
+    var totalPoints: Double { computedData.totalPoints }
     
     private func timeToMinutes(_ time: String) -> Int {
         let components = time.split(separator: ":").compactMap { Int($0) }

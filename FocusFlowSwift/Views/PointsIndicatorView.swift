@@ -3,31 +3,35 @@ import SwiftUI
 struct PointsIndicatorView: View {
     let tasks: [Task]
 
-    private var totalPoints: Double { tasks.reduce(0) { $0 + $1.weight } }
-    private var completedPoints: Double { tasks.filter { $0.completed }.reduce(0) { $0 + $1.effectiveWeight } }
-    private var percentage: Double { totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0 }
-
-    private var inProgressCount: Int { tasks.filter { ($0.timeSpent ?? 0) > 0 && !$0.completed && !$0.notCompleted }.count }
-    private var pendingCount: Int { tasks.filter { !$0.completed && !$0.notCompleted && ($0.timeSpent ?? 0) == 0 }.count }
-    private var completedCount: Int { tasks.filter { $0.completed }.count }
-    private var totalCount: Int { tasks.count }
-
-    private var color: Color {
-        if percentage >= 80 { return .green }
-        if percentage >= 50 { return .orange }
-        return .red
-    }
-
     var body: some View {
-        HStack(spacing: 16) {
+        // Single pass over tasks — compute all metrics once per render
+        var totalPoints = 0.0
+        var completedPoints = 0.0
+        var inProgress = 0
+        var pending = 0
+        var completed = 0
+        for task in tasks {
+            totalPoints += task.weight
+            if task.completed {
+                completedPoints += task.effectiveWeight
+                completed += 1
+            } else if !task.notCompleted {
+                if (task.timeSpent ?? 0) > 0 { inProgress += 1 }
+                else { pending += 1 }
+            }
+        }
+        let percentage = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0.0
+        let color: Color = percentage >= 80 ? .green : (percentage >= 50 ? .orange : .red)
+
+        return HStack(spacing: 16) {
             // Task metrics — pending, completed, total (left side)
             HStack(spacing: 12) {
-                metricBadge(systemImage: "minus.circle", value: pendingCount, color: .secondary)
-                if inProgressCount > 0 {
-                    metricBadge(systemImage: "clock.fill", value: inProgressCount, color: .orange)
+                metricBadge(systemImage: "minus.circle", value: pending, color: .secondary)
+                if inProgress > 0 {
+                    metricBadge(systemImage: "clock.fill", value: inProgress, color: .orange)
                 }
-                metricBadge(systemImage: "checkmark.circle.fill", value: completedCount, color: .green)
-                metricBadge(systemImage: "tray.full", value: totalCount, color: .blue)
+                metricBadge(systemImage: "checkmark.circle.fill", value: completed, color: .green)
+                metricBadge(systemImage: "tray.full", value: tasks.count, color: .blue)
             }
 
             Divider()
