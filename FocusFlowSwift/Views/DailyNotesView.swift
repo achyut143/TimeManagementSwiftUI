@@ -147,6 +147,9 @@ struct DailyNotesView: View {
     @State private var autoGenDuration: String = "10"
     @State private var showAISchedulerSheet = false
     @Query private var allTasksQuery: [Task]
+    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
+    private var activeActivities: [ScheduledActivity]
+    @State private var creditEarnedMessage: String = ""
     @State private var showInterceptSheet = false
     @State private var showSwapSheet = false
     @State private var swapSheetDefaults: (Int?, Int?) = (nil, nil)
@@ -4115,6 +4118,7 @@ struct DailyNotesView: View {
         }
         guard let s = sIdx, let e = eIdx else { return }
         var prevEnd: Int? = nil
+        var wasStruck = false
         for i in (s + 1)..<e {
             let trimmed = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
@@ -4122,6 +4126,7 @@ struct DailyNotesView: View {
             let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
             if let entry = parseTimeEntrySequential(parseLine, previousEndMinutes: prevEnd) {
                 if entry.startMinutes == startMin && entry.endMinutes == endMin && entry.description == desc {
+                    wasStruck = isStruck
                     lines[i] = isStruck ? parseLine : "~~\(trimmed)~~"
                     break
                 }
@@ -4130,6 +4135,35 @@ struct DailyNotesView: View {
         }
         notesText = lines.joined(separator: "\n")
         saveNotes()
+
+        // Award credits when marking as done (not when un-striking)
+        if !wasStruck {
+            let durationMinutes = endMin - startMin
+            awardDailyNoteCredits(blockDescription: desc, durationMinutes: durationMinutes)
+        }
+    }
+
+    private func awardDailyNoteCredits(blockDescription: String, durationMinutes: Int) {
+        guard durationMinutes > 0 else { return }
+        let matches = activeActivities.filter { $0.matchesDailyNoteBlock(blockDescription) }
+        guard !matches.isEmpty else { return }
+        var totalCredits = 0
+        var names: [String] = []
+        for activity in matches {
+            let earned = activity.earnFromDailyNote(durationMinutes: durationMinutes, context: modelContext)
+            if earned > 0 {
+                totalCredits += earned
+                names.append(activity.name)
+            }
+        }
+        try? modelContext.save()
+        if totalCredits > 0 {
+            let nameList = names.joined(separator: ", ")
+            creditEarnedMessage = "+\(totalCredits) credit\(totalCredits == 1 ? "" : "s") → \(nameList)"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                creditEarnedMessage = ""
+            }
+        }
     }
 
     private func toggleNotCompletedTask(startMin: Int, endMin: Int, desc: String) {
@@ -4410,6 +4444,24 @@ struct DailyNotesView: View {
         }
 
         return VStack(alignment: .leading, spacing: 6) {
+            // Credit earned feedback banner
+            if !creditEarnedMessage.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "star.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    Text(creditEarnedMessage)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.orange)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             // Pre-schedule content
             if let s = sIdx, s > 0 {
                 let preText = allLines[0..<s]

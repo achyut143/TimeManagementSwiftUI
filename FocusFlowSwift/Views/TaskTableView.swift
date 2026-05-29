@@ -670,40 +670,9 @@ struct TimeSpentEditorView: View {
         task.timeSpent = newTimeSpent
         timeSpentMinutes = String(Int(newTimeSpent))
         
-        // Update reward points if task is completed
-        if task.completed {
-            let newEffectiveWeight = task.effectiveWeight
-            let pointsDifference = newEffectiveWeight - oldEffectiveWeight
-            
-            print("⏱️ Time spent updated: \(currentTimeSpent)m → \(newTimeSpent)m")
-            print("📊 Effective weight changed: \(oldEffectiveWeight) → \(newEffectiveWeight)")
-            print("🔄 Points difference: \(pointsDifference)")
-            
-            // Check if task has linked rewards
-            let activeRewardLinks = task.rewardLinks?.filter { $0.isActive } ?? []
-            
-            if !activeRewardLinks.isEmpty {
-                // Add points difference to all linked rewards
-                print("🎁 Updating \(activeRewardLinks.count) linked reward(s)")
-                for link in activeRewardLinks {
-                    if let reward = link.reward {
-                        print("➕ Adding \(pointsDifference) points to '\(reward.name)'")
-                        reward.addAmount(pointsDifference, context: modelContext, taskTitle: task.title, comment: "Time spent adjustment")
-                    }
-                }
-            } else {
-                // No reward links - add to Unclaimed Points
-                print("➕ No reward links, adding \(pointsDifference) points to Unclaimed Points")
-                Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
-            }
-            
-            // Update the stored previous weight for next time
-            previousEffectiveWeight = newEffectiveWeight
-        }
-        
         try? modelContext.save()
     }
-    
+
     private func addElapsedTime(_ minutes: Double) {
         let currentElapsedTime = task.elapsedTime ?? 0.0
         let newElapsedTime = currentElapsedTime + minutes
@@ -713,37 +682,6 @@ struct TimeSpentEditorView: View {
         
         task.elapsedTime = newElapsedTime
         elapsedTimeMinutes = String(Int(newElapsedTime))
-        
-        // Update reward points if task is completed
-        if task.completed {
-            let newEffectiveWeight = task.effectiveWeight
-            let pointsDifference = newEffectiveWeight - oldEffectiveWeight
-            
-            print("⏱️ Elapsed time updated: \(currentElapsedTime)m → \(newElapsedTime)m")
-            print("📊 Effective weight changed: \(oldEffectiveWeight) → \(newEffectiveWeight)")
-            print("🔄 Points difference: \(pointsDifference)")
-            
-            // Check if task has linked rewards
-            let activeRewardLinks = task.rewardLinks?.filter { $0.isActive } ?? []
-            
-            if !activeRewardLinks.isEmpty {
-                // Add points difference to all linked rewards
-                print("🎁 Updating \(activeRewardLinks.count) linked reward(s)")
-                for link in activeRewardLinks {
-                    if let reward = link.reward {
-                        print("➕ Adding \(pointsDifference) points to '\(reward.name)'")
-                        reward.addAmount(pointsDifference, context: modelContext, taskTitle: task.title, comment: "Elapsed time adjustment")
-                    }
-                }
-            } else {
-                // No reward links - add to Unclaimed Points
-                print("➕ No reward links, adding \(pointsDifference) points to Unclaimed Points")
-                Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
-            }
-            
-            // Update the stored previous weight for next time
-            previousEffectiveWeight = newEffectiveWeight
-        }
         
         try? modelContext.save()
     }
@@ -868,35 +806,6 @@ struct TimeSpentEditorView: View {
                     }
                     if isUntimedTask, let elapsed = Double(elapsedTimeMinutes), elapsed > 0 {
                         task.elapsedTime = elapsed
-                    }
-                    
-                    // Update reward points if task is completed and values changed
-                    if task.completed {
-                        let newEffectiveWeight = task.effectiveWeight
-                        let pointsDifference = newEffectiveWeight - previousWeight
-                        
-                        if pointsDifference != 0 {
-                            print("💾 Manual save - Effective weight changed: \(previousWeight) → \(newEffectiveWeight)")
-                            print("🔄 Points difference: \(pointsDifference)")
-                            
-                            // Check if task has linked rewards
-                            let activeRewardLinks = task.rewardLinks?.filter { $0.isActive } ?? []
-                            
-                            if !activeRewardLinks.isEmpty {
-                                // Add points difference to all linked rewards
-                                print("🎁 Updating \(activeRewardLinks.count) linked reward(s)")
-                                for link in activeRewardLinks {
-                                    if let reward = link.reward {
-                                        print("➕ Adding \(pointsDifference) points to '\(reward.name)'")
-                                        reward.addAmount(pointsDifference, context: modelContext, taskTitle: task.title, comment: "Time adjustment")
-                                    }
-                                }
-                            } else {
-                                // No reward links - add to Unclaimed Points
-                                print("➕ No reward links, adding \(pointsDifference) points to Unclaimed Points")
-                                Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
-                            }
-                        }
                     }
                     
                     try? modelContext.save()

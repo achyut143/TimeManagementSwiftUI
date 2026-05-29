@@ -228,6 +228,11 @@ struct HabitAccordionRow: View {
     private var visibleTasks: [Task] { Array(tasks.prefix(visibleCount)) }
     private var remainingCount: Int { max(0, tasks.count - visibleCount) }
 
+    private var doneCount: Int { tasks.filter { $0.completed }.count }
+    private var donePercentage: Int {
+        tasks.isEmpty ? 0 : Int(Double(doneCount) / Double(tasks.count) * 100)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header: tapping the row expands; the move button is a separate tap target
@@ -242,9 +247,15 @@ struct HabitAccordionRow: View {
                         .fontWeight(.semibold)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text("\(tasks.count) \(tasks.count == 1 ? "entry" : "entries")")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text("\(tasks.count) \(tasks.count == 1 ? "entry" : "entries")")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("\(doneCount) done · \(donePercentage)%")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(donePercentage >= 75 ? .green : donePercentage >= 40 ? .orange : .red)
+                    }
                 }
 
                 Spacer()

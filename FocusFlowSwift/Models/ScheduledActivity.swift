@@ -27,13 +27,13 @@ enum RecurrenceType: String, Codable, CaseIterable {
     var resetDescription: String {
         switch self {
         case .daily:
-            return "Credits reset daily at midnight"
+            return "Points & credits reset every day at midnight"
         case .weekly:
-            return "Credits reset monthly on the 1st"
+            return "Points & credits reset on the 1st of each month"
         case .monthly:
-            return "Credits reset quarterly (Jan, Apr, Jul, Oct)"
+            return "Points & credits reset each quarter (Jan, Apr, Jul, Oct)"
         case .quarterly:
-            return "Credits reset yearly on January 1st"
+            return "Points & credits reset every January 1st"
         }
     }
 }
@@ -52,44 +52,41 @@ class ScheduledActivity {
     var selectedMonthDays: [Int] = [] // For monthly: 1-31
     var selectedMonths: [Int] = [] // For quarterly: 1-12
     
-    // Reward system for unused windows
+    // Credit system for unused windows
     var accumulatedWindowCredits: Int = 0 // Number of unused windows that can be used later
-    var lastResetDate: Date? // Track when rewards were last reset to 0
+    var lastResetDate: Date? // Track when credits were last reset to 0
     var windowsUsedInPeriod: Int = 0 // Track how many windows were used in current period
     var windowsSkippedInPeriod: Int = 0 // Track how many windows were skipped in current period
     var lastEditedAt: Date? // Track when the activity was last edited (for window tracking reset)
-    var overdraftWindowsUsed: Int = 0 // Track how many windows were used beyond allocated (overdraft)
-    
-    // Attached reward system
-    var attachedRewardId: UUID? // ID of the attached reward
-    var rewardBurnAmount: Double = 0.0 // Amount to burn from reward when using activity (in reward's native units)
-    var rewardBurnType: RewardBurnType? // Type of burn (time in minutes, money in dollars, or points) - optional for migration
-    
+
     // Attached task system
     var attachedTaskId: UUID? // UUID of the attached task
     var taskTimeAmount: Double = 0.0 // Amount of time to add to task when using activity (in minutes)
-    
-    // Computed property to provide safe access to rewardBurnType with default
-    var effectiveRewardBurnType: RewardBurnType {
-        return rewardBurnType ?? .time
-    }
-    
-    // Helper methods to check if attachments are configured
-    var hasRewardAttachment: Bool {
-        return attachedRewardId != nil && rewardBurnAmount > 0
-    }
-    
+
+    // Points-based credit system
+    var pointsThreshold: Double = 15.0 // Points needed to earn 1 credit
+    var timePerCredit: Double = 0.0 // Minutes of activity time per credit (0 = no time tracking)
+    var accumulatedDailyPoints: Double = 0.0
+    var accumulatedPeriodPoints: Double = 0.0
+    var lastDailyResetDate: Date?
+    var overdraftDebt: Double = 0.0
+    var maxOverdraftCredits: Int = 2
+
+    // Daily Notes credit earning
+    var dailyNotesKeyword: String = "" // Case-insensitive substring to match block descriptions; empty = match by activity name
+
+    // Helper to check if task attachment is configured
     var hasTaskAttachment: Bool {
         return attachedTaskId != nil && taskTimeAmount > 0
     }
-    
-    init(name: String, scheduledTimes: [Date] = [], windowDuration: TimeInterval = 600, isActive: Bool = true, recurrenceType: RecurrenceType = .daily, selectedWeekdays: [Int] = [], selectedMonthDays: [Int] = [], selectedMonths: [Int] = [], attachedRewardId: UUID? = nil, rewardBurnAmount: Double = 0.0, rewardBurnType: RewardBurnType? = .time, attachedTaskId: UUID? = nil, taskTimeAmount: Double = 0.0) {
+
+    init(name: String, scheduledTimes: [Date] = [], windowDuration: TimeInterval = 600, isActive: Bool = true, recurrenceType: RecurrenceType = .daily, selectedWeekdays: [Int] = [], selectedMonthDays: [Int] = [], selectedMonths: [Int] = [], attachedTaskId: UUID? = nil, taskTimeAmount: Double = 0.0, pointsThreshold: Double = 15.0, timePerCredit: Double = 0.0, maxOverdraftCredits: Int = 2) {
         print("🏗️ Creating ScheduledActivity: \(name)")
         print("🏗️ Recurrence type: \(recurrenceType.displayName)")
         print("🏗️ Selected weekdays: \(selectedWeekdays)")
         print("🏗️ Selected month days: \(selectedMonthDays)")
         print("🏗️ Selected months: \(selectedMonths)")
-        
+
         self.name = name
         self.scheduledTimes = scheduledTimes
         self.windowDuration = windowDuration
@@ -104,53 +101,25 @@ class ScheduledActivity {
         self.windowsUsedInPeriod = 0
         self.windowsSkippedInPeriod = 0
         self.lastEditedAt = nil
-        self.attachedRewardId = attachedRewardId
-        self.rewardBurnAmount = rewardBurnAmount
-        self.rewardBurnType = rewardBurnType
         self.attachedTaskId = attachedTaskId
         self.taskTimeAmount = taskTimeAmount
-        self.overdraftWindowsUsed = 0
+        self.pointsThreshold = pointsThreshold
+        self.timePerCredit = timePerCredit
+        self.maxOverdraftCredits = maxOverdraftCredits
+        self.accumulatedDailyPoints = 0.0
+        self.accumulatedPeriodPoints = 0.0
+        self.lastDailyResetDate = nil
+        self.overdraftDebt = 0.0
     }
     
     // Migration helper for existing activities
     func ensureMigration() {
-        // This method ensures that existing activities are properly migrated
-        // It's called whenever an activity is accessed to ensure compatibility
-        
-      
-        
-        // For existing activities that don't have recurrenceType set, default to daily
         if recurrenceType == nil {
             recurrenceType = .daily
-            print("🔄 Migrated activity '\(name)' to daily recurrence (was nil)")
         }
-        
-        // For existing activities that might not have recurrence configuration,
-        // we assume they should be daily activities
-        if selectedWeekdays.isEmpty && selectedMonthDays.isEmpty && selectedMonths.isEmpty {
-            // If recurrenceType is not daily, but no specific days are selected,
-            // this suggests it's an old activity that should default to daily
-            if recurrenceType != .daily {
-                print("🔄 Migrating activity '\(name)' to daily recurrence (was \(recurrenceType?.rawValue ?? "unknown")) because no days selected")
-                recurrenceType = .daily
-            } else {
-                print("✅ Activity '\(name)' confirmed as daily recurrence")
-            }
-        } else {
-            print("✅ Activity '\(name)' has selections, keeping recurrence type: \(recurrenceType?.rawValue ?? "nil")")
-        }
-        
-        // Ensure lastResetDate is set if it's nil
         if lastResetDate == nil {
             lastResetDate = Date()
-            print("🔄 Set initial reset date for activity '\(name)'")
         }
-        
-        // Migrate reward burn type if needed (for existing activities)
-        // This is a bit tricky since we can't check if it's nil directly with SwiftData
-        // We'll handle this in the UI when loading activities
-        
-        print("🔍 MIGRATION COMPLETE: Final recurrenceType: \(recurrenceType?.rawValue ?? "nil")")
     }
     
     // Check if this activity needs migration (for UI to handle)
@@ -435,8 +404,8 @@ class ScheduledActivity {
         return nil
     }
     
-    // MARK: - Reward System Methods
-    
+    // MARK: - Credit System Methods
+
     // Check if we need to reset counters based on recurrence pattern
     func checkAndResetCounters() {
         ensureMigration() // Ensure migration before processing
@@ -487,15 +456,16 @@ class ScheduledActivity {
     
     // Reset counters based on recurrence type
     private func resetCounters() {
-        // Only reset credits for daily activities
-        if effectiveRecurrenceType == .daily {
-            accumulatedWindowCredits = 0
-        }
-        // For weekly/monthly/quarterly, credits persist across periods
-        
+        accumulatedWindowCredits = 0
         windowsUsedInPeriod = 0
         windowsSkippedInPeriod = 0
-        overdraftWindowsUsed = 0 // Reset overdraft tracking
+        overdraftDebt = 0.0
+        if effectiveRecurrenceType == .daily {
+            accumulatedDailyPoints = 0.0
+            lastDailyResetDate = Date()
+        } else {
+            accumulatedPeriodPoints = 0.0
+        }
         lastResetDate = Date()
     }
     
@@ -525,15 +495,7 @@ class ScheduledActivity {
         
         if accumulatedWindowCredits >= credits {
             accumulatedWindowCredits -= credits
-            
-            // Burn attached reward if configured (multiply by credits used)
-            print("🔍 DEBUG: useWindowCredits - About to check reward burning with multiplier: \(credits)")
-            if burnAttachedReward(multiplier: credits, context: context) {
-                print("🔥 DEBUG: Successfully burned attached reward when using window credits")
-            } else {
-                print("ℹ️ DEBUG: No reward to burn or burning failed when using window credits")
-            }
-            
+
             // Add time to attached task if configured (multiply by credits used)
             print("🔍 DEBUG: useWindowCredits - About to check task time addition with multiplier: \(credits)")
             if addTimeToAttachedTask(multiplier: credits, context: context) {
@@ -571,17 +533,6 @@ class ScheduledActivity {
     func useOverdraftWindows(_ windows: Int, context: ModelContext) -> Bool {
         checkAndResetCounters()
         
-        // Track overdraft usage
-        overdraftWindowsUsed += windows
-        
-        // Burn attached reward if configured (multiply by windows used)
-        print("🔍 DEBUG: useOverdraftWindows - About to check reward burning with multiplier: \(windows)")
-        if burnAttachedReward(multiplier: windows, context: context) {
-            print("🔥 DEBUG: Successfully burned attached reward when using overdraft windows")
-        } else {
-            print("ℹ️ DEBUG: No reward to burn or burning failed when using overdraft windows")
-        }
-        
         // Add time to attached task if configured (multiply by windows used)
         print("🔍 DEBUG: useOverdraftWindows - About to check task time addition with multiplier: \(windows)")
         if addTimeToAttachedTask(multiplier: windows, context: context) {
@@ -603,7 +554,7 @@ class ScheduledActivity {
         )
         context.insert(usage)
         
-        print("📈 Used \(windows) overdraft windows for '\(name)'. Total overdraft: \(overdraftWindowsUsed) windows")
+        print("📈 Used \(windows) overdraft windows for '\(name)'.")
         
         // Post notification to update UI
         NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
@@ -643,6 +594,145 @@ class ScheduledActivity {
         }
     }
     
+    // MARK: - Points-Based Credit System
+
+    // Add task completion points; repay debt first, then earn credits
+    func addTaskPoints(_ points: Double, context: ModelContext) {
+        checkAndResetCounters()
+
+        let threshold = pointsThreshold
+        guard threshold > 0, points > 0 else { return }
+
+        var remaining = points
+
+        // Repay overdraft debt first
+        if overdraftDebt > 0 {
+            let payment = min(remaining, overdraftDebt)
+            overdraftDebt -= payment
+            remaining -= payment
+            if overdraftDebt < 0 { overdraftDebt = 0 }
+        }
+
+        guard remaining > 0 else { return }
+
+        // Accumulate points and earn credits
+        let isDaily = effectiveRecurrenceType == .daily
+        if isDaily {
+            let calendar = Calendar.current
+            let now = Date()
+            if let lastReset = lastDailyResetDate, !calendar.isDate(lastReset, inSameDayAs: now) {
+                accumulatedDailyPoints = 0.0
+                lastDailyResetDate = now
+            } else if lastDailyResetDate == nil {
+                lastDailyResetDate = now
+            }
+            accumulatedDailyPoints += remaining
+            while accumulatedDailyPoints >= threshold {
+                accumulatedDailyPoints -= threshold
+                accumulatedWindowCredits += 1
+                let usage = ActivityUsageHistory(
+                    activityName: name, usedAt: Date(),
+                    windowStartTime: Date(), windowEndTime: Date(),
+                    notes: "Earned via \(String(format: "%.1f", points)) task pts",
+                    usageType: .pointsCredit, creditsUsed: 1
+                )
+                context.insert(usage)
+            }
+        } else {
+            accumulatedPeriodPoints += remaining
+            while accumulatedPeriodPoints >= threshold {
+                accumulatedPeriodPoints -= threshold
+                accumulatedWindowCredits += 1
+                let usage = ActivityUsageHistory(
+                    activityName: name, usedAt: Date(),
+                    windowStartTime: Date(), windowEndTime: Date(),
+                    notes: "Earned via \(String(format: "%.1f", points)) task pts",
+                    usageType: .pointsCredit, creditsUsed: 1
+                )
+                context.insert(usage)
+            }
+        }
+
+        NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+    }
+
+    // Borrow an overdraft credit (creates debt equal to threshold)
+    func useOverdraftCredit(context: ModelContext) -> Bool {
+        checkAndResetCounters()
+
+        let threshold = pointsThreshold
+        guard threshold > 0 else { return false }
+
+        let debtCredits = overdraftDebt / threshold
+        guard debtCredits < Double(maxOverdraftCredits) else { return false }
+
+        accumulatedWindowCredits += 1
+        overdraftDebt += threshold
+
+        let now = Date()
+        let usage = ActivityUsageHistory(
+            activityName: name, usedAt: now,
+            windowStartTime: now, windowEndTime: now,
+            notes: "Borrowed credit (debt: \(String(format: "%.1f", overdraftDebt)) pts)",
+            usageType: .overdraftCredit, creditsUsed: 1
+        )
+        context.insert(usage)
+
+        NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+        return true
+    }
+
+    // Current points progress toward next credit (0.0–1.0)
+    var pointsProgress: Double {
+        let threshold = pointsThreshold
+        guard threshold > 0 else { return 0 }
+        let isDaily = effectiveRecurrenceType == .daily
+        let current = isDaily ? accumulatedDailyPoints : accumulatedPeriodPoints
+        return min(current / threshold, 1.0)
+    }
+
+    // Human-readable progress, e.g. "7.0 / 15 pts"
+    var pointsProgressDescription: String {
+        let threshold = pointsThreshold
+        let isDaily = effectiveRecurrenceType == .daily
+        let current = isDaily ? accumulatedDailyPoints : accumulatedPeriodPoints
+        return "\(String(format: "%.1f", current)) / \(String(format: "%.0f", threshold)) pts"
+    }
+
+    // True when another overdraft credit can still be borrowed
+    var canOverdraft: Bool {
+        let threshold = pointsThreshold
+        guard threshold > 0 else { return false }
+        return overdraftDebt / threshold < Double(maxOverdraftCredits)
+    }
+
+    // Returns true if this activity's keyword matches the given daily-notes block description
+    func matchesDailyNoteBlock(_ blockDescription: String) -> Bool {
+        let keyword = dailyNotesKeyword.trimmingCharacters(in: .whitespaces).isEmpty ? name : dailyNotesKeyword
+        return blockDescription.localizedCaseInsensitiveContains(keyword)
+    }
+
+    // Award credits for a completed daily-notes time block. Returns credits earned.
+    @discardableResult
+    func earnFromDailyNote(durationMinutes: Int, context: ModelContext) -> Int {
+        let credits: Int
+        if timePerCredit > 0 {
+            credits = max(1, durationMinutes / Int(timePerCredit))
+        } else {
+            credits = 1
+        }
+        accumulatedWindowCredits += credits
+        let usage = ActivityUsageHistory(
+            activityName: name, usedAt: Date(),
+            windowStartTime: Date(), windowEndTime: Date(),
+            notes: "Daily note block: \(durationMinutes) min",
+            usageType: .dailyNoteCredit, creditsUsed: credits
+        )
+        context.insert(usage)
+        NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+        return credits
+    }
+
     // Get formatted window credits string
     func formattedWindowCredits() -> String {
         if accumulatedWindowCredits == 1 {
@@ -743,132 +833,6 @@ class ScheduledActivity {
         }
         
         return passedWindows
-    }
-    
-    // MARK: - Reward Integration Methods
-    
-    // Get the attached reward from context
-    func getAttachedReward(context: ModelContext) -> Reward? {
-        guard let rewardId = attachedRewardId else { return nil }
-        
-        let descriptor = FetchDescriptor<Reward>(
-            predicate: #Predicate<Reward> { $0.id == rewardId }
-        )
-        
-        do {
-            let rewards = try context.fetch(descriptor)
-            return rewards.first
-        } catch {
-            print("❌ Failed to fetch attached reward: \(error)")
-            return nil
-        }
-    }
-    
-    // Burn reward when using activity
-    func burnAttachedReward(multiplier: Int = 1, context: ModelContext) -> Bool {
-        print("🔍 DEBUG: Checking reward attachment - hasRewardAttachment: \(hasRewardAttachment)")
-        print("🔍 DEBUG: attachedRewardId: \(attachedRewardId?.uuidString ?? "nil")")
-        print("🔍 DEBUG: rewardBurnAmount: \(rewardBurnAmount)")
-        print("🔍 DEBUG: multiplier: \(multiplier)")
-        
-        guard hasRewardAttachment, let reward = getAttachedReward(context: context) else {
-            print("❌ DEBUG: No reward attachment configured")
-            print("❌ DEBUG: Reason - attachedRewardId is nil: \(attachedRewardId == nil)")
-            print("❌ DEBUG: Reason - rewardBurnAmount is zero: \(rewardBurnAmount <= 0)")
-            return false
-        }
-        
-        // Apply multiplier to burn amount
-        let actualBurnAmount = rewardBurnAmount * Double(multiplier)
-        
-        // Convert burn amount to points based on burn type and reward type
-        let pointsToBurn: Double
-        
-        switch effectiveRewardBurnType {
-        case .time:
-            // Burning time (minutes)
-            if reward.type == .timeReward, let rate = reward.conversionRate, rate > 0 {
-                // Convert minutes to points
-                pointsToBurn = actualBurnAmount / rate
-            } else {
-                // For non-time rewards, treat as points
-                pointsToBurn = actualBurnAmount
-            }
-        case .money:
-            // Burning money (dollars)
-            if reward.type == .moneyReward, let rate = reward.conversionRate, rate > 0 {
-                // Convert dollars to points
-                pointsToBurn = actualBurnAmount / rate
-            } else {
-                // For non-money rewards, treat as points
-                pointsToBurn = actualBurnAmount
-            }
-        case .points:
-            // Direct points burn
-            pointsToBurn = actualBurnAmount
-        }
-        
-        // Burn the calculated points
-        let comment = "Used activity: \(name) (\(effectiveRewardBurnType.displayName): \(formattedBurnAmount(multiplier: multiplier)))"
-        reward.burnAmount(pointsToBurn, context: context, comment: comment)
-        
-        print("🔥 Burned \(formattedBurnAmount(multiplier: multiplier)) from reward '\(reward.name)' for activity '\(name)'")
-        return true
-    }
-    
-    // Format burn amount for display
-    func formattedBurnAmount(multiplier: Int = 1) -> String {
-        let actualAmount = rewardBurnAmount * Double(multiplier)
-        switch effectiveRewardBurnType {
-        case .time:
-            let hours = Int(actualAmount) / 60
-            let minutes = Int(actualAmount) % 60
-            if hours > 0 {
-                return "\(hours)h \(minutes)m"
-            } else {
-                return "\(Int(actualAmount)) min"
-            }
-        case .money:
-            return "$\(String(format: "%.2f", actualAmount))"
-        case .points:
-            return "\(String(format: "%.1f", actualAmount)) pts"
-        }
-    }
-    
-    // Check if reward has enough balance for burn
-    func canBurnReward(context: ModelContext) -> Bool {
-        guard hasRewardAttachment, let reward = getAttachedReward(context: context) else {
-            return false
-        }
-        
-        // Calculate points needed
-        let pointsNeeded: Double
-        
-        switch effectiveRewardBurnType {
-        case .time:
-            if reward.type == .timeReward, let rate = reward.conversionRate, rate > 0 {
-                pointsNeeded = rewardBurnAmount / rate
-            } else {
-                pointsNeeded = rewardBurnAmount
-            }
-        case .money:
-            if reward.type == .moneyReward, let rate = reward.conversionRate, rate > 0 {
-                pointsNeeded = rewardBurnAmount / rate
-            } else {
-                pointsNeeded = rewardBurnAmount
-            }
-        case .points:
-            pointsNeeded = rewardBurnAmount
-        }
-        
-        // Check if reward has enough balance (including overdraft if allowed)
-        if reward.currentAmount >= pointsNeeded {
-            return true
-        } else if reward.allowOverdraft {
-            return true // Overdraft allowed
-        } else {
-            return false
-        }
     }
     
     // MARK: - Task Integration Methods
@@ -1124,13 +1088,10 @@ class ScheduledActivity {
         } catch {
             print("❌ DEBUG: Failed to save task time update: \(error)")
         }
-        
-        // Check if task completion should earn reward points
-        checkTaskRewardEarning(task: task, context: context)
-        
+
         return true
     }
-    
+
     // Format task time amount for display
     func formattedTaskTime(multiplier: Int = 1) -> String {
         let actualAmount = taskTimeAmount * Double(multiplier)
@@ -1143,69 +1104,6 @@ class ScheduledActivity {
         }
     }
     
-    // Check if task time addition should earn reward points
-    private func checkTaskRewardEarning(task: Task, context: ModelContext) {
-        // Only award points if the task is actually completed
-        guard task.completed else {
-            return
-        }
-        
-        // Check if task has reward links
-        if let rewardLinks = task.rewardLinks, !rewardLinks.isEmpty {
-            // Task has reward links - add to linked rewards
-            for rewardLink in rewardLinks {
-                if let reward = rewardLink.reward {
-                    let pointsToEarn = task.effectiveWeight
-                    reward.addAmount(pointsToEarn, context: context, comment: "Task completed: \(task.title) (via activity: \(name))")
-                    print("🎁 Earned \(pointsToEarn) points from reward '\(reward.name)' for completing task '\(task.title)'")
-                }
-            }
-        } else {
-            // No reward links - add to Unclaimed Points
-            let pointsToEarn = task.effectiveWeight
-            Reward.addUnclaimedPoints(pointsToEarn, context: context)
-            print("🎁 Added \(pointsToEarn) points to Unclaimed Points for completing task '\(task.title)' (via activity: \(name))")
-        }
-    }
-}
-
-enum RewardBurnType: String, Codable, CaseIterable {
-    case time = "time"
-    case money = "money"
-    case points = "points"
-    
-    var displayName: String {
-        switch self {
-        case .time:
-            return "Time (minutes)"
-        case .money:
-            return "Money (dollars)"
-        case .points:
-            return "Points"
-        }
-    }
-    
-    var unit: String {
-        switch self {
-        case .time:
-            return "min"
-        case .money:
-            return "$"
-        case .points:
-            return "pts"
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .time:
-            return "clock.fill"
-        case .money:
-            return "dollarsign.circle.fill"
-        case .points:
-            return "star.fill"
-        }
-    }
 }
 
 @Model
@@ -1247,11 +1145,14 @@ enum ActivityUsageType: String, Codable, CaseIterable {
     case creditUsage = "Credit Usage"
     case creditIgnore = "Credit Ignore"
     case overdraftUsage = "Overdraft Usage"
-    
+    case pointsCredit = "Points Credit"
+    case overdraftCredit = "Overdraft Credit"
+    case dailyNoteCredit = "Daily Note Credit"
+
     var displayName: String {
         return self.rawValue
     }
-    
+
     var icon: String {
         switch self {
         case .regularWindow:
@@ -1262,6 +1163,12 @@ enum ActivityUsageType: String, Codable, CaseIterable {
             return "trash.fill"
         case .overdraftUsage:
             return "arrow.up.circle.fill"
+        case .pointsCredit:
+            return "star.fill"
+        case .overdraftCredit:
+            return "arrow.up.circle.fill"
+        case .dailyNoteCredit:
+            return "note.text.badge.plus"
         }
     }
 }

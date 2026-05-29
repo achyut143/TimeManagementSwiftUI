@@ -22,53 +22,67 @@ struct QuickActivityButton: View {
             .filter { ($0.recurrenceType ?? .daily) == .daily }
             .reduce(0) { $0 + $1.accumulatedWindowCredits }
     }
-    
+
+    var totalPeriodCredits: Int {
+        return activities
+            .filter {
+                let type = $0.recurrenceType ?? .daily
+                return type == .weekly || type == .monthly || type == .quarterly
+            }
+            .reduce(0) { $0 + $1.accumulatedWindowCredits }
+    }
+
+    @ViewBuilder
+    private func creditBadge(_ count: Int, color: Color) -> some View {
+        Text("\(count)")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundColor(.white)
+            .frame(minWidth: 18, minHeight: 18)
+            .background(color)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+    }
+
     var body: some View {
         VStack {
             Spacer()
-            
+
             HStack {
                 Spacer()
-                
+
                 VStack(spacing: 12) {
-                    // Quick Activities List Button - hide when task form is presented
-                    if !activities.isEmpty && !isTaskFormPresented {
+                    if !activities.isEmpty {
                         Button {
                             showActivitiesList = true
                         } label: {
-                            ZStack(alignment: .topTrailing) {
-                                ZStack {
-                                    Circle()
-                                        .fill(hasActiveWindow ? Color.green : Color.blue)
-                                        .frame(width: 50, height: 50)
-                                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                                    
-                                    VStack(spacing: 2) {
-                                        Image(systemName: hasActiveWindow ? "clock.badge.checkmark.fill" : "clock.fill")
-                                            .font(.system(size: 16))
-                                            .foregroundColor(.white)
-                                        
-                                        if !hasActiveWindow {
-                                            Text("Low level")
-                                                .font(.system(size: 6, weight: .semibold))
-                                                .foregroundColor(.white.opacity(0.9))
-                                        }
+                            ZStack {
+                                Circle()
+                                    .fill(hasActiveWindow ? Color.green : Color.blue)
+                                    .frame(width: 50, height: 50)
+                                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+
+                                VStack(spacing: 2) {
+                                    Image(systemName: hasActiveWindow ? "clock.badge.checkmark.fill" : "clock.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.white)
+
+                                    if !hasActiveWindow {
+                                        Text("Low level")
+                                            .font(.system(size: 6, weight: .semibold))
+                                            .foregroundColor(.white.opacity(0.9))
                                     }
                                 }
-                                
-                                // Notification badge for daily credits
+
+                                // Daily credits badge — orange, top-right
                                 if totalDailyCredits > 0 {
-                                    Text("\(totalDailyCredits)")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .frame(minWidth: 18, minHeight: 18)
-                                        .background(Color.orange)
-                                        .clipShape(Circle())
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: 2)
-                                        )
-                                        .offset(x: 8, y: -8)
+                                    creditBadge(totalDailyCredits, color: .orange)
+                                        .offset(x: 22, y: -22)
+                                }
+
+                                // Period credits badge (weekly/monthly/quarterly) — purple, top-left
+                                if totalPeriodCredits > 0 {
+                                    creditBadge(totalPeriodCredits, color: .purple)
+                                        .offset(x: -22, y: -22)
                                 }
                             }
                         }
@@ -308,12 +322,7 @@ struct QuickActivitiesListView: View {
         let now = Date()
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
-        
-        // Burn attached reward if configured
-        if activity.burnAttachedReward(context: modelContext) {
-            print("🔥 Burned attached reward for activity '\(activity.name)'")
-        }
-        
+
         // Add time to attached task if configured
         if activity.addTimeToAttachedTask(context: modelContext) {
             print("⏱️ Added time to attached task for activity '\(activity.name)'")
@@ -390,7 +399,7 @@ struct QuickActivityRowView: View {
                     .cornerRadius(8)
                 }
                 
-                // Reward and task metrics
+                // Activity metrics
                 HStack(spacing: 8) {
                     if activity.accumulatedWindowCredits > 0 {
                         HStack(spacing: 4) {
@@ -407,29 +416,13 @@ struct QuickActivityRowView: View {
                         .background(Color.orange.opacity(0.1))
                         .cornerRadius(4)
                     }
-                    
-                    if activity.hasRewardAttachment {
+
+                    if activity.timePerCredit > 0 && activity.accumulatedWindowCredits > 0 {
                         HStack(spacing: 4) {
-                            Image(systemName: activity.effectiveRewardBurnType.icon)
-                                .font(.caption)
-                                .foregroundColor(.purple)
-                            Text(activity.formattedBurnAmount())
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.purple)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.purple.opacity(0.1))
-                        .cornerRadius(4)
-                    }
-                    
-                    if activity.hasTaskAttachment {
-                        HStack(spacing: 4) {
-                            Image(systemName: "clock.badge.plus.fill")
+                            Image(systemName: "clock.fill")
                                 .font(.caption)
                                 .foregroundColor(.blue)
-                            Text(activity.formattedTaskTime())
+                            Text("\(activity.accumulatedWindowCredits) cr = \(Int(activity.timePerCredit * Double(activity.accumulatedWindowCredits)))min")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.blue)
@@ -437,6 +430,22 @@ struct QuickActivityRowView: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.blue.opacity(0.1))
+                        .cornerRadius(4)
+                    }
+
+                    if activity.hasTaskAttachment {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock.badge.plus.fill")
+                                .font(.caption)
+                                .foregroundColor(.teal)
+                            Text(activity.formattedTaskTime())
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.teal)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.teal.opacity(0.1))
                         .cornerRadius(4)
                     }
                 }
@@ -516,8 +525,6 @@ struct CreditUseView: View {
     let onUse: () -> Void
     let onCancel: () -> Void
     
-    @State private var showOverdraftOption = false
-    @State private var overdraftWindows = 1
     @State private var showTimerConfirmation = false
     @State private var pendingTimerMinutes: Double = 0
     @State private var pendingAction: (() -> Void)?
@@ -633,20 +640,20 @@ struct CreditUseView: View {
                     
                     // Show what will happen
                     VStack(alignment: .leading, spacing: 8) {
-                        if activity.hasRewardAttachment {
-                            HStack(spacing: 8) {
-                                Image(systemName: activity.effectiveRewardBurnType.icon)
-                                    .foregroundColor(.purple)
-                                Text("Will burn: \(activity.formattedBurnAmount(multiplier: creditsToUse))")
-                                    .font(.subheadline)
-                            }
-                        }
-                        
                         if activity.hasTaskAttachment {
                             HStack(spacing: 8) {
                                 Image(systemName: "clock.badge.plus.fill")
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.teal)
                                 Text("Will add: \(activity.formattedTaskTime(multiplier: creditsToUse))")
+                                    .font(.subheadline)
+                            }
+                        }
+
+                        if activity.timePerCredit > 0 {
+                            HStack(spacing: 8) {
+                                Image(systemName: "clock.fill")
+                                    .foregroundColor(.blue)
+                                Text("Activity time: \(Int(activity.timePerCredit * Double(creditsToUse))) min")
                                     .font(.subheadline)
                             }
                         }
@@ -656,98 +663,36 @@ struct CreditUseView: View {
                     .cornerRadius(12)
                 }
                 
-                // Overdraft Section - always visible
+                // Overdraft Section — borrow 1 credit (creates debt repaid by future tasks)
                 VStack(spacing: 12) {
+                    let canBorrow = activity.canOverdraft
                     Button {
-                        showOverdraftOption.toggle()
+                        handleOverdraftUse()
                     } label: {
                         HStack {
                             Image(systemName: "arrow.up.circle.fill")
-                                .foregroundColor(.red)
-                            Text(activity.accumulatedWindowCredits > 0 ? "Or Use Overdraft Windows" : "Use Overdraft Windows")
-                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Borrow 1 Credit")
+                                    .fontWeight(.semibold)
+                                if activity.overdraftDebt > 0 {
+                                    Text("Debt: \(String(format: "%.1f", activity.overdraftDebt)) pts")
+                                        .font(.caption)
+                                        .opacity(0.85)
+                                } else {
+                                    Text("Repaid by future task points")
+                                        .font(.caption)
+                                        .opacity(0.85)
+                                }
+                            }
                             Spacer()
-                            Image(systemName: showOverdraftOption ? "chevron.up" : "chevron.down")
                         }
-                        .foregroundColor(.red)
+                        .foregroundColor(.white)
                         .padding()
-                        .background(Color.red.opacity(0.1))
+                        .background(canBorrow ? Color.red : Color.gray)
                         .cornerRadius(12)
                     }
-                    
-                    if showOverdraftOption || activity.accumulatedWindowCredits == 0 {
-                        VStack(spacing: 12) {
-                            Text("Overdraft Windows")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            
-                            HStack(spacing: 16) {
-                                Button {
-                                    if overdraftWindows > 1 {
-                                        overdraftWindows -= 1
-                                    }
-                                } label: {
-                                    Image(systemName: "minus.circle.fill")
-                                        .font(.title)
-                                        .foregroundColor(overdraftWindows > 1 ? .red : .gray)
-                                }
-                                .disabled(overdraftWindows <= 1)
-                                
-                                Text("\(overdraftWindows)")
-                                    .font(.largeTitle)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.red)
-                                    .frame(minWidth: 60)
-                                
-                                Button {
-                                    overdraftWindows += 1
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.title)
-                                        .foregroundColor(.red)
-                                }
-                            }
-                            
-                            // Show what will happen with overdraft
-                            VStack(alignment: .leading, spacing: 8) {
-                                if activity.hasRewardAttachment {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: activity.effectiveRewardBurnType.icon)
-                                            .foregroundColor(.purple)
-                                        Text("Will burn: \(activity.formattedBurnAmount(multiplier: overdraftWindows))")
-                                            .font(.subheadline)
-                                    }
-                                }
-                                
-                                if activity.hasTaskAttachment {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "clock.badge.plus.fill")
-                                            .foregroundColor(.blue)
-                                        Text("Will add: \(activity.formattedTaskTime(multiplier: overdraftWindows))")
-                                            .font(.subheadline)
-                                    }
-                                }
-                            }
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(8)
-                            
-                            Button {
-                                handleOverdraftUse()
-                            } label: {
-                                Text("Use \(overdraftWindows) Overdraft \(overdraftWindows == 1 ? "Window" : "Windows")")
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.red)
-                                    .cornerRadius(12)
-                            }
-                        }
-                        .padding()
-                        .background(Color.red.opacity(0.05))
-                        .cornerRadius(12)
-                    }
+                    .disabled(!canBorrow)
                 }
                 
                 Spacer()
@@ -820,19 +765,19 @@ struct CreditUseView: View {
     }
     
     private func handleCreditUse() {
-        // Calculate timer duration based on reward and/or task attachment
+        // Calculate timer duration based on timePerCredit and/or task attachment
         var timerMinutes: Double = 0
-        
-        // Add reward time if available
-        if activity.hasRewardAttachment {
-            timerMinutes += activity.rewardBurnAmount * Double(creditsToUse)
+
+        // Add time-per-credit if configured
+        if activity.timePerCredit > 0 {
+            timerMinutes += activity.timePerCredit * Double(creditsToUse)
         }
-        
+
         // Add task time if available
         if activity.hasTaskAttachment {
             timerMinutes += activity.taskTimeAmount * Double(creditsToUse)
         }
-        
+
         // Show timer confirmation if there's any time to track
         if timerMinutes > 0 {
             pendingTimerMinutes = timerMinutes
@@ -847,36 +792,10 @@ struct CreditUseView: View {
     }
     
     private func handleOverdraftUse() {
-        // Calculate timer duration based on reward and/or task attachment
-        var timerMinutes: Double = 0
-        
-        // Add reward time if available
-        if activity.hasRewardAttachment {
-            timerMinutes += activity.rewardBurnAmount * Double(overdraftWindows)
+        if activity.useOverdraftCredit(context: modelContext) {
+            try? modelContext.save()
         }
-        
-        // Add task time if available
-        if activity.hasTaskAttachment {
-            timerMinutes += activity.taskTimeAmount * Double(overdraftWindows)
-        }
-        
-        // Show timer confirmation if there's any time to track
-        if timerMinutes > 0 {
-            pendingTimerMinutes = timerMinutes
-            pendingAction = {
-                if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
-                    try? modelContext.save()
-                }
-                onCancel()
-            }
-            showTimerConfirmation = true
-        } else {
-            // No time attachments, just use overdraft
-            if activity.useOverdraftWindows(overdraftWindows, context: modelContext) {
-                try? modelContext.save()
-            }
-            onCancel()
-        }
+        onCancel()
     }
     
     private func timeString(from interval: TimeInterval) -> String {
@@ -905,5 +824,5 @@ extension EnvironmentValues {
 
 #Preview {
     QuickActivityButton()
-        .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self, Reward.self, Task.self], inMemory: true)
+        .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self, Task.self], inMemory: true)
 }

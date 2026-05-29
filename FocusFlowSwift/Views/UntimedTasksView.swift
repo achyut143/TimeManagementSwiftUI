@@ -518,13 +518,6 @@ struct UntimedTasksView: View {
         if task.completed {
             speakText("Task completed: \(task.title)")
             createRepeatTask(from: task)
-            // Add points to Unclaimed Points reward
-            print("➕ Adding \(task.effectiveWeight) points for completed task")
-            Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
-        } else if wasCompleted {
-            // If uncompleting, subtract the points
-            print("➖ Subtracting \(task.effectiveWeight) points for uncompleted task")
-            Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
         }
         try? modelContext.save()
     }
@@ -667,17 +660,6 @@ struct UntimedTasksView: View {
         newTask.goal = task.goal
 
         modelContext.insert(newTask)
-
-        // Copy reward workflows from original task
-        if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
-            for link in rewardLinks {
-                if let reward = link.reward {
-                    let newLink = TaskRewardLink(task: newTask, reward: reward)
-                    modelContext.insert(newLink)
-                }
-            }
-        }
-
         try? modelContext.save()
     }
 

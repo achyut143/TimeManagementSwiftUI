@@ -199,33 +199,48 @@ struct ActivityWindowChartView: View {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? date
-        
+
         let usages = activityHistory.filter { usage in
-            usage.usedAt >= dayStart && 
+            usage.usedAt >= dayStart &&
             usage.usedAt < dayEnd &&
             (usage.effectiveUsageType == .regularWindow || usage.effectiveUsageType == .creditUsage)
         }
-        
+
         return usages.reduce(0) { sum, usage in
             sum + (usage.creditsUsed ?? 1)
         }
     }
-    
-    // Calculate overdraft windows for a specific date
+
+    // Calculate overdraft credits borrowed for a specific date
     private func overdraftWindows(for date: Date) -> Int {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? date
-        
+
         let overdraftUsages = activityHistory.filter { usage in
-            usage.usedAt >= dayStart && 
+            usage.usedAt >= dayStart &&
             usage.usedAt < dayEnd &&
-            usage.effectiveUsageType == .overdraftUsage
+            (usage.effectiveUsageType == .overdraftUsage || usage.effectiveUsageType == .overdraftCredit)
         }
-        
+
         return overdraftUsages.reduce(0) { sum, usage in
             sum + (usage.creditsUsed ?? 1)
         }
+    }
+
+    // Calculate points-earned credits for a specific date
+    private func pointsCreditCount(for date: Date) -> Int {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? date
+
+        let earned = activityHistory.filter { usage in
+            usage.usedAt >= dayStart &&
+            usage.usedAt < dayEnd &&
+            usage.effectiveUsageType == .pointsCredit
+        }
+
+        return earned.reduce(0) { sum, usage in sum + (usage.creditsUsed ?? 1) }
     }
     
     private func getQuarterStart(for date: Date, calendar: Calendar) -> Date? {
@@ -690,37 +705,6 @@ enum AggregationMode {
 }
 
 #Preview {
-    let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    let container = try! ModelContainer(for: ScheduledActivity.self, ActivityUsageHistory.self, configurations: config)
-    
-    let activity = ScheduledActivity(
-        name: "Morning Exercise",
-        scheduledTimes: [Date()],
-        windowDuration: 600,
-        recurrenceType: .daily
-    )
-    activity.windowsUsedInPeriod = 5
-    activity.windowsSkippedInPeriod = 2
-    activity.overdraftWindowsUsed = 1
-    activity.accumulatedWindowCredits = 2
-    
-    container.mainContext.insert(activity)
-    
-    // Add some sample usage history
-    let calendar = Calendar.current
-    for i in 0..<10 {
-        if let date = calendar.date(byAdding: .day, value: -i, to: Date()) {
-            let usage = ActivityUsageHistory(
-                activityName: "Morning Exercise",
-                usedAt: date,
-                windowStartTime: date,
-                windowEndTime: date,
-                usageType: i % 3 == 0 ? .overdraftUsage : .regularWindow
-            )
-            container.mainContext.insert(usage)
-        }
-    }
-    
-    return ActivityWindowChartView(activity: activity)
-        .modelContainer(container)
+    ActivityWindowChartView(activity: ScheduledActivity(name: "Preview", scheduledTimes: [Date()], windowDuration: 600))
+        .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self], inMemory: true)
 }

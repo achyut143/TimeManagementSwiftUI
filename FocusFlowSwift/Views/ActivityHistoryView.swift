@@ -127,69 +127,41 @@ struct HistoryRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                // Activity name with usage type icon
                 HStack(spacing: 6) {
                     Image(systemName: usage.effectiveUsageType.icon)
-                        .foregroundColor(
-                            usage.effectiveUsageType == .creditUsage ? .orange :
-                            usage.effectiveUsageType == .creditIgnore ? .red : .blue
-                        )
+                        .foregroundColor(iconColor(for: usage.effectiveUsageType))
                         .font(.caption)
-                    
+
                     Text(usage.activityName)
                         .font(.headline)
                 }
-                
+
                 Spacer()
-                
+
                 Text(usage.usedAt, style: .time)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-            
-            // Different display based on usage type
-            if usage.effectiveUsageType == .creditUsage {
+
+            // Type-specific row
+            switch usage.effectiveUsageType {
+            case .creditUsage:
+                badgeRow(label: "Credit Used", color: .orange, credits: usage.creditsUsed)
+            case .creditIgnore:
+                badgeRow(label: "Credit Ignored", color: .gray, credits: usage.creditsUsed)
+            case .pointsCredit:
+                badgeRow(label: "Points Earned", color: .green, credits: usage.creditsUsed)
+            case .overdraftCredit:
+                badgeRow(label: "Borrowed Credit", color: .red, credits: usage.creditsUsed)
+            case .overdraftUsage:
+                badgeRow(label: "Overdraft Used", color: .red, credits: usage.creditsUsed)
+            case .dailyNoteCredit:
+                badgeRow(label: "Daily Note", color: .teal, credits: usage.creditsUsed)
+            case .regularWindow:
                 HStack {
-                    Text("Credit Usage")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(4)
-                    
-                    if let credits = usage.creditsUsed {
-                        Text("(\(credits) \(credits == 1 ? "credit" : "credits"))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                }
-            } else if usage.effectiveUsageType == .creditIgnore {
-                HStack {
-                    Text("Credit Ignore")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(4)
-                    
-                    if let credits = usage.creditsUsed {
-                        Text("(\(credits) \(credits == 1 ? "credit" : "credits"))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                }
-            } else {
-                HStack {
-                    Text("Window: \(usage.windowStartTime, style: .time) - \(usage.windowEndTime, style: .time)")
+                    Text("Window: \(usage.windowStartTime, style: .time) – \(usage.windowEndTime, style: .time)")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    
                     Spacer()
                 }
             }
@@ -202,6 +174,36 @@ struct HistoryRowView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func iconColor(for type: ActivityUsageType) -> Color {
+        switch type {
+        case .creditUsage: return .orange
+        case .creditIgnore: return .gray
+        case .pointsCredit: return .green
+        case .overdraftCredit, .overdraftUsage: return .red
+        case .regularWindow: return .blue
+        case .dailyNoteCredit: return .teal
+        }
+    }
+
+    @ViewBuilder
+    private func badgeRow(label: String, color: Color, credits: Int?) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(color)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(color.opacity(0.1))
+                .cornerRadius(4)
+            if let c = credits {
+                Text("(\(c) \(c == 1 ? "credit" : "credits"))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+        }
     }
 }
 

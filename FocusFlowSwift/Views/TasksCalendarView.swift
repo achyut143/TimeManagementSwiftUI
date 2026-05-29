@@ -1091,17 +1091,10 @@ struct TasksCalendarView: View {
             speakText("Task completed: \(task.title)")
             NotificationManager.shared.scheduleTaskCompletedNotification(task: task)
             createRepeatTask(from: task)
-            // Add points to Unclaimed Points reward
-            print("➕ Adding \(task.effectiveWeight) points for completed task")
-            Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
-        } else if wasCompleted {
-            // If uncompleting, subtract the points
-            print("➖ Subtracting \(task.effectiveWeight) points for uncompleted task")
-            Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
         }
         try? modelContext.save()
     }
-    
+
     private func toggleTaskNonCompletion(_ task: Task) {
         task.notCompleted.toggle()
         if task.notCompleted {
@@ -1308,16 +1301,6 @@ struct TasksCalendarView: View {
         newTask.goal = task.goal
 
         modelContext.insert(newTask)
-
-        // Copy reward workflows from original task
-        if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
-            for link in rewardLinks {
-                if let reward = link.reward {
-                    let newLink = TaskRewardLink(task: newTask, reward: reward)
-                    modelContext.insert(newLink)
-                }
-            }
-        }
 
         // Copy subtasks if the toggle is enabled
         if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
@@ -1658,35 +1641,6 @@ struct EditTaskView: View {
         task.copySubtasks = copySubtasks
         task.goal = selectedGoal
 
-        // Update reward points if task is completed and effective weight changed
-        if task.completed {
-            let newEffectiveWeight = task.effectiveWeight
-            let pointsDifference = newEffectiveWeight - oldEffectiveWeight
-            
-            if pointsDifference != 0 {
-                print("💾 Task edit - Effective weight changed: \(oldEffectiveWeight) → \(newEffectiveWeight)")
-                print("🔄 Points difference: \(pointsDifference)")
-                
-                // Check if task has linked rewards
-                let activeRewardLinks = task.rewardLinks?.filter { $0.isActive } ?? []
-                
-                if !activeRewardLinks.isEmpty {
-                    // Add points difference to all linked rewards
-                    print("🎁 Updating \(activeRewardLinks.count) linked reward(s)")
-                    for link in activeRewardLinks {
-                        if let reward = link.reward {
-                            print("➕ Adding \(pointsDifference) points to '\(reward.name)'")
-                            reward.addAmount(pointsDifference, context: modelContext, taskTitle: task.title, comment: "Task edit adjustment")
-                        }
-                    }
-                } else {
-                    // No reward links - add to Unclaimed Points
-                    print("➕ No reward links, adding \(pointsDifference) points to Unclaimed Points")
-                    Reward.addUnclaimedPoints(pointsDifference, context: modelContext)
-                }
-            }
-        }
-        
         try? modelContext.save()
         
         // Notify that a task was updated
@@ -1720,7 +1674,6 @@ struct TaskActionsView: View {
     @State private var showSubtasksView = false
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
-    @State private var showRewardWorkflows = false
     @State private var showBooksLibrary = false
     @State private var showPartialTimeAlert = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
@@ -1900,10 +1853,6 @@ struct TaskActionsView: View {
                             showTimeSpentDialog = true
                         }
                         
-                        actionButton("Reward Workflows", systemImage: "gift.fill", color: .pink) {
-                            showRewardWorkflows = true
-                        }
-                        
                         if task.repeatAgain != nil {
                             actionButton("View Habit Tracker", systemImage: "chart.bar.fill", color: .purple) {
                                 navigateToHabitTracker()
@@ -1974,13 +1923,6 @@ struct TaskActionsView: View {
                 HabitDashboardView(initialHabit: task.title)
             }
         }
-        .sheet(isPresented: $showRewardWorkflows) {
-            TaskRewardActionsView(task: task, onTaskDeleted: {
-                dismiss()
-                onTaskDeleted()
-            })
-            .presentationDetents([.medium, .large])
-        }
         .sheet(isPresented: $showBooksLibrary) {
             BooksView()
         }
@@ -2015,47 +1957,12 @@ struct TaskActionsView: View {
                 createRepeatTask(from: task)
             }
             
-            // Check if task has reward links
-            let activeLinks = task.rewardLinks?.filter { $0.isActive } ?? []
-            
-            if !activeLinks.isEmpty {
-                // Task has reward links - add points to linked rewards
-                print("🎁 Task has \(activeLinks.count) reward link(s)")
-                for link in activeLinks {
-                    if let reward = link.reward {
-                        print("➕ Adding \(link.pointsToAdd) points to '\(reward.name)'")
-                        reward.addAmount(link.pointsToAdd, context: modelContext, taskTitle: task.title)
-                    }
-                }
-            } else {
-                // No reward links - add to Unclaimed Points
-                print("➕ No reward links, adding \(task.effectiveWeight) points to Unclaimed Points")
-                Reward.addUnclaimedPoints(task.effectiveWeight, context: modelContext)
-            }
-        } else if wasCompleted {
-            // If uncompleting, subtract the points
-            let activeLinks = task.rewardLinks?.filter { $0.isActive } ?? []
-            
-            if !activeLinks.isEmpty {
-                // Subtract from linked rewards
-                print("🎁 Removing points from \(activeLinks.count) reward link(s)")
-                for link in activeLinks {
-                    if let reward = link.reward {
-                        print("➖ Subtracting \(link.pointsToAdd) points from '\(reward.name)'")
-                        reward.addAmount(-link.pointsToAdd, context: modelContext, taskTitle: task.title)
-                    }
-                }
-            } else {
-                // Subtract from Unclaimed Points
-                print("➖ Subtracting \(task.effectiveWeight) points from Unclaimed Points")
-                Reward.addUnclaimedPoints(-task.effectiveWeight, context: modelContext)
-            }
         }
-        
+
         try? modelContext.save()
         dismiss()
     }
-    
+
     private func toggleTaskNonCompletion() {
         task.notCompleted.toggle()
         if task.notCompleted && !task.reassign {
@@ -2111,16 +2018,6 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         newTask.goal = task.goal
 
         modelContext.insert(newTask)
-
-        // Copy reward workflows from original task
-        if let rewardLinks = task.rewardLinks?.filter({ $0.isActive }) {
-            for link in rewardLinks {
-                if let reward = link.reward {
-                    let newLink = TaskRewardLink(task: newTask, reward: reward)
-                    modelContext.insert(newLink)
-                }
-            }
-        }
 
         // Copy subtasks if the toggle is enabled
         if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {

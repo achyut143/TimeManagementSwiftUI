@@ -4,29 +4,25 @@ import SwiftData
 struct NewScheduledActivityView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \Reward.name) private var allRewards: [Reward]
     @Query(sort: \Task.title) private var allTasks: [Task]
-    
+
     @State private var activityName = ""
-    @State private var scheduledTimes: [Date] = []
-    @State private var windowDuration: Double = 10 // minutes
-    @State private var showingTimePicker = false
-    @State private var newTime = Date()
-    
+    @State private var dailyNotesKeyword = ""
+
     // Recurrence pattern
     @State private var recurrenceType: RecurrenceType = .daily
     @State private var selectedWeekdays: Set<Int> = []
     @State private var selectedMonthDays: Set<Int> = []
     @State private var selectedMonths: Set<Int> = []
-    
-    // Reward attachment
-    @State private var selectedReward: Reward?
-    @State private var rewardBurnAmount: String = ""
-    @State private var rewardBurnType: RewardBurnType = .time
-    
+
     // Task attachment
     @State private var selectedTask: Task?
     @State private var taskTimeAmount: String = ""
+
+    // Credit settings
+    @State private var pointsThreshold: String = "15"
+    @State private var timePerCredit: String = "0"
+    @State private var maxOverdraftCredits: String = "2"
     
     // Get available tasks (non-completed tasks from today or future)
     var availableTasks: [Task] {
@@ -56,6 +52,11 @@ struct NewScheduledActivityView: View {
                 Section("Activity Details") {
                     TextField("Activity Name", text: $activityName)
                         .textFieldStyle(.roundedBorder)
+                    TextField("Daily Notes trigger keyword (optional)", text: $dailyNotesKeyword)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Completing a time block in Daily Notes whose description contains this keyword earns credits. Leave blank to match by activity name.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
                 Section("Recurrence Pattern") {
@@ -68,104 +69,9 @@ struct NewScheduledActivityView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .onChange(of: recurrenceType) { oldValue, newValue in
-                        // Clear selections when changing recurrence type
-                        selectedWeekdays.removeAll()
-                        selectedMonthDays.removeAll()
-                        selectedMonths.removeAll()
-                    }
-                    
                     Text(recurrenceType.resetDescription)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    
-                    // Show appropriate selection UI based on recurrence type
-                    switch recurrenceType {
-                    case .daily:
-                        EmptyView()
-                    case .weekly:
-                        weekdaySelectionView
-                    case .monthly:
-                        monthDaySelectionView
-                    case .quarterly:
-                        quarterlySelectionView
-                    }
-                }
-                
-                Section("Scheduled Times") {
-                    ForEach(scheduledTimes.indices, id: \.self) { index in
-                        HStack {
-                            Text(scheduledTimes[index], style: .time)
-                            Spacer()
-                            Button("Remove") {
-                                scheduledTimes.remove(at: index)
-                            }
-                            .foregroundColor(.red)
-                        }
-                    }
-                    
-                    Button {
-                        showingTimePicker = true
-                    } label: {
-                        Label("Add Time", systemImage: "plus.circle")
-                    }
-                }
-                
-                Section("Window Duration") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("\(Int(windowDuration)) minutes")
-                            .font(.headline)
-                        
-                        Slider(value: $windowDuration, in: 1...60, step: 1)
-                    }
-                    .padding(.vertical, 8)
-                }
-                
-                // Reward Attachment Section
-                Section("Reward Attachment (Optional)") {
-                    Picker("Select Reward", selection: $selectedReward) {
-                        Text("None").tag(nil as Reward?)
-                        ForEach(allRewards, id: \.id) { reward in
-                            HStack {
-                                Image(systemName: reward.type.icon)
-                                Text(reward.name)
-                                Spacer()
-                                Text(reward.formattedAmount())
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }.tag(reward as Reward?)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    
-                    if selectedReward != nil {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Picker("Burn Type", selection: $rewardBurnType) {
-                                ForEach(RewardBurnType.allCases, id: \.self) { type in
-                                    HStack {
-                                        Image(systemName: type.icon)
-                                        Text(type.displayName)
-                                    }.tag(type)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            
-                            HStack {
-                                TextField("Amount to burn", text: $rewardBurnAmount)
-                                    .keyboardType(.decimalPad)
-                                Text(rewardBurnType.unit)
-                                    .foregroundColor(.secondary)
-                            }
-                            
-                            if let reward = selectedReward, !rewardBurnAmount.isEmpty, let burnAmount = Double(rewardBurnAmount) {
-                                RewardBurnPreview(reward: reward, burnAmount: burnAmount, burnType: rewardBurnType)
-                            }
-                        }
-                        
-                        Text("This reward will be burned each time you use the activity during its window.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
                 }
                 
                 // Task Attachment Section
@@ -207,6 +113,42 @@ struct NewScheduledActivityView: View {
                     }
                 }
                 
+                Section("Credit Settings") {
+                    HStack {
+                        Text("Points per credit")
+                        Spacer()
+                        TextField("15", text: $pointsThreshold)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                        Text("pts")
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Time per credit")
+                        Spacer()
+                        TextField("0", text: $timePerCredit)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                        Text("min")
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Max overdraft")
+                        Spacer()
+                        TextField("2", text: $maxOverdraftCredits)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                        Text("credits")
+                            .foregroundColor(.secondary)
+                    }
+                    Text("Earn 1 credit for every N task points completed. Each credit = X min of this activity.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Section {
                     Button {
                         createActivity()
@@ -227,13 +169,6 @@ struct NewScheduledActivityView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingTimePicker) {
-                TimePickerSheet(selectedTime: $newTime) {
-                    scheduledTimes.append(newTime)
-                    scheduledTimes.sort()
-                    showingTimePicker = false
-                }
-            }
         }
     }
     
@@ -251,18 +186,6 @@ struct NewScheduledActivityView: View {
                     .foregroundColor(.secondary)
             }
             
-            // Debug info
-            if !selectedWeekdays.isEmpty {
-                Text("Current: \(selectedWeekdays.sorted().map { Calendar.current.weekdaySymbols[$0 - 1] }.joined(separator: ", "))")
-                    .font(.caption2)
-                    .foregroundColor(.blue)
-            }
-            
-            // Debug weekday mapping
-            Text("Weekday mapping: 1=\(Calendar.current.weekdaySymbols[0]), 2=\(Calendar.current.weekdaySymbols[1]), 3=\(Calendar.current.weekdaySymbols[2]), 4=\(Calendar.current.weekdaySymbols[3])")
-                .font(.caption2)
-                .foregroundColor(.gray)
-            
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 8) {
                 ForEach(1...7, id: \.self) { weekday in
                     let dayName = Calendar.current.weekdaySymbols[weekday - 1]
@@ -272,10 +195,8 @@ struct NewScheduledActivityView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             if isSelected {
                                 selectedWeekdays.remove(weekday)
-                                print("🗓️ Removed weekday \(weekday) (\(dayName)). Current selection: \(selectedWeekdays)")
                             } else {
                                 selectedWeekdays.insert(weekday)
-                                print("🗓️ Added weekday \(weekday) (\(dayName)). Current selection: \(selectedWeekdays)")
                             }
                         }
                     } label: {
@@ -315,10 +236,8 @@ struct NewScheduledActivityView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             if isSelected {
                                 selectedMonthDays.remove(day)
-                                print("📅 Removed month day \(day). Current selection: \(selectedMonthDays)")
                             } else {
                                 selectedMonthDays.insert(day)
-                                print("📅 Added month day \(day). Current selection: \(selectedMonthDays)")
                             }
                         }
                     } label: {
@@ -402,64 +321,49 @@ struct NewScheduledActivityView: View {
     }
     
     private var isFormValid: Bool {
-        guard !activityName.isEmpty && !scheduledTimes.isEmpty else { return false }
-        
-        switch recurrenceType {
-        case .daily:
-            return true
-        case .weekly:
-            return !selectedWeekdays.isEmpty
-        case .monthly:
-            return !selectedMonthDays.isEmpty
-        case .quarterly:
-            return !selectedMonths.isEmpty && !selectedMonthDays.isEmpty
-        }
+        !activityName.trimmingCharacters(in: .whitespaces).isEmpty
     }
     
     private func createActivity() {
-        let burnAmount = Double(rewardBurnAmount) ?? 0.0
         let timeAmount = Double(taskTimeAmount) ?? 0.0
-        
-        // Only set reward attachment if both reward and amount are provided
-        let finalRewardId = (selectedReward != nil && burnAmount > 0) ? selectedReward?.id : nil
-        let finalBurnAmount = finalRewardId != nil ? burnAmount : 0.0
-        let finalBurnType = finalRewardId != nil ? rewardBurnType : nil
-        
+
         // Only set task attachment if both task and amount are provided
         let finalTaskId = (selectedTask != nil && timeAmount > 0) ? selectedTask?.id : nil
         let finalTimeAmount = finalTaskId != nil ? timeAmount : 0.0
-        
+
+        let threshold = Double(pointsThreshold) ?? 15.0
+        let timeCreditValue = Double(timePerCredit) ?? 0.0
+        let maxOverdraft = Int(maxOverdraftCredits) ?? 2
+
         let activity = ScheduledActivity(
             name: activityName,
-            scheduledTimes: scheduledTimes,
-            windowDuration: windowDuration * 60, // Convert minutes to seconds
+            scheduledTimes: [],
+            windowDuration: 600,
             isActive: true,
             recurrenceType: recurrenceType,
             selectedWeekdays: Array(selectedWeekdays),
             selectedMonthDays: Array(selectedMonthDays),
             selectedMonths: Array(selectedMonths),
-            attachedRewardId: finalRewardId,
-            rewardBurnAmount: finalBurnAmount,
-            rewardBurnType: finalBurnType,
             attachedTaskId: finalTaskId,
-            taskTimeAmount: finalTimeAmount
+            taskTimeAmount: finalTimeAmount,
+            pointsThreshold: threshold,
+            timePerCredit: timeCreditValue,
+            maxOverdraftCredits: maxOverdraft
         )
-        
+        activity.dailyNotesKeyword = dailyNotesKeyword.trimmingCharacters(in: .whitespaces)
+
         modelContext.insert(activity)
-        
+
         do {
             try modelContext.save()
             print("✅ Created activity '\(activityName)' with \(recurrenceType.displayName) recurrence")
-            if finalRewardId != nil {
-                print("🎁 Attached reward '\(selectedReward?.name ?? "")' with burn amount: \(finalBurnAmount) \(finalBurnType?.unit ?? "")")
-            }
             if finalTaskId != nil {
                 print("📝 Attached task '\(selectedTask?.title ?? "")' with time amount: \(finalTimeAmount) min")
             }
         } catch {
             print("❌ Error saving activity: \(error)")
         }
-        
+
         dismiss()
     }
 }
@@ -495,91 +399,6 @@ struct TimePickerSheet: View {
                 }
             }
         }
-    }
-}
-
-struct RewardBurnPreview: View {
-    let reward: Reward
-    let burnAmount: Double
-    let burnType: RewardBurnType
-    
-    private var pointsNeeded: Double {
-        switch burnType {
-        case .time:
-            if reward.type == .timeReward, let rate = reward.conversionRate, rate > 0 {
-                return burnAmount / rate
-            } else {
-                return burnAmount
-            }
-        case .money:
-            if reward.type == .moneyReward, let rate = reward.conversionRate, rate > 0 {
-                return burnAmount / rate
-            } else {
-                return burnAmount
-            }
-        case .points:
-            return burnAmount
-        }
-    }
-    
-    private var canAfford: Bool {
-        if reward.currentAmount >= pointsNeeded {
-            return true
-        } else if reward.allowOverdraft {
-            return true
-        } else {
-            return false
-        }
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Preview:")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                if canAfford {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.caption)
-                } else {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.red)
-                        .font(.caption)
-                }
-            }
-            
-            HStack {
-                Text("Will burn:")
-                Spacer()
-                Text("\(String(format: "%.1f", pointsNeeded)) pts")
-                    .fontWeight(.semibold)
-            }
-            .font(.caption)
-            
-            HStack {
-                Text("Available:")
-                Spacer()
-                Text(reward.formattedAmount())
-                    .foregroundColor(canAfford ? .green : .red)
-            }
-            .font(.caption)
-            
-            if !canAfford && !reward.allowOverdraft {
-                Text("⚠️ Not enough balance")
-                    .font(.caption2)
-                    .foregroundColor(.red)
-            } else if !canAfford && reward.allowOverdraft {
-                let shortfall = pointsNeeded - reward.currentAmount
-                Text("⚠️ Will create \(String(format: "%.1f", shortfall)) pts overdraft")
-                    .font(.caption2)
-                    .foregroundColor(.orange)
-            }
-        }
-        .padding(8)
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
     }
 }
 
@@ -678,5 +497,5 @@ struct TaskTimePreview: View {
 
 #Preview {
     NewScheduledActivityView()
-        .modelContainer(for: [ScheduledActivity.self, Reward.self, Task.self], inMemory: true)
+        .modelContainer(for: [ScheduledActivity.self, Task.self], inMemory: true)
 }

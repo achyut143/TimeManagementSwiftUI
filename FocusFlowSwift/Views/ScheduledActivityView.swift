@@ -8,7 +8,6 @@ struct ScheduledActivityView: View {
     
     @State private var showNewActivitySheet = false
     @State private var showHistorySheet = false
-    @State private var showRewardsSheet = false
     @State private var currentTime = Date()
     @State private var selectedActivity: ScheduledActivity?
     @State private var showActivityWindow = false
@@ -100,19 +99,10 @@ struct ScheduledActivityView: View {
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search activities")
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                HStack {
-                    Button {
-                        showHistorySheet = true
-                    } label: {
-                        Image(systemName: "clock.arrow.circlepath")
-                    }
-                    
-                    Button {
-                        showRewardsSheet = true
-                    } label: {
-                        Image(systemName: "gift.fill")
-                            .foregroundColor(.orange)
-                    }
+                Button {
+                    showHistorySheet = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
                 }
             }
             
@@ -134,9 +124,6 @@ struct ScheduledActivityView: View {
         }
         .sheet(isPresented: $showHistorySheet) {
             ActivityHistoryView()
-        }
-        .sheet(isPresented: $showRewardsSheet) {
-            ActivityRewardsView()
         }
         .sheet(isPresented: $showActivityWindow) {
             if let activity = selectedActivity {
@@ -221,14 +208,9 @@ struct ScheduledActivityView: View {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         
-        // Mark window as used for reward tracking
+        // Mark window as used for tracking
         activity.markWindowAsUsed()
-        
-        // Burn attached reward if configured
-        if activity.burnAttachedReward(context: modelContext) {
-            print("🔥 Burned attached reward for activity '\(activity.name)'")
-        }
-        
+
         // Add time to attached task if configured
         if activity.addTimeToAttachedTask(context: modelContext) {
             print("⏱️ Added time to attached task for activity '\(activity.name)'")
@@ -301,8 +283,8 @@ struct ActivityCardView: View {
                         .font(.caption2).foregroundColor(.orange)
                 }
 
-                if activity.overdraftWindowsUsed > 0 {
-                    Label("\(activity.overdraftWindowsUsed)", systemImage: "exclamationmark.triangle.fill")
+                if activity.overdraftDebt > 0 {
+                    Label(String(format: "%.0f", activity.overdraftDebt) + "pt debt", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundColor(.red)
                 }
 
@@ -339,6 +321,27 @@ struct ActivityCardView: View {
                 .foregroundColor(.secondary)
             }
 
+            // Row 2.5: Points progress toward next credit
+            HStack(spacing: 6) {
+                Image(systemName: "star.fill")
+                    .font(.caption2)
+                    .foregroundColor(.yellow)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color(.systemGray5)).frame(height: 5)
+                        Capsule()
+                            .fill(activity.pointsProgress >= 1.0 ? Color.green : Color.orange)
+                            .frame(width: geo.size.width * activity.pointsProgress, height: 5)
+                    }
+                }
+                .frame(height: 5)
+                Text(activity.pointsProgressDescription)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize()
+            }
+            .frame(height: 14)
+
             // Row 3: Recurrence days (non-daily)
             if activity.effectiveRecurrenceType != .daily {
                 let days = getRecurrenceDaysDisplay(for: activity)
@@ -360,25 +363,9 @@ struct ActivityCardView: View {
                 }
             }
 
-            // Row 4: Attachments (reward + task inline)
-            if activity.hasRewardAttachment || activity.hasTaskAttachment {
+            // Row 4: Attachments (task + time-per-credit inline)
+            if activity.hasTaskAttachment || activity.timePerCredit > 0 {
                 HStack(spacing: 10) {
-                    if activity.hasRewardAttachment,
-                       let reward = activity.getAttachedReward(context: modelContext) {
-                        HStack(spacing: 3) {
-                            Image(systemName: reward.type.icon).font(.caption2)
-                            Text(reward.name).font(.caption2).lineLimit(1)
-                            Text("·").font(.caption2).foregroundColor(.secondary)
-                            Image(systemName: activity.effectiveRewardBurnType.icon).font(.caption2)
-                            Text(activity.formattedBurnAmount()).font(.caption2).fontWeight(.medium)
-                            if !activity.canBurnReward(context: modelContext) {
-                                Image(systemName: "exclamationmark.circle.fill")
-                                    .font(.caption2).foregroundColor(.red)
-                            }
-                        }
-                        .foregroundColor(.purple)
-                    }
-
                     if activity.hasTaskAttachment,
                        let task = activity.getAttachedTask(context: modelContext) {
                         HStack(spacing: 3) {
@@ -387,6 +374,14 @@ struct ActivityCardView: View {
                             Text("+\(activity.formattedTaskTime())").font(.caption2).fontWeight(.medium)
                         }
                         .foregroundColor(.teal)
+                    }
+
+                    if activity.timePerCredit > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "clock.fill").font(.caption2)
+                            Text("\(Int(activity.timePerCredit)) min/credit").font(.caption2).fontWeight(.medium)
+                        }
+                        .foregroundColor(.blue)
                     }
 
                     Spacer(minLength: 0)
@@ -544,5 +539,5 @@ struct ActivityCardView: View {
     NavigationStack {
         ScheduledActivityView()
     }
-    .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self, Reward.self, Task.self], inMemory: true)
+    .modelContainer(for: [ScheduledActivity.self, ActivityUsageHistory.self, Task.self], inMemory: true)
 }

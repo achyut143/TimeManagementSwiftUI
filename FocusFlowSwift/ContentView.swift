@@ -15,12 +15,15 @@ struct ContentView: View {
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     
-    // Timer for checking expired activity windows
-    let activityCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect() // Check every minute
-    
-    // Query for active activities
+    // Query for active activities (used for points distribution)
     @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
     private var activeActivities: [ScheduledActivity]
+
+    // Watch completed tasks to award points to activities
+    @Query(filter: #Predicate<Task> { $0.completed == true })
+    private var completedTasks: [Task]
+
+    @State private var initialCompletedTaskIds: Set<UUID> = []
     
     var body: some View {
         ZStack {
@@ -154,23 +157,7 @@ struct ContentView: View {
                     Image(systemName: "repeat")
                     Text("Habits")
                 }
-                
-                NavigationStack {
-                    PointsDashboardView()
-                }
-                .tabItem {
-                    Image(systemName: "star.fill")
-                    Text("Points")
-                }
-                
-                NavigationStack {
-                    RewardsActivitiesTabView()
-                }
-                .tabItem {
-                    Image(systemName: "gift")
-                    Text("Rewards/Activities")
-                }
-                
+
                 NavigationStack {
                     GoalListView()
                 }
@@ -180,11 +167,11 @@ struct ContentView: View {
                 }
 
                 NavigationStack {
-                    DayBlocksView()
+                    MoreView()
                 }
                 .tabItem {
-                    Image(systemName: "shield.fill")
-                    Text("Battles")
+                    Image(systemName: "ellipsis.circle.fill")
+                    Text("More")
                 }
 
                 NavigationStack {
@@ -239,62 +226,44 @@ struct ContentView: View {
             if #available(iOS 16.1, *) {
                 AlertSettings.shared.forceRefreshLiveActivity()
             }
-            
-            // Check for expired windows on appear
-            checkForExpiredWindows()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
         }
-        .onReceive(activityCheckTimer) { _ in
-            // Check for expired windows every minute
-            checkForExpiredWindows()
+        .onAppear {
+            initialCompletedTaskIds = Set(completedTasks.map { $0.id })
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CheckExpiredWindows"))) { _ in
-            // Manual trigger for checking expired windows
-            checkForExpiredWindows()
-        }
-    }
-    
-    // MARK: - Activity Credit Management
-    
-    private func checkForExpiredWindows() {
-        for activity in activeActivities {
-            // Check and reset counters first
-            activity.checkAndResetCounters()
-            
-            // Get windows that have passed unused in the current period
-            let passedWindows = activity.getPassedUnusedWindows()
-            
-            // For recently edited activities, be more conservative about bulk marking
-            let expectedSkipped = passedWindows.count
-            
-            if activity.windowsSkippedInPeriod < expectedSkipped {
-                // Calculate how many new windows to mark as skipped
-                let newlySkipped = expectedSkipped - activity.windowsSkippedInPeriod
-                
-                // For recently edited activities, only mark 1 window at a time to prevent bulk marking
-                // For normal activities, allow up to 3 windows per cycle
-                let maxWindowsToSkip = activity.needsPostEditReset() ? 1 : min(newlySkipped, 3)
-                let windowsToSkip = min(newlySkipped, maxWindowsToSkip)
-                
-                if windowsToSkip > 0 {
-                    print("🔍 ContentView: Activity '\(activity.name)': Found \(newlySkipped) newly passed windows, marking \(windowsToSkip) as skipped (recently edited: \(activity.needsPostEditReset()))")
-                    
-                    for _ in 0..<windowsToSkip {
-                        activity.markWindowAsSkipped()
-                    }
-                    try? modelContext.save()
-                    
-                    // Notify other views to refresh
-                    NotificationCenter.default.post(name: NSNotification.Name("ActivityUpdated"), object: nil)
+        .onChange(of: completedTasks) { oldTasks, newTasks in
+            let knownIds = Set(oldTasks.map { $0.id }).union(initialCompletedTaskIds)
+            let newlyCompleted = newTasks.filter { !knownIds.contains($0.id) }
+            guard !newlyCompleted.isEmpty else { return }
+            for task in newlyCompleted {
+                let pts = task.effectiveWeight
+                guard pts > 0 else { continue }
+                for activity in activeActivities {
+                    activity.addTaskPoints(pts, context: modelContext)
                 }
             }
+            try? modelContext.save()
         }
+    }
+}
+
+struct MoreView: View {
+    var body: some View {
+        List {
+            NavigationLink(destination: ScheduledActivityView()) {
+                Label("Activities", systemImage: "clock.badge.checkmark.fill")
+            }
+            NavigationLink(destination: DayBlocksView()) {
+                Label("Battles", systemImage: "shield.fill")
+            }
+        }
+        .navigationTitle("More")
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, Reward.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self], inMemory: true)
 }
