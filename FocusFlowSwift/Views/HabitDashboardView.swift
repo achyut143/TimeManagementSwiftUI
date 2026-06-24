@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import Foundation
+import Charts
 
 struct HabitDashboardView: View {
     @Environment(\.modelContext) private var modelContext
@@ -24,7 +25,10 @@ struct HabitDashboardView: View {
     @State private var showEventDetail = false
     @State private var selectedEventDate: Date?
     @State private var selectedEventDay: EventDay?
-    
+    @State private var habitVisualization: HabitVisualization = .calendar
+    @State private var chartGranularity: ChartGranularity = .range
+    @State private var chartYear: Int = Calendar.current.component(.year, from: Date())
+
     var initialHabit: String? = nil
     
     init(initialHabit: String? = nil) {
@@ -81,7 +85,12 @@ struct HabitDashboardView: View {
 
       // 3. The rest of your content shows only if there’s a selected habit
     if !selectedHabit.isEmpty {
-    habitCalendar
+    visualizationPicker
+    if habitVisualization == .calendar {
+        habitCalendar
+    } else {
+        habitBarChartView
+    }
     statsView
 } else {
     emptyStateView
@@ -291,6 +300,98 @@ struct HabitDashboardView: View {
             }
         }
         .padding()
+    }
+
+    private var visualizationPicker: some View {
+        Picker("Visualization", selection: $habitVisualization) {
+            ForEach(HabitVisualization.allCases, id: \.self) { viz in
+                Text(viz.rawValue).tag(viz)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal)
+    }
+
+    private var habitBarChartView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Picker("Granularity", selection: $chartGranularity) {
+                    ForEach(ChartGranularity.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if chartGranularity != .range {
+                    Spacer()
+                    yearSelector
+                }
+            }
+
+            Chart {
+                ForEach(barChartSegments) { segment in
+                    BarMark(
+                        x: .value("Tasks", segment.count),
+                        y: .value("Period", segment.periodLabel)
+                    )
+                    .foregroundStyle(by: .value("Status", segment.status))
+                    .annotation(position: .overlay) {
+                        if segment.count > 0 {
+                            Text("\(segment.count)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                ForEach(barChartData, id: \.periodLabel) { entry in
+                    if entry.total > 0 {
+                        PointMark(
+                            x: .value("Tasks", entry.total),
+                            y: .value("Period", entry.periodLabel)
+                        )
+                        .opacity(0)
+                        .annotation(position: .trailing) {
+                            Text("\(entry.total)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .chartForegroundStyleScale(domain: ["Completed", "Missed"], range: [Color.green, Color.red.opacity(0.55)])
+            .chartYScale(domain: barChartData.map(\.periodLabel))
+            .chartXAxis {
+                AxisMarks(position: .bottom)
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisValueLabel()
+                }
+            }
+            .chartLegend(position: .bottom)
+            .frame(height: barChartHeight)
+        }
+        .padding(.horizontal)
+    }
+
+    private var yearSelector: some View {
+        HStack(spacing: 8) {
+            Button { chartYear -= 1 } label: {
+                Image(systemName: "chevron.left")
+            }
+            Text(String(chartYear))
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: 44)
+            Button { chartYear += 1 } label: {
+                Image(systemName: "chevron.right")
+            }
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var barChartHeight: CGFloat {
+        let rowHeight: CGFloat = chartGranularity == .weekly ? 16 : 28
+        return max(120, CGFloat(barChartData.count) * rowHeight + 40)
     }
     
     private func habitDayView(date: Date) -> some View {
@@ -612,7 +713,84 @@ struct HabitDashboardView: View {
             return !dayTasks.isEmpty && (dayTasks.contains(where: { $0.completed || $0.notCompleted }))
         }
     }
-    
+
+    // MARK: - Bar Chart Data
+
+    private var barChartData: [HabitBarChartEntry] {
+        guard !selectedHabit.isEmpty else { return [] }
+        let cal = Calendar.current
+
+        switch chartGranularity {
+        case .range:
+            let start = cal.startOfDay(for: fromDate)
+            let end = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: toDate)) ?? toDate
+            let counts = taskCounts(for: selectedHabit, in: DateInterval(start: start, end: max(start, end)))
+            let label = "\(DateFormatter.shortMonth.string(from: fromDate)) \(cal.component(.day, from: fromDate))–\(DateFormatter.shortMonth.string(from: toDate)) \(cal.component(.day, from: toDate))"
+            return [HabitBarChartEntry(periodLabel: label, completed: counts.completed, missed: counts.missed)]
+
+        case .monthly:
+            return (1...12).compactMap { month in
+                guard let monthStart = cal.date(from: DateComponents(year: chartYear, month: month, day: 1)),
+                      let interval = cal.dateInterval(of: .month, for: monthStart) else { return nil }
+                let counts = taskCounts(for: selectedHabit, in: interval)
+                let label = DateFormatter.shortMonth.string(from: monthStart)
+                return HabitBarChartEntry(periodLabel: label, completed: counts.completed, missed: counts.missed)
+            }
+
+        case .weekly:
+            guard let yearStart = cal.date(from: DateComponents(year: chartYear, month: 1, day: 1)),
+                  let yearEnd = cal.date(from: DateComponents(year: chartYear, month: 12, day: 31)) else { return [] }
+            var entries: [HabitBarChartEntry] = []
+            var weekStart = cal.dateInterval(of: .weekOfYear, for: yearStart)?.start ?? yearStart
+            while weekStart <= yearEnd {
+                let weekEnd = cal.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
+                let counts = taskCounts(for: selectedHabit, in: DateInterval(start: weekStart, end: weekEnd))
+                let label = DateFormatter.monthDay.string(from: weekStart)
+                entries.append(HabitBarChartEntry(periodLabel: label, completed: counts.completed, missed: counts.missed))
+                weekStart = weekEnd
+            }
+            return entries
+        }
+    }
+
+    private var barChartSegments: [HabitBarSegment] {
+        barChartData.flatMap { entry in
+            [
+                HabitBarSegment(periodLabel: entry.periodLabel, status: "Completed", count: entry.completed),
+                HabitBarSegment(periodLabel: entry.periodLabel, status: "Missed", count: entry.missed)
+            ]
+        }
+    }
+
+    private func taskCounts(for habitName: String, in interval: DateInterval) -> (completed: Int, missed: Int) {
+        let cal = Calendar.current
+        let habitSpecificTasks = tasks.filter { task in
+            guard task.repeatAgain != nil && task.title == habitName else { return false }
+            switch filterMode {
+            case "routines": return task.title.lowercased().contains("routine")
+            case "repeats":  return !task.title.lowercased().contains("routine")
+            default:         return true
+            }
+        }
+
+        var completed = 0
+        var missed = 0
+        var current = cal.startOfDay(for: interval.start)
+        let end = interval.end
+        while current < end {
+            let dayTasks = habitSpecificTasks.filter { cal.isDate($0.date ?? Date(), inSameDayAs: current) }
+            if !dayTasks.isEmpty {
+                if dayTasks.contains(where: { $0.completed }) {
+                    completed += 1
+                } else if dayTasks.contains(where: { $0.notCompleted }) {
+                    missed += 1
+                }
+            }
+            current = cal.date(byAdding: .day, value: 1, to: current) ?? end
+        }
+        return (completed, missed)
+    }
+
     // MARK: - Helper Methods
     
     private func completionStatusForTasks(_ tasks: [Task]) -> HabitStatus {
@@ -828,16 +1006,47 @@ struct HabitStats {
     let habitName: String?
 }
 
+enum HabitVisualization: String, CaseIterable {
+    case calendar = "Calendar"
+    case barChart = "Bar Chart"
+}
+
+enum ChartGranularity: String, CaseIterable {
+    case range = "Range"
+    case weekly = "Weekly"
+    case monthly = "Monthly"
+}
+
+struct HabitBarChartEntry {
+    let periodLabel: String
+    let completed: Int
+    let missed: Int
+    var total: Int { completed + missed }
+}
+
+struct HabitBarSegment: Identifiable {
+    let id = UUID()
+    let periodLabel: String
+    let status: String
+    let count: Int
+}
+
 extension DateFormatter {
     static let shortMonth: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM"
         return formatter
     }()
-    
+
     static let weekday: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE"
+        return formatter
+    }()
+
+    static let monthDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
         return formatter
     }()
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import Foundation
+import Charts
 
 struct HabitOverviewView: View {
     @Environment(\.modelContext) private var modelContext
@@ -10,7 +11,7 @@ struct HabitOverviewView: View {
     @State private var toDate = Date()
     @State private var pendingFromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var pendingToDate = Date()
-    @State private var selectedView = "table"  // "table" | "all"
+    @State private var selectedView = "chart"  // "chart" | "table" | "all"
     @State private var filterMode = "all"
     @State private var searchText = ""
     @State private var appliedSearch = ""
@@ -43,7 +44,13 @@ struct HabitOverviewView: View {
                 // Header with filters
                 headerView
                 
-                if selectedView == "table" {
+                if selectedView == "chart" {
+                    if filteredHabitNames.isEmpty {
+                        emptyStateView
+                    } else {
+                        habitOverviewChartView
+                    }
+                } else if selectedView == "table" {
                     HabitGridView(fromDate: $fromDate, toDate: $toDate)
                 } else {
                     // Overall Discipline Level Display (only when discipline filter is selected)
@@ -98,6 +105,7 @@ struct HabitOverviewView: View {
             // Filter controls
             HStack {
                 Picker("View", selection: $selectedView) {
+                    Text("Chart").tag("chart")
                     Text("Table").tag("table")
                     Text("All").tag("all")
                 }
@@ -126,6 +134,66 @@ struct HabitOverviewView: View {
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private var habitOverviewChartView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Completed vs Total by Habit")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+            ScrollView(.vertical, showsIndicators: true) {
+                Chart {
+                    ForEach(overviewBarChartSegments) { segment in
+                        BarMark(
+                            x: .value("Tasks", segment.count),
+                            y: .value("Habit", segment.label)
+                        )
+                        .foregroundStyle(by: .value("Status", segment.status))
+                        .annotation(position: .overlay) {
+                            if segment.count > 0 {
+                                Text("\(segment.count)")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                    }
+                    ForEach(overviewBarChartEntries) { entry in
+                        if entry.total > 0 {
+                            PointMark(
+                                x: .value("Tasks", entry.total),
+                                y: .value("Habit", entry.label)
+                            )
+                            .opacity(0)
+                            .annotation(position: .trailing) {
+                                Text("\(entry.total)")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                .chartForegroundStyleScale(domain: ["Completed", "Missed"], range: [Color.green, Color.red.opacity(0.55)])
+                .chartYScale(domain: overviewBarChartEntries.map(\.label))
+                .chartYAxis {
+                    AxisMarks { _ in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel()
+                            .font(.caption2)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom)
+                }
+                .chartLegend(position: .bottom)
+                .frame(height: max(340, CGFloat(overviewBarChartEntries.count) * 56))
+                .padding(.horizontal)
+                .padding(.bottom, 12)
             }
         }
     }
@@ -659,6 +727,27 @@ struct HabitOverviewView: View {
     }
     
     private var dateRange: [Date] { cachedDateRange }
+
+    private var overviewBarChartEntries: [HabitOverviewBarEntry] {
+        filteredHabitNames.map { name in
+            let stats = cachedStats[name]
+            let interval = cachedRepeatInterval[name] ?? 1
+            return HabitOverviewBarEntry(
+                label: "\(name)\n(\(interval)d)",
+                completed: stats?.completed ?? 0,
+                missed: stats?.missed ?? 0
+            )
+        }
+    }
+
+    private var overviewBarChartSegments: [HabitOverviewBarSegment] {
+        overviewBarChartEntries.flatMap { entry in
+            [
+                HabitOverviewBarSegment(label: entry.label, status: "Completed", count: entry.completed),
+                HabitOverviewBarSegment(label: entry.label, status: "Missed", count: entry.missed)
+            ]
+        }
+    }
 
     // MARK: - Stats Recomputation
 
@@ -1380,6 +1469,21 @@ struct HabitOverviewView: View {
             showShareSheet = true
         }
     }
+}
+
+struct HabitOverviewBarEntry: Identifiable {
+    let id = UUID()
+    let label: String
+    let completed: Int
+    let missed: Int
+    var total: Int { completed + missed }
+}
+
+struct HabitOverviewBarSegment: Identifiable {
+    let id = UUID()
+    let label: String
+    let status: String
+    let count: Int
 }
 
 // MARK: - Color Extension for Hex Support
