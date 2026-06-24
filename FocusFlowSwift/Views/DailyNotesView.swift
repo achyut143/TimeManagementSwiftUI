@@ -3,6 +3,7 @@ import SwiftData
 import AVFoundation
 import ActivityKit
 import Combine
+import Charts
 
 // MARK: - Speech Synthesizer Manager
 class SpeechManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
@@ -105,6 +106,23 @@ struct TimeEntry {
     }
 }
 
+// MARK: - Actual Time Worked Marker
+// Encodes minutes actually worked on a time slot, e.g. " [⏱10m]".
+// Must always be inserted before any trailing DistractionTracker metrics suffix,
+// since that suffix is matched/re-appended anchored to the end of the line.
+private let actualMinutesMarkerPattern = #" \[⏱(\d+)m\]"#
+
+private func extractActualMinutes(from text: String) -> Int? {
+    guard let regex = try? NSRegularExpression(pattern: actualMinutesMarkerPattern),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let numRange = Range(match.range(at: 1), in: text) else { return nil }
+    return Int(text[numRange])
+}
+
+private func makeActualMinutesMarker(_ minutes: Int) -> String {
+    " [⏱\(minutes)m]"
+}
+
 struct DailyNotesView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -137,6 +155,7 @@ struct DailyNotesView: View {
     @State private var showFormattedSchedule: Bool = true
     @AppStorage("schedule.hideFinishedTasks") private var hideFinishedTasks: Bool = false
     @State private var editingTask: EditTaskItem? = nil
+    @State private var actualMinutesTarget: ActualMinutesTarget? = nil
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
     @State private var reminderTimer: Timer?
     @State private var showBooksLibrary = false
@@ -375,7 +394,7 @@ struct DailyNotesView: View {
                                     .foregroundColor(.secondary)
                                 Spacer()
                                 Button(action: { showGroupBySheet = true }) {
-                                    Label("Group By", systemImage: "chart.bar.fill")
+                                    Label("Charts", systemImage: "chart.bar.fill")
                                         .font(.caption2)
                                         .foregroundColor(.indigo)
                                 }
@@ -660,6 +679,11 @@ struct DailyNotesView: View {
                     }
                 )
             }
+            .sheet(item: $actualMinutesTarget) { target in
+                ActualTimeSheet(target: target) { minutes in
+                    setActualMinutes(startMin: target.start, endMin: target.end, desc: target.desc, minutes: minutes)
+                }
+            }
             .sheet(isPresented: $showInterceptSheet) {
                 InterceptSheet { lines, afterNum in
                     applyIntercept(lines: lines, afterNum: afterNum)
@@ -695,7 +719,7 @@ struct DailyNotesView: View {
                 Button("Cancel", role: .cancel) {}
             }
             .sheet(isPresented: $showGroupBySheet) {
-                GroupByView(notesText: $notesText, selectedDate: selectedDate)
+                TaskChartsView(notesText: $notesText, selectedDate: selectedDate)
             }
             .confirmationDialog(
                 "You were away \(formatWaitCountUp(pendingDistractionAbsenceSecs)). Record as distraction?",
@@ -2735,6 +2759,7 @@ struct DailyNotesView: View {
         // Strip metrics suffix (e.g. " /3 ~8m") so task operations use the clean name
         let description: String
         var stripped = rawDescription.replacingOccurrences(of: " [✗]", with: "")
+        stripped = stripped.replacingOccurrences(of: actualMinutesMarkerPattern, with: "", options: .regularExpression)
         if let range = stripped.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
             description = String(stripped[..<range.lowerBound])
         } else {
@@ -3489,6 +3514,14 @@ struct DailyNotesView: View {
         let fixed: Bool
     }
 
+    struct ActualMinutesTarget: Identifiable {
+        let id = UUID()
+        let start: Int
+        let end: Int
+        let desc: String
+        let current: Int?
+    }
+
     /// Updates a task and shifts all downstream non-fixed tasks by the change in end time.
     private func updateTaskAndShiftInNotes(item: EditTaskItem, newDesc: String, newStart: Int, newEnd: Int) {
         let delta = newEnd - item.originalEnd   // +ve = extended, -ve = shortened
@@ -4064,7 +4097,7 @@ struct DailyNotesView: View {
         return false
     }
 
-    private func parseFormattedTaskItems() -> [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool, isReward: Bool, isNotCompleted: Bool)] {
+    private func parseFormattedTaskItems() -> [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool, isReward: Bool, isNotCompleted: Bool, actualMinutes: Int?)] {
         let allLines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil
         var eIdx: Int? = nil
@@ -4075,7 +4108,7 @@ struct DailyNotesView: View {
         }
         guard let s = sIdx, let e = eIdx else { return [] }
 
-        var result: [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool, isReward: Bool, isNotCompleted: Bool)] = []
+        var result: [(num: Int?, start: Int, end: Int, desc: String, struck: Bool, fixed: Bool, isReward: Bool, isNotCompleted: Bool, actualMinutes: Int?)] = []
         var prevEnd: Int? = nil
 
         for line in allLines[(s + 1)..<e] {
@@ -4087,6 +4120,7 @@ struct DailyNotesView: View {
 
             let isReward        = parseLine.contains(" [🎁]")
             let isNotCompleted  = parseLine.contains(" [✗]")
+            let actualMinutes   = extractActualMinutes(from: parseLine)
             let parseLineClean  = parseLine
                 .replacingOccurrences(of: " [🎁]", with: "")
                 .replacingOccurrences(of: " [✗]",  with: "")
@@ -4100,7 +4134,7 @@ struct DailyNotesView: View {
             if let entry = parseTimeEntrySequential(parseLineClean, previousEndMinutes: prevEnd) {
                 result.append((num: num, start: entry.startMinutes, end: entry.endMinutes,
                                desc: entry.description, struck: isStruck, fixed: entry.isFixed,
-                               isReward: isReward, isNotCompleted: isNotCompleted))
+                               isReward: isReward, isNotCompleted: isNotCompleted, actualMinutes: actualMinutes))
                 prevEnd = entry.endMinutes
             }
         }
@@ -4233,6 +4267,51 @@ struct DailyNotesView: View {
                         toggled = parseLine + " [🎁]"
                     }
                     lines[i] = isStruck ? "~~\(toggled)~~" : toggled
+                    break
+                }
+                prevEnd = entry.endMinutes
+            }
+        }
+        notesText = lines.joined(separator: "\n")
+        saveNotes()
+    }
+
+    /// Sets, replaces, or clears (when `minutes` is nil) the actual-minutes-worked marker
+    /// on the matching schedule line. Preserves any trailing distraction metrics suffix,
+    /// which must stay at the very end of the line for its own strip/re-append logic to work.
+    private func setActualMinutes(startMin: Int, endMin: Int, desc: String, minutes: Int?) {
+        var lines = notesText.components(separatedBy: .newlines)
+        var sIdx: Int? = nil
+        var eIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "START" && sIdx == nil { sIdx = i }
+            else if t == "END" && sIdx != nil && eIdx == nil { eIdx = i; break }
+        }
+        guard let s = sIdx, let e = eIdx else { return }
+        var prevEnd: Int? = nil
+        for i in (s + 1)..<e {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let parseLine = isStruck ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
+            let parseLineClean = parseLine
+                .replacingOccurrences(of: " [🎁]", with: "")
+                .replacingOccurrences(of: " [✗]",  with: "")
+            if let entry = parseTimeEntrySequential(parseLineClean, previousEndMinutes: prevEnd) {
+                if entry.startMinutes == startMin && entry.endMinutes == endMin && entry.description == desc {
+                    var body = parseLine
+                    var distractionSuffix = ""
+                    if let r = body.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
+                        distractionSuffix = String(body[r])
+                        body.removeSubrange(r)
+                    }
+                    body = body.replacingOccurrences(of: actualMinutesMarkerPattern, with: "", options: .regularExpression)
+                    if let minutes {
+                        body += makeActualMinutesMarker(minutes)
+                    }
+                    body += distractionSuffix
+                    lines[i] = isStruck ? "~~\(body)~~" : body
                     break
                 }
                 prevEnd = entry.endMinutes
@@ -4480,10 +4559,16 @@ struct DailyNotesView: View {
                 if !hideFinishedTasks || !task.struck {
                     taskDisplayRow(num: task.num, startMin: task.start, endMin: task.end,
                                    desc: task.desc, struck: task.struck, fixed: task.fixed,
-                                   isReward: task.isReward, isNotCompleted: task.isNotCompleted, nowMin: nowMin,
+                                   isReward: task.isReward, isNotCompleted: task.isNotCompleted,
+                                   actualMinutes: task.actualMinutes, nowMin: nowMin,
                                    onToggleStrike: { toggleStrikeTask(startMin: task.start, endMin: task.end, desc: task.desc) },
                                    onToggleReward: { toggleRewardTask(startMin: task.start, endMin: task.end, desc: task.desc) },
                                    onToggleNotCompleted: { toggleNotCompletedTask(startMin: task.start, endMin: task.end, desc: task.desc) },
+                                   onSetActual: {
+                                       actualMinutesTarget = ActualMinutesTarget(
+                                           start: task.start, end: task.end, desc: task.desc, current: task.actualMinutes
+                                       )
+                                   },
                                    onDelete: {
                                        pendingDeleteStart = task.start
                                        pendingDeleteEnd   = task.end
@@ -4522,10 +4607,11 @@ struct DailyNotesView: View {
     @ViewBuilder
     private func taskDisplayRow(num: Int?, startMin: Int, endMin: Int, desc: String,
                                 struck: Bool, fixed: Bool, isReward: Bool = false,
-                                isNotCompleted: Bool = false, nowMin: Int,
+                                isNotCompleted: Bool = false, actualMinutes: Int? = nil, nowMin: Int,
                                 onToggleStrike: (() -> Void)? = nil,
                                 onToggleReward: (() -> Void)? = nil,
                                 onToggleNotCompleted: (() -> Void)? = nil,
+                                onSetActual: (() -> Void)? = nil,
                                 onDelete: (() -> Void)? = nil) -> some View {
         let isCurrent = !struck && nowMin >= startMin && nowMin < endMin
         let isPastUnack = !struck && nowMin >= endMin
@@ -4533,6 +4619,13 @@ struct DailyNotesView: View {
         let gold = Color(hue: 0.12, saturation: 0.9, brightness: 0.95)
         let accentColor: Color = struck ? .green : (isReward && !isPastUnack ? gold : (isCurrent ? .blue : (isPastUnack ? .orange : .primary)))
         let duration = endMin - startMin
+
+        // Color-code logged actual time against the planned duration
+        let actualColor: Color? = actualMinutes.map { actual in
+            if actual >= duration { return .green }
+            if actual * 2 >= duration { return .orange }
+            return .red
+        }
 
         // Countdown text for future reward tasks
         let countdownLabel: String? = {
@@ -4598,12 +4691,16 @@ struct DailyNotesView: View {
 
             Spacer()
 
-            Text("\(duration)m")
-                .font(.caption2.monospacedDigit())
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(.secondary.opacity(0.1), in: Capsule())
+            Button(action: { onSetActual?() }) {
+                Text(actualMinutes != nil ? "\(actualMinutes!)/\(duration)m" : "\(duration)m")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(actualColor ?? .secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background((actualColor ?? .secondary).opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .disabled(onSetActual == nil)
 
             if let badge = distractionTracker.badgeText(date: selectedDate, startMin: startMin, desc: desc) {
                 Text(badge)
@@ -6114,6 +6211,64 @@ private struct SidebarEntryRow: View {
 
 // MARK: - Edit Task Sheet
 
+struct ActualTimeSheet: View {
+    let target: DailyNotesView.ActualMinutesTarget
+    /// Called with the new actual-minutes value, or nil to clear it.
+    let onSave: (Int?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var minutesText: String
+
+    init(target: DailyNotesView.ActualMinutesTarget, onSave: @escaping (Int?) -> Void) {
+        self.target = target
+        self.onSave = onSave
+        _minutesText = State(initialValue: target.current.map { "\($0)" } ?? "")
+    }
+
+    private var plannedMinutes: Int { target.end - target.start }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    Text(target.desc)
+                        .font(.headline)
+                    Text("Planned: \(plannedMinutes) min")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Section("Minutes actually worked") {
+                    TextField("e.g. 10", text: $minutesText)
+                        .keyboardType(.numberPad)
+                }
+                if target.current != nil {
+                    Section {
+                        Button("Clear", role: .destructive) {
+                            onSave(nil)
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Actual Time Worked")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        let minutes = Int(minutesText.trimmingCharacters(in: .whitespaces))
+                        onSave(minutes)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+}
+
 struct EditTaskSheet: View {
     let task: DailyNotesView.EditTaskItem
     /// Called with (desc, newStart, newEnd). Use `updateTaskAndShiftInNotes` at the call site.
@@ -6918,34 +7073,49 @@ struct AISchedulerSheet: View {
     }
 }
 
-// MARK: - Group By View
+// MARK: - Task Charts View
 
-struct GroupByView: View {
+struct TaskChartsView: View {
     @Binding var notesText: String
     let selectedDate: Date
     @Environment(\.dismiss) private var dismiss
 
-    struct TaskItem: Identifiable {
-        let id = UUID()
-        let num: Int?
-        let startMinutes: Int
-        let endMinutes: Int
-        let description: String
-        let isCompleted: Bool
-        let isNotCompleted: Bool
-        let originalLine: String
-        var duration: Int { endMinutes - startMinutes }
+    private enum ChartTab: String, CaseIterable {
+        case byTask = "By Task"
+        case byTime = "By Time"
+        case timeline = "Timeline"
     }
+    @State private var selectedTab: ChartTab = .byTask
 
-    struct TaskGroup: Identifiable {
+    /// One occurrence of a task in the schedule (a single START/END line).
+    struct ScheduleInstance: Identifiable {
         let id = UUID()
         let name: String
-        var tasks: [TaskItem]
-        var totalMinutes: Int { tasks.reduce(0) { $0 + $1.duration } }
-        var completedMinutes: Int { tasks.filter { $0.isCompleted }.reduce(0) { $0 + $1.duration } }
+        let startMinutes: Int
+        let endMinutes: Int
+        let isCompleted: Bool
+        let actualMinutes: Int?
+        var duration: Int { endMinutes - startMinutes }
+        /// Logged actual minutes if present; otherwise the full planned duration if the
+        /// task was struck off complete, otherwise zero (no time logged).
+        var effectiveActual: Int { actualMinutes ?? (isCompleted ? duration : 0) }
     }
 
-    private var groups: [TaskGroup] {
+    struct ChartRow: Identifiable {
+        let id = UUID()
+        let label: String
+        let allocated: Int
+        let actual: Int
+    }
+
+    struct ChartSegment: Identifiable {
+        let id = UUID()
+        let rowLabel: String
+        let type: String
+        let minutes: Int
+    }
+
+    private var instances: [ScheduleInstance] {
         let allLines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil, eIdx: Int? = nil
         for (i, line) in allLines.enumerated() {
@@ -6958,7 +7128,7 @@ struct GroupByView: View {
         let pattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(.+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
 
-        var items: [TaskItem] = []
+        var items: [ScheduleInstance] = []
         var prevEnd: Int? = nil
 
         for i in (s + 1)..<e {
@@ -6967,12 +7137,6 @@ struct GroupByView: View {
 
             let isCompleted = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
             let rawContent  = isCompleted ? String(trimmed.dropFirst(2).dropLast(2)) : trimmed
-            let isNotCompleted = rawContent.contains(" [✗]")
-
-            var num: Int? = nil
-            if let pIdx = rawContent.firstIndex(of: ")") {
-                num = Int(String(rawContent[rawContent.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces))
-            }
             let lineNoPre = rawContent.replacingOccurrences(of: #"^\d+\)\s*"#, with: "", options: .regularExpression)
 
             guard let m = regex.firstMatch(in: lineNoPre, range: NSRange(lineNoPre.startIndex..., in: lineNoPre)),
@@ -6985,27 +7149,79 @@ struct GroupByView: View {
             let endMin = rawEnd < startMin ? rawEnd + 1440 : rawEnd
 
             var desc = String(lineNoPre[tr]).trimmingCharacters(in: .whitespaces)
+            let actualMinutes = extractActualMinutes(from: desc)
             desc = desc.replacingOccurrences(of: " [✗]", with: "")
                        .replacingOccurrences(of: " [🎁]", with: "")
+                       .replacingOccurrences(of: actualMinutesMarkerPattern, with: "", options: .regularExpression)
             if let r = desc.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
                 desc = String(desc[..<r.lowerBound])
             }
             desc = desc.trimmingCharacters(in: .whitespaces)
             guard !desc.isEmpty else { continue }
 
-            items.append(TaskItem(num: num, startMinutes: startMin, endMinutes: endMin,
-                                  description: desc, isCompleted: isCompleted,
-                                  isNotCompleted: isNotCompleted, originalLine: trimmed))
+            items.append(ScheduleInstance(name: desc, startMinutes: startMin, endMinutes: endMin,
+                                          isCompleted: isCompleted, actualMinutes: actualMinutes))
             prevEnd = endMin
         }
+        return items
+    }
 
-        var seen: [String] = []
-        var map: [String: [TaskItem]] = [:]
-        for item in items {
-            if map[item.description] == nil { seen.append(item.description) }
-            map[item.description, default: []].append(item)
+    /// Chart 1 data: same-named tasks combined into one row, in first-appearance order.
+    private var byTaskRows: [ChartRow] {
+        var order: [String] = []
+        var allocated: [String: Int] = [:]
+        var actual: [String: Int] = [:]
+        for item in instances {
+            if allocated[item.name] == nil {
+                order.append(item.name)
+                allocated[item.name] = 0
+                actual[item.name] = 0
+            }
+            allocated[item.name, default: 0] += item.duration
+            actual[item.name, default: 0] += item.effectiveActual
         }
-        return seen.compactMap { name in map[name].map { TaskGroup(name: name, tasks: $0) } }
+        return order.map { ChartRow(label: $0, allocated: allocated[$0] ?? 0, actual: actual[$0] ?? 0) }
+    }
+
+    /// Chart 2 data: every occurrence kept separate, in chronological order, labeled with its time.
+    private var byTimeRows: [ChartRow] {
+        instances.sorted { $0.startMinutes < $1.startMinutes }.map { item in
+            ChartRow(label: "\(fmtTime(item.startMinutes)) \(item.name)", allocated: item.duration, actual: item.effectiveActual)
+        }
+    }
+
+    /// Builds a progress-style stack per row: time actually done first, then whatever
+    /// portion of the allocated time is still undone (in red). If more time was spent
+    /// than allocated, the excess is appended as a separate "Over" segment.
+    private func segments(for rows: [ChartRow]) -> [ChartSegment] {
+        rows.flatMap { row -> [ChartSegment] in
+            let done = min(row.actual, row.allocated)
+            let remaining = max(0, row.allocated - row.actual)
+            let over = max(0, row.actual - row.allocated)
+            var result = [
+                ChartSegment(rowLabel: row.label, type: "Done", minutes: done),
+                ChartSegment(rowLabel: row.label, type: "Remaining", minutes: remaining)
+            ]
+            if over > 0 {
+                result.append(ChartSegment(rowLabel: row.label, type: "Over", minutes: over))
+            }
+            return result
+        }
+    }
+
+    private func colorDomain(for rows: [ChartRow]) -> [String] {
+        var domain = ["Done", "Remaining"]
+        if rows.contains(where: { $0.actual > $0.allocated }) { domain.append("Over") }
+        return domain
+    }
+
+    private func color(for type: String) -> Color {
+        switch type {
+        case "Done": return .green
+        case "Remaining": return .red
+        case "Over": return .orange
+        default: return .secondary
+        }
     }
 
     private func gbTimeToMinutes(_ s: String, prev: Int?) -> Int? {
@@ -7025,13 +7241,6 @@ struct GroupByView: View {
         return hour * 60 + mn
     }
 
-    private func fmtMin(_ m: Int) -> String {
-        guard m > 0 else { return "0m" }
-        let h = m / 60, rem = m % 60
-        if h == 0 { return "\(rem)m" }
-        return rem > 0 ? "\(h)h \(rem)m" : "\(h)h"
-    }
-
     private func fmtTime(_ minutes: Int) -> String {
         let h = (minutes / 60) % 24
         let m = minutes % 60
@@ -7042,65 +7251,28 @@ struct GroupByView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(groups) { group in
-                    let distrSecs = DistractionTracker.shared.durationByTitle(date: selectedDate, title: group.name)
-                    Section {
-                        // Group header with progress
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(group.name).font(.headline)
-                                Spacer()
-                                Text("\(fmtMin(group.completedMinutes)) / \(fmtMin(group.totalMinutes))")
-                                    .font(.subheadline.monospacedDigit())
-                                    .foregroundColor(.secondary)
-                            }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.18)).frame(height: 6)
-                                    let pct = group.totalMinutes > 0
-                                        ? CGFloat(group.completedMinutes) / CGFloat(group.totalMinutes) : 0
-                                    RoundedRectangle(cornerRadius: 3).fill(Color.green)
-                                        .frame(width: geo.size.width * min(pct, 1.0), height: 6)
-                                }
-                            }
-                            .frame(height: 6)
-                            if distrSecs > 0 {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.up.right.circle").font(.caption2).foregroundColor(.orange)
-                                    Text("Distracted \(fmtSecs(distrSecs))").font(.caption).foregroundColor(.orange)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
+            VStack(spacing: 12) {
+                Picker("Chart", selection: $selectedTab) {
+                    ForEach(ChartTab.allCases, id: \.self) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
 
-                        // Individual tasks — read only
-                        ForEach(group.tasks) { task in
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(fmtTime(task.startMinutes)) – \(fmtTime(task.endMinutes))")
-                                        .font(.caption).foregroundColor(.secondary)
-                                    Text(task.description)
-                                        .strikethrough(task.isCompleted, color: .green)
-                                        .foregroundColor(
-                                            task.isCompleted    ? .secondary :
-                                            task.isNotCompleted ? .red.opacity(0.75) : .primary)
-                                }
-                                Spacer()
-                                // Status icon
-                                if task.isCompleted {
-                                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
-                                } else if task.isNotCompleted {
-                                    Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.caption)
-                                }
-                                Text(fmtMin(task.duration)).font(.caption).foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                        }
+                ScrollView {
+                    switch selectedTab {
+                    case .byTask:
+                        chartView(rows: byTaskRows)
+                    case .byTime:
+                        chartView(rows: byTimeRows)
+                    case .timeline:
+                        lineChartView(rows: byTimeRows)
                     }
                 }
             }
-            .navigationTitle("Group By Task")
+            .padding(.top, 8)
+            .navigationTitle("Task Charts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -7110,11 +7282,120 @@ struct GroupByView: View {
         }
     }
 
-    private func fmtSecs(_ secs: TimeInterval) -> String {
-        let s = Int(secs)
-        let m = s / 60, rem = s % 60
-        if m == 0 { return "\(rem)s" }
-        return rem > 0 ? "\(m)m \(rem)s" : "\(m)m"
+    @ViewBuilder
+    private func chartView(rows: [ChartRow]) -> some View {
+        if rows.isEmpty {
+            Text("No scheduled tasks yet")
+                .foregroundColor(.secondary)
+                .padding()
+        } else {
+            Chart {
+                ForEach(segments(for: rows)) { segment in
+                    BarMark(
+                        x: .value("Minutes", segment.minutes),
+                        y: .value("Task", segment.rowLabel)
+                    )
+                    .foregroundStyle(by: .value("Type", segment.type))
+                    .annotation(position: .overlay) {
+                        if segment.minutes > 0 {
+                            Text("\(segment.minutes)m")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                ForEach(rows) { row in
+                    let total = max(row.allocated, row.actual)
+                    if total > 0 {
+                        PointMark(
+                            x: .value("Minutes", total),
+                            y: .value("Task", row.label)
+                        )
+                        .opacity(0)
+                        .annotation(position: .trailing) {
+                            Text("\(total)m")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .chartForegroundStyleScale(domain: colorDomain(for: rows), range: colorDomain(for: rows).map(color(for:)))
+            .chartYScale(domain: rows.map(\.label))
+            .chartXAxis {
+                AxisMarks(position: .bottom)
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisValueLabel()
+                }
+            }
+            .chartLegend(position: .bottom)
+            .frame(height: max(120, CGFloat(rows.count) * 36 + 40))
+            .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private func lineChartView(rows: [ChartRow]) -> some View {
+        if rows.isEmpty {
+            Text("No scheduled tasks yet")
+                .foregroundColor(.secondary)
+                .padding()
+        } else {
+            ScrollView(.horizontal, showsIndicators: true) {
+                Chart {
+                    ForEach(rows) { row in
+                        LineMark(
+                            x: .value("Time Slot", row.label),
+                            y: .value("Minutes", row.allocated)
+                        )
+                        .foregroundStyle(by: .value("Series", "Total"))
+                        .symbol(by: .value("Series", "Total"))
+                        .annotation(position: .top) {
+                            Text("\(row.allocated)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.red)
+                        }
+
+                        LineMark(
+                            x: .value("Time Slot", row.label),
+                            y: .value("Minutes", row.actual)
+                        )
+                        .foregroundStyle(by: .value("Series", "Actual"))
+                        .symbol(by: .value("Series", "Actual"))
+                        .annotation(position: .bottom) {
+                            Text("\(row.actual)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
+                .chartForegroundStyleScale(domain: ["Total", "Actual"], range: [Color.red, Color.green])
+                .chartXAxis {
+                    AxisMarks { value in
+                        AxisGridLine()
+                        AxisTick()
+                        AxisValueLabel {
+                            if let label = value.as(String.self) {
+                                Text(label)
+                                    .font(.caption2)
+                                    .fixedSize()
+                                    .rotationEffect(.degrees(-90))
+                                    .offset(y: 10)
+                            }
+                        }
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .chartLegend(position: .bottom)
+                .frame(width: max(360, CGFloat(rows.count) * 70), height: 320)
+                .padding(.bottom, 60)
+                .padding(.horizontal)
+            }
+        }
     }
 }
 

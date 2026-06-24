@@ -117,9 +117,44 @@ struct TaskTableView: View {
                 else { guard rate < 85 else { return false } }
             }
             return true
-        }.sorted { ($0.date ?? Date()) > ($1.date ?? Date()) }
+        }.sorted(by: taskDisplayOrder)
     }
-    
+
+    // Morning -> Afternoon -> Untimed (at the 4pm mark) -> 4pm-and-later tasks, per day.
+    private enum TimeSlot: Int {
+        case morning = 0
+        case afternoon = 1
+        case untimed = 2
+        case evening = 3
+    }
+
+    private func startMinutes(_ time: String) -> Int? {
+        let components = time.split(separator: ":").compactMap { Int($0) }
+        guard components.count == 2 else { return nil }
+        return components[0] * 60 + components[1]
+    }
+
+    private func timeSlot(for task: Task) -> TimeSlot {
+        guard !task.startTime.isEmpty || !task.endTime.isEmpty else { return .untimed }
+        guard let minutes = startMinutes(task.startTime) else { return .untimed }
+        if minutes < 12 * 60 { return .morning }
+        if minutes < 16 * 60 { return .afternoon }
+        return .evening
+    }
+
+    private func taskDisplayOrder(_ lhs: Task, _ rhs: Task) -> Bool {
+        let lhsDay = Calendar.current.startOfDay(for: lhs.date ?? Date())
+        let rhsDay = Calendar.current.startOfDay(for: rhs.date ?? Date())
+        if lhsDay != rhsDay { return lhsDay > rhsDay }
+
+        let lhsSlot = timeSlot(for: lhs)
+        let rhsSlot = timeSlot(for: rhs)
+        if lhsSlot != rhsSlot { return lhsSlot.rawValue < rhsSlot.rawValue }
+
+        guard lhsSlot != .untimed else { return false }
+        return (startMinutes(lhs.startTime) ?? 0) < (startMinutes(rhs.startTime) ?? 0)
+    }
+
     private func taskRowBackground(_ task: Task) -> Color {
         if task.completed { return .green.opacity(0.3) }
         if task.notCompleted { return .red.opacity(0.3) }
