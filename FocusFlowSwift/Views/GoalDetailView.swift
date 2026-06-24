@@ -5,13 +5,19 @@ struct GoalDetailView: View {
     @Bindable var goal: Goal
     @Environment(\.modelContext) private var modelContext
 
+    let filterFrom: Date
+    let filterTo: Date
+
     @State private var selectedTaskForActions: Task?
     @State private var showTaskActions = false
     @State private var showEditGoal = false
     @State private var reassignHabitName: String? = nil
 
     private var allGoalTasks: [Task] {
-        (goal.tasks ?? []).sorted {
+        (goal.tasks ?? []).filter { task in
+            guard let d = task.date else { return false }
+            return d >= filterFrom && d <= filterTo
+        }.sorted {
             let d0 = $0.date ?? .distantPast
             let d1 = $1.date ?? .distantPast
             return d0 > d1
@@ -137,7 +143,7 @@ struct GoalDetailView: View {
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(goal.taskCount)")
+                    Text("\(allGoalTasks.count)")
                         .font(.title2)
                         .fontWeight(.bold)
                     Text("Total")
@@ -146,7 +152,7 @@ struct GoalDetailView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(goal.completedTaskCount)")
+                    Text("\(allGoalTasks.filter { $0.completed }.count)")
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundStyle(.green)
@@ -157,19 +163,21 @@ struct GoalDetailView: View {
 
                 Spacer()
 
-                GoalProgressRing(percentage: goal.completionPercentage)
+                let pct: Double = allGoalTasks.isEmpty ? 0 : Double(allGoalTasks.filter { $0.completed }.count) / Double(allGoalTasks.count) * 100
+                GoalProgressRing(percentage: pct)
                     .frame(width: 56, height: 56)
             }
 
             GeometryReader { geometry in
+                let pct: Double = allGoalTasks.isEmpty ? 0 : Double(allGoalTasks.filter { $0.completed }.count) / Double(allGoalTasks.count) * 100
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.secondary.opacity(0.2))
                         .frame(height: 8)
                     RoundedRectangle(cornerRadius: 4)
                         .fill(progressColor)
-                        .frame(width: geometry.size.width * CGFloat(goal.completionPercentage / 100.0), height: 8)
-                        .animation(.easeInOut(duration: 0.3), value: goal.completionPercentage)
+                        .frame(width: geometry.size.width * CGFloat(pct / 100.0), height: 8)
+                        .animation(.easeInOut(duration: 0.3), value: pct)
                 }
             }
             .frame(height: 8)
@@ -177,8 +185,9 @@ struct GoalDetailView: View {
     }
 
     private var progressColor: Color {
-        if goal.completionPercentage >= 75 { return .green }
-        if goal.completionPercentage >= 40 { return .orange }
+        let pct = allGoalTasks.isEmpty ? 0.0 : Double(allGoalTasks.filter { $0.completed }.count) / Double(allGoalTasks.count) * 100
+        if pct >= 75 { return .green }
+        if pct >= 40 { return .orange }
         return .red
     }
 
@@ -405,6 +414,9 @@ struct GoalTaskRow: View {
 }
 
 struct UndefinedGoalDetailView: View {
+    let filterFrom: Date
+    let filterTo: Date
+
     @Query private var allTasks: [Task]
     @State private var selectedTaskForActions: Task?
     @State private var showTaskActions = false
@@ -412,7 +424,10 @@ struct UndefinedGoalDetailView: View {
 
     private var undefinedTasks: [Task] {
         allTasks
-            .filter { $0.goal == nil }
+            .filter { task in
+                guard task.goal == nil, let d = task.date else { return false }
+                return d >= filterFrom && d <= filterTo
+            }
             .sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
 

@@ -401,6 +401,21 @@ struct QuickActivityRowView: View {
                 
                 // Activity metrics
                 HStack(spacing: 8) {
+                    // Points progress toward next credit
+                    HStack(spacing: 4) {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundColor(.yellow)
+                        Text(activity.pointsProgressDescription)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(4)
+
                     if activity.accumulatedWindowCredits > 0 {
                         HStack(spacing: 4) {
                             Image(systemName: "gift.fill")

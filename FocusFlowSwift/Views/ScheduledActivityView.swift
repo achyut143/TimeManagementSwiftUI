@@ -302,26 +302,7 @@ struct ActivityCardView: View {
                 }
             }
 
-            // Row 2: Time pills + duration
-            HStack(spacing: 6) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(activity.scheduledTimes.indices, id: \.self) { i in
-                            Text(activity.scheduledTimes[i], style: .time)
-                                .font(.caption2)
-                                .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Color(.tertiarySystemFill)).cornerRadius(4)
-                        }
-                    }
-                }
-                HStack(spacing: 2) {
-                    Image(systemName: "timer").font(.caption2)
-                    Text(durationString(from: activity.windowDuration)).font(.caption2)
-                }
-                .foregroundColor(.secondary)
-            }
-
-            // Row 2.5: Points progress toward next credit
+            // Row 2: Points progress toward next credit
             HStack(spacing: 6) {
                 Image(systemName: "star.fill")
                     .font(.caption2)
@@ -342,25 +323,12 @@ struct ActivityCardView: View {
             }
             .frame(height: 14)
 
-            // Row 3: Recurrence days (non-daily)
+            // Row 3: Reset cadence for non-daily
             if activity.effectiveRecurrenceType != .daily {
-                let days = getRecurrenceDaysDisplay(for: activity)
-                if !days.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            ForEach(days, id: \.self) { day in
-                                Text(day)
-                                    .font(.caption2)
-                                    .padding(.horizontal, 4).padding(.vertical, 2)
-                                    .background(Color.blue.opacity(0.1))
-                                    .foregroundColor(.blue).cornerRadius(3)
-                            }
-                        }
-                    }
-                } else {
-                    Text("No days selected")
-                        .font(.caption2).foregroundColor(.red).italic()
-                }
+                Text(activity.effectiveRecurrenceType.resetDescription)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .italic()
             }
 
             // Row 4: Attachments (task + time-per-credit inline)
@@ -388,55 +356,17 @@ struct ActivityCardView: View {
                 }
             }
 
-            // Row 5: Status + action buttons
-            HStack(spacing: 6) {
-                if isActive, let windowEnd = activity.currentWindowEndTime() {
-                    let remaining = max(0, windowEnd.timeIntervalSince(currentTime))
-                    HStack(spacing: 3) {
-                        Image(systemName: "clock.fill").font(.caption2).foregroundColor(.red)
-                        Text(timeString(from: remaining))
-                            .font(.caption2.monospacedDigit()).foregroundColor(.red)
-                    }
-
+            // Row 5: Credits action
+            if activity.accumulatedWindowCredits >= 1 {
+                HStack(spacing: 6) {
                     Spacer()
-
-                    Button(action: onUseWindow) {
-                        Label("Use", systemImage: "play.fill")
+                    Button {
+                        if activity.useWindowCredits(1, context: modelContext) { try? modelContext.save() }
+                    } label: {
+                        Label("Use 1 credit", systemImage: "gift.fill")
                             .font(.caption).fontWeight(.semibold)
                             .padding(.horizontal, 10).padding(.vertical, 5)
-                            .background(Color.green).foregroundColor(.white).cornerRadius(7)
-                    }
-
-                    if activity.accumulatedWindowCredits >= 1 {
-                        Button {
-                            if activity.useWindowCredits(1, context: modelContext) { try? modelContext.save() }
-                        } label: {
-                            Label("1cr", systemImage: "gift.fill")
-                                .font(.caption)
-                                .padding(.horizontal, 8).padding(.vertical, 5)
-                                .background(Color.orange).foregroundColor(.white).cornerRadius(7)
-                        }
-                    }
-
-                } else if let nextTime = activity.nextScheduledTime() {
-                    let timeUntil = nextTime.timeIntervalSince(currentTime)
-                    HStack(spacing: 3) {
-                        Image(systemName: "clock").font(.caption2).foregroundColor(.blue)
-                        Text(timeString(from: timeUntil))
-                            .font(.caption2.monospacedDigit()).foregroundColor(.blue)
-                    }
-
-                    Spacer()
-
-                    if activity.accumulatedWindowCredits >= 1 {
-                        Button {
-                            if activity.useWindowCredits(1, context: modelContext) { try? modelContext.save() }
-                        } label: {
-                            Label("1cr", systemImage: "gift.fill")
-                                .font(.caption)
-                                .padding(.horizontal, 8).padding(.vertical, 5)
-                                .background(Color.orange).foregroundColor(.white).cornerRadius(7)
-                        }
+                            .background(Color.orange).foregroundColor(.white).cornerRadius(7)
                     }
                 }
             }

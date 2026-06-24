@@ -7,49 +7,109 @@ struct GoalListView: View {
     @Query private var allTasks: [Task]
 
     @State private var showCreateGoal = false
-    @State private var selectedGoalForDetail: Goal?
-    @State private var showUndefinedGoal = false
+    @State private var goalToDelete: Goal? = nil
+    @State private var showDeleteConfirmation = false
 
-    var undefinedTaskCount: Int {
-        allTasks.filter { $0.goal == nil }.count
+    // Persisted filter dates (stored as epoch seconds; 0 = use default)
+    @AppStorage("goalFilter.fromTimestamp") private var fromTimestamp: Double = 0
+    @AppStorage("goalFilter.toTimestamp") private var toTimestamp: Double = 0
+
+    private var filterFrom: Date {
+        fromTimestamp == 0 ? Self.defaultFromDate : Date(timeIntervalSince1970: fromTimestamp)
+    }
+    private var filterTo: Date {
+        toTimestamp == 0 ? Date() : Date(timeIntervalSince1970: toTimestamp)
+    }
+    private var filterToEndOfDay: Date {
+        Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: filterTo) ?? filterTo
+    }
+
+    private static var defaultFromDate: Date {
+        Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
+    }
+
+    private var undefinedFilteredCount: Int {
+        allTasks.filter { task in
+            guard task.goal == nil, let d = task.date else { return false }
+            return d >= filterFrom && d <= filterToEndOfDay
+        }.count
     }
 
     var body: some View {
-        List {
-            Section("Goals") {
-                ForEach(goals) { goal in
-                    NavigationLink(destination: GoalDetailView(goal: goal)) {
-                        GoalRowView(goal: goal)
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            deleteGoal(goal)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
+        VStack(spacing: 0) {
+            // Date filter bar
+            HStack(spacing: 8) {
+                Image(systemName: "calendar")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                DatePicker("", selection: Binding(
+                    get: { filterFrom },
+                    set: { fromTimestamp = $0.timeIntervalSince1970 }
+                ), displayedComponents: .date)
+                .labelsHidden()
+                .datePickerStyle(.compact)
+
+                Text("→")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                DatePicker("", selection: Binding(
+                    get: { filterTo },
+                    set: { toTimestamp = $0.timeIntervalSince1970 }
+                ), displayedComponents: .date)
+                .labelsHidden()
+                .datePickerStyle(.compact)
+
+                Spacer()
+
+                Button("Reset") {
+                    fromTimestamp = 0
+                    toTimestamp = 0
+                }
+                .font(.caption)
+                .foregroundStyle(.blue)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground))
+
+            List {
+                Section("Goals") {
+                    ForEach(goals) { goal in
+                        NavigationLink(destination: GoalDetailView(goal: goal, filterFrom: filterFrom, filterTo: filterToEndOfDay)) {
+                            GoalRowView(goal: goal, filterFrom: filterFrom, filterTo: filterToEndOfDay)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                goalToDelete = goal
+                                showDeleteConfirmation = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                 }
-            }
 
-            Section("Unassigned") {
-                NavigationLink(destination: UndefinedGoalDetailView()) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("No Goal")
-                                .font(.headline)
-                            Text("Tasks without a goal")
+                Section("Unassigned") {
+                    NavigationLink(destination: UndefinedGoalDetailView(filterFrom: filterFrom, filterTo: filterToEndOfDay)) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("No Goal")
+                                    .font(.headline)
+                                Text("Tasks without a goal")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("\(undefinedFilteredCount)")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.gray)
+                                .clipShape(Capsule())
                         }
-                        Spacer()
-                        Text("\(undefinedTaskCount)")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.gray)
-                            .clipShape(Capsule())
                     }
                 }
             }
@@ -67,9 +127,34 @@ struct GoalListView: View {
         .sheet(isPresented: $showCreateGoal) {
             CreateGoalView()
         }
+        .confirmationDialog(
+            "Delete \"\(goalToDelete?.name ?? "Goal")\"?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Goal, Keep Tasks", role: .destructive) {
+                if let goal = goalToDelete { deleteGoal(goal, deleteTasks: false) }
+                goalToDelete = nil
+            }
+            Button("Delete Goal & All Its Tasks", role: .destructive) {
+                if let goal = goalToDelete { deleteGoal(goal, deleteTasks: true) }
+                goalToDelete = nil
+            }
+            Button("Cancel", role: .cancel) { goalToDelete = nil }
+        } message: {
+            if let goal = goalToDelete {
+                let count = goal.taskCount
+                Text("This goal has \(count) task\(count == 1 ? "" : "s"). Choose whether to keep them (moved to Unassigned) or delete them too.")
+            }
+        }
     }
 
-    private func deleteGoal(_ goal: Goal) {
+    private func deleteGoal(_ goal: Goal, deleteTasks: Bool) {
+        if deleteTasks {
+            for task in goal.tasks ?? [] {
+                modelContext.delete(task)
+            }
+        }
         modelContext.delete(goal)
         try? modelContext.save()
     }
@@ -77,6 +162,21 @@ struct GoalListView: View {
 
 struct GoalRowView: View {
     let goal: Goal
+    let filterFrom: Date
+    let filterTo: Date
+
+    private var filteredTasks: [Task] {
+        (goal.tasks ?? []).filter { task in
+            guard let d = task.date else { return false }
+            return d >= filterFrom && d <= filterTo
+        }
+    }
+    private var filteredTotal: Int { filteredTasks.count }
+    private var filteredDone: Int { filteredTasks.filter { $0.completed }.count }
+    private var filteredPercentage: Double {
+        guard filteredTotal > 0 else { return 0 }
+        return Double(filteredDone) / Double(filteredTotal) * 100
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -90,16 +190,16 @@ struct GoalRowView: View {
                         .lineLimit(2)
                 }
                 HStack(spacing: 6) {
-                    Label("\(goal.taskCount)", systemImage: "checklist")
+                    Label("\(filteredTotal)", systemImage: "checklist")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("\(goal.completedTaskCount) done")
+                    Text("\(filteredDone) done")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
-            GoalProgressRing(percentage: goal.completionPercentage)
+            GoalProgressRing(percentage: filteredPercentage)
         }
         .padding(.vertical, 4)
     }

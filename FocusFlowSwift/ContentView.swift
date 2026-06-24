@@ -258,6 +258,9 @@ struct MoreView: View {
             NavigationLink(destination: DayBlocksView()) {
                 Label("Battles", systemImage: "shield.fill")
             }
+            NavigationLink(destination: PointsDashboardView()) {
+                Label("Points Dashboard", systemImage: "chart.bar.fill")
+            }
         }
         .navigationTitle("More")
     }

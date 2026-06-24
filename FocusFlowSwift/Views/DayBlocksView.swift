@@ -20,9 +20,11 @@ struct DayBlocksView: View {
         return BattleMetrics.compute(from: relevant)
     }
 
-    // Groups blocks by day, sorted newest-first. O(n) dict grouping is fast for this dataset.
+    // Last 7 days only, grouped by day newest-first.
     private var groupedDays: [(date: Date, blocks: [DayBlock])] {
-        let grouped = Dictionary(grouping: allBlocks, by: \.date)
+        let cutoff = Calendar.current.date(byAdding: .day, value: -6, to: Date().startOfDay)!
+        let recent = allBlocks.filter { $0.date >= cutoff }
+        let grouped = Dictionary(grouping: recent, by: \.date)
         return grouped.keys
             .sorted(by: >)
             .map { date in
@@ -182,13 +184,17 @@ struct DayCard: View {
     let blocks: [DayBlock]
     let onEnemyTap: (DayBlock) -> Void
 
+    @State private var isExpanded: Bool = false
+
     private var dayMetrics: BattleMetrics { BattleMetrics.compute(from: blocks) }
 
     var body: some View {
         VStack(spacing: 0) {
             dayHeader
-            Divider()
-            blockList
+            if isExpanded {
+                Divider()
+                blockList
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(
@@ -196,34 +202,44 @@ struct DayCard: View {
                 .strokeBorder(date.isToday ? Color.blue.opacity(0.5) : Color(.separator).opacity(0.3), lineWidth: date.isToday ? 1.5 : 0.5)
         )
         .shadow(color: Color.black.opacity(0.04), radius: 4, y: 2)
+        .onAppear { isExpanded = date.isToday }
     }
 
     private var dayHeader: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if date.isToday {
-                        Text("TODAY")
-                            .font(.caption2).fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 7).padding(.vertical, 2)
-                            .background(Capsule().fill(Color.blue))
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        if date.isToday {
+                            Text("TODAY")
+                                .font(.caption2).fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Capsule().fill(Color.blue))
+                        }
+                        Text(date.weekdayName)
+                            .font(.subheadline).fontWeight(.semibold)
                     }
-                    Text(date.weekdayName)
-                        .font(.subheadline).fontWeight(.semibold)
+                    Text(date.monthDayYearDisplay)
+                        .font(.caption).foregroundColor(.secondary)
                 }
-                Text(date.monthDayYearDisplay)
-                    .font(.caption).foregroundColor(.secondary)
+                Spacer()
+                HStack(spacing: 4) {
+                    if dayMetrics.wins   > 0 { DayMiniPill(count: dayMetrics.wins,   color: .green)  }
+                    if dayMetrics.ties   > 0 { DayMiniPill(count: dayMetrics.ties,   color: .orange) }
+                    if dayMetrics.losses > 0 { DayMiniPill(count: dayMetrics.losses, color: .red)    }
+                }
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 4)
             }
-            Spacer()
-            HStack(spacing: 4) {
-                if dayMetrics.wins   > 0 { DayMiniPill(count: dayMetrics.wins,   color: .green)  }
-                if dayMetrics.ties   > 0 { DayMiniPill(count: dayMetrics.ties,   color: .orange) }
-                if dayMetrics.losses > 0 { DayMiniPill(count: dayMetrics.losses, color: .red)    }
-            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(date.isToday ? Color.blue.opacity(0.07) : Color(.secondarySystemBackground))
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(date.isToday ? Color.blue.opacity(0.07) : Color(.secondarySystemBackground))
+        .buttonStyle(.plain)
     }
 
     private var blockList: some View {
