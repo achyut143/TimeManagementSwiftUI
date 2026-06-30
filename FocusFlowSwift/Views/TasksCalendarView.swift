@@ -94,15 +94,15 @@ struct TasksCalendarView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("4")
-                    .font(.system(size: 22, weight: .black, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.indigo, .purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                let pct = selfEfficacyPercentage
+                VStack(spacing: 0) {
+                    Text("\(pct)%")
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundStyle(selfEfficacyColor(pct))
+                    Text("\(metricDays)d")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack {
@@ -930,7 +930,25 @@ struct TasksCalendarView: View {
             allTasks = []
         }
     }
-    
+
+    private var selfEfficacyPercentage: Int {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -metricDays, to: Date()) ?? Date()
+        let periodTasks = allTasks.filter { ($0.date ?? .distantPast) >= cutoff }
+        let total = periodTasks.reduce(0.0) { $0 + $1.weight }
+        guard total > 0 else { return 0 }
+        let earned = periodTasks.filter { $0.completed }.reduce(0.0) { $0 + $1.effectiveWeight }
+        return min(Int((earned / total) * 100), 100)
+    }
+
+    private func selfEfficacyColor(_ pct: Int) -> Color {
+        switch pct {
+        case 80...: return .green
+        case 60..<80: return .orange
+        case 40..<60: return .yellow
+        default: return .red
+        }
+    }
+
     private func calculatePointsForTask(_ task: Task) -> (earned: Double, allocated: Double) {
         guard task.repeatAgain != nil else {
             return (earned: 0, allocated: 0)

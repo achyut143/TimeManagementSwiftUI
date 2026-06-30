@@ -197,6 +197,14 @@ struct ContentView: View {
                     Image(systemName: "bell.badge")
                     Text("Alerts")
                 }
+
+                NavigationStack {
+                    RestraintListView()
+                }
+                .tabItem {
+                    Image(systemName: "hand.raised.fill")
+                    Text("Restraints")
+                }
             }
             .sheet(isPresented: $showAlertManager) {
                 AlertManagerView()
@@ -260,5 +268,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self, Restraint.self, RestraintInstance.self], inMemory: true)
 }

@@ -61,7 +61,31 @@ struct FocusFlowSwiftApp: App {
                     }
             }
         }
-        .modelContainer(for: [Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self, AlertInstance.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self, Book.self, BookQuote.self, ScheduleTemplate.self, TaskOKR.self, TaskInsight.self, Goal.self, DayBlock.self])
+        .modelContainer(Self.makeContainer())
+    }
+
+    private static func makeContainer() -> ModelContainer {
+        let mainTypes: [any PersistentModel.Type] = [
+            Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self,
+            AlertInstance.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self,
+            HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self,
+            Book.self, BookQuote.self, ScheduleTemplate.self, TaskOKR.self, TaskInsight.self,
+            Goal.self, DayBlock.self
+        ]
+        // Restraints live in a separate store so schema changes never touch existing data.
+        let mainConfig = ModelConfiguration(schema: Schema(mainTypes))
+        let restraintConfig = ModelConfiguration("restraints", schema: Schema([Restraint.self, RestraintInstance.self]))
+        let fullSchema = Schema(mainTypes + [Restraint.self, RestraintInstance.self])
+        do {
+            return try ModelContainer(for: fullSchema, configurations: [mainConfig, restraintConfig])
+        } catch {
+            // Only the restraint store can cause a migration failure; wipe it and retry.
+            let url = restraintConfig.url
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
+            try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
+            return try! ModelContainer(for: fullSchema, configurations: [mainConfig, restraintConfig])
+        }
     }
     
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {

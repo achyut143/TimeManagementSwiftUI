@@ -74,7 +74,7 @@ struct QuickTaskInputView: View {
                     .overlay(
                         Group {
                             if input.isEmpty {
-                                Text("15:30 - 16:30 - task name - 2 - r2")
+                                Text("15:30 - 16:30 - task 1, 16:30 - 17:30 - task 2")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary.opacity(0.5))
                                     .padding(.leading, 16)
@@ -88,9 +88,10 @@ struct QuickTaskInputView: View {
                 HStack(spacing: 16) {
                     Spacer()
                     
-                    Button("Create Task") {
-                        if let parsed = QuickTaskParser.parse(input), parsed.isValid {
-                            onSubmit(parsed)
+                    Button(input.contains(",") ? "Create Tasks" : "Create Task") {
+                        let parsed = QuickTaskParser.parseMultiple(input)
+                        if !parsed.isEmpty {
+                            parsed.forEach { onSubmit($0) }
                             input = ""
                         }
                     }

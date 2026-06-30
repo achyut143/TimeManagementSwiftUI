@@ -19,6 +19,14 @@ struct QuickTaskParser {
     /// - Untimed: "shovel snow - 2 - r2"
     /// - Weight defaults to 1.0 if not specified
     /// - Repeat is optional (r2 means repeat every 2 days)
+    /// Parses a comma-separated input string into multiple tasks.
+    /// Each comma-delimited segment is parsed independently.
+    static func parseMultiple(_ input: String) -> [ParsedTask] {
+        input.components(separatedBy: ",")
+            .compactMap { parse($0) }
+            .filter { $0.isValid }
+    }
+
     static func parse(_ input: String) -> ParsedTask? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -87,7 +95,9 @@ struct QuickTaskParser {
             "15:30 - 16:30 - shovel snow - 2 - r2",
             "shovel snow",
             "shovel snow - 2",
-            "shovel snow - 2 - r2"
+            "shovel snow - 2 - r2",
+            "15:30 - 16:30 - task 1, 16:30 - 17:30 - task 2",
+            "shovel snow, mow lawn, read book"
         ]
     }
     
@@ -98,6 +108,7 @@ struct QuickTaskParser {
         • Untimed: task name - weight - r2
         • Weight defaults to 1 (optional)
         • r2 = repeat every 2 days (optional)
+        • Use commas to create multiple tasks at once
         """
     }
 }

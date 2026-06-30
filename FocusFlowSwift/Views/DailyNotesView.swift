@@ -160,6 +160,8 @@ struct DailyNotesView: View {
     @State private var reminderTimer: Timer?
     @State private var showBooksLibrary = false
     @State private var isFocusMode = false
+    @AppStorage("display.widgetMode") private var widgetMode: String = "books"
+    @State private var showRestraintList = false
     @State private var showSaveTemplate = false
     @State private var showTemplates = false
     @State private var showAutoGenSheet = false
@@ -343,22 +345,36 @@ struct DailyNotesView: View {
                             .tint(.secondary)
                         }
 
-                        // Books quotes — always visible alongside the scheduler
+                        // Widget selector: Books or Restraints
                         Divider()
 
-                        HStack {
-                            Label("Books", systemImage: "books.vertical.fill")
-                                .font(.caption)
-                                .foregroundColor(.indigo)
+                        HStack(spacing: 8) {
+                            Picker("", selection: $widgetMode) {
+                                Text("Books").tag("books")
+                                Text("Restraints").tag("restraints")
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 180)
                             Spacer()
-                            Button(action: { showBooksLibrary = true }) {
-                                Text("Manage")
-                                    .font(.caption)
-                                    .foregroundColor(.indigo)
+                            if widgetMode == "books" {
+                                Button(action: { showBooksLibrary = true }) {
+                                    Text("Manage")
+                                        .font(.caption)
+                                        .foregroundColor(.indigo)
+                                }
+                            } else {
+                                Button(action: { showRestraintList = true }) {
+                                    Text("Manage")
+                                        .font(.caption)
+                                }
                             }
                         }
 
-                        BookQuoteDisplayView()
+                        if widgetMode == "books" {
+                            BookQuoteDisplayView()
+                        } else {
+                            RestraintBarsView(isDark: false)
+                        }
                     }
                 }
 
@@ -640,6 +656,11 @@ struct DailyNotesView: View {
             }
             .sheet(isPresented: $showBooksLibrary) {
                 BooksView()
+            }
+            .sheet(isPresented: $showRestraintList) {
+                NavigationStack {
+                    RestraintListView()
+                }
             }
             .sheet(isPresented: $showTemplates) {
                 ScheduleTemplatesView { templates in
@@ -5486,6 +5507,7 @@ struct FocusModeView: View {
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
     @AppStorage("display.quotesVisible") private var quotesVisible: Bool = true
+    @AppStorage("display.widgetMode") private var widgetMode: String = "books"
 
     @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
     @State private var currentIndex: Int = 0
@@ -5879,8 +5901,26 @@ struct FocusModeView: View {
                     .padding(.bottom, 28)
                 }
 
-                // Large quote
-                if quotesVisible && quotePool.isEmpty {
+                // Widget toggle (Books ↔ Restraints)
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        withAnimation { widgetMode = widgetMode == "books" ? "restraints" : "books" }
+                    }) {
+                        Image(systemName: widgetMode == "books" ? "books.vertical" : "hand.raised.fill")
+                            .font(.caption2)
+                            .foregroundColor(.cyan.opacity(0.5))
+                            .padding(6)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                    }
+                }
+                .padding(.trailing, 28)
+
+                // Large quote or Restraints bars
+                if widgetMode == "restraints" {
+                    RestraintBarsView(isDark: true)
+                        .padding(.horizontal, 32)
+                } else if quotesVisible && quotePool.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "books.vertical")
                             .font(.largeTitle)
