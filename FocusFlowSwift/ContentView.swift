@@ -167,11 +167,19 @@ struct ContentView: View {
                 }
 
                 NavigationStack {
-                    MoreView()
+                    PointsDashboardView()
                 }
                 .tabItem {
-                    Image(systemName: "ellipsis.circle.fill")
-                    Text("More")
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                    Text("Self-Efficacy")
+                }
+
+                NavigationStack {
+                    ScheduledActivityView()
+                }
+                .tabItem {
+                    Image(systemName: "clock.badge.checkmark.fill")
+                    Text("Activities")
                 }
 
                 NavigationStack {
@@ -249,22 +257,6 @@ struct ContentView: View {
     }
 }
 
-struct MoreView: View {
-    var body: some View {
-        List {
-            NavigationLink(destination: ScheduledActivityView()) {
-                Label("Activities", systemImage: "clock.badge.checkmark.fill")
-            }
-            NavigationLink(destination: DayBlocksView()) {
-                Label("Battles", systemImage: "shield.fill")
-            }
-            NavigationLink(destination: PointsDashboardView()) {
-                Label("Points Dashboard", systemImage: "chart.bar.fill")
-            }
-        }
-        .navigationTitle("More")
-    }
-}
 
 #Preview {
     ContentView()

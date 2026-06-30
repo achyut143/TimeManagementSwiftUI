@@ -11,10 +11,16 @@ struct HabitOverviewView: View {
     @State private var toDate = Date()
     @State private var pendingFromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
     @State private var pendingToDate = Date()
-    @State private var selectedView = "chart"  // "chart" | "table" | "all"
+    @State private var selectedView = "chart"  // "chart" | "table" | "all" | "time"
+    @State private var timeChartSortOrder: String = "desc"
     @State private var filterMode = "all"
-    @State private var searchText = ""
-    @State private var appliedSearch = ""
+    @State private var multiSearchText: String = ""
+    @State private var appliedMultiSearch: String = ""
+    @State private var chartSortOrder: String = "none"
+    @State private var savedSearches: [SavedSearch] = []
+    @State private var saveSearchName: String = ""
+    @State private var showSaveSearchField: Bool = false
+    @State private var showSearchSuggestions: Bool = false
     @State private var selectedHabit: String? = nil
     @State private var showDetailedView = false
     @State private var showDMSGuide = false
@@ -52,6 +58,8 @@ struct HabitOverviewView: View {
                     }
                 } else if selectedView == "table" {
                     HabitGridView(fromDate: $fromDate, toDate: $toDate)
+                } else if selectedView == "time" {
+                    habitOverviewTimeChartView
                 } else {
                     // Overall Discipline Level Display (only when discipline filter is selected)
                     if filterMode == "discipline" && !filteredHabitNames.isEmpty {
@@ -107,6 +115,7 @@ struct HabitOverviewView: View {
                 Picker("View", selection: $selectedView) {
                     Text("Chart").tag("chart")
                     Text("Table").tag("table")
+                    Text("Time").tag("time")
                     Text("All").tag("all")
                 }
                 .pickerStyle(.segmented)
@@ -145,6 +154,27 @@ struct HabitOverviewView: View {
                 .foregroundColor(.secondary)
                 .padding(.horizontal)
                 .padding(.top, 8)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Text("Sort by success:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    ForEach([("none", "Default"), ("desc", "High → Low"), ("asc", "Low → High")], id: \.0) { value, label in
+                        let isSelected = chartSortOrder == value
+                        Button(action: { chartSortOrder = value }) {
+                            Text(label)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(RoundedRectangle(cornerRadius: 7).fill(isSelected ? Color.blue : Color(.systemGray6)))
+                                .foregroundColor(isSelected ? .white : .primary)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.horizontal)
+            }
 
             ScrollView(.vertical, showsIndicators: true) {
                 Chart {
@@ -194,6 +224,113 @@ struct HabitOverviewView: View {
                 .frame(height: max(340, CGFloat(overviewBarChartEntries.count) * 56))
                 .padding(.horizontal)
                 .padding(.bottom, 12)
+            }
+        }
+    }
+
+    private var habitOverviewTimeChartView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Time Spent vs Elapsed by Task")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.secondary)
+                    if !timeChartEntries.isEmpty {
+                        Text("\(timeChartEntries.count) tasks")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Text("Sort:")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    ForEach([("none", "Default"), ("desc", "High → Low"), ("asc", "Low → High")], id: \.0) { value, label in
+                        let isSelected = timeChartSortOrder == value
+                        Button(action: { timeChartSortOrder = value }) {
+                            Text(label)
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(RoundedRectangle(cornerRadius: 7).fill(isSelected ? Color.green : Color(.systemGray6)))
+                                .foregroundColor(isSelected ? .white : .primary)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.horizontal)
+            }
+
+            if timeChartEntries.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 44))
+                        .foregroundColor(.gray)
+                    Text("No Time Data")
+                        .font(.title3.weight(.semibold))
+                    Text("Tasks need elapsed time or recorded time spent in the selected date range")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(32)
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    Chart {
+                        ForEach(timeChartSegments) { segment in
+                            BarMark(
+                                x: .value("Minutes", segment.minutes),
+                                y: .value("Task", segment.label)
+                            )
+                            .foregroundStyle(by: .value("Status", segment.status))
+                            .annotation(position: .overlay) {
+                                if segment.minutes >= 1 {
+                                    Text(formatMinutes(segment.minutes))
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundColor(.white)
+                                }
+                            }
+                        }
+                        ForEach(timeChartEntries) { entry in
+                            if entry.elapsed > 0 {
+                                PointMark(
+                                    x: .value("Minutes", entry.elapsed),
+                                    y: .value("Task", entry.label)
+                                )
+                                .opacity(0)
+                                .annotation(position: .trailing) {
+                                    Text(formatMinutes(entry.elapsed))
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .chartForegroundStyleScale(domain: ["Spent", "Remaining"], range: [Color.green, Color.red.opacity(0.55)])
+                    .chartYScale(domain: timeChartEntries.map(\.label))
+                    .chartYAxis {
+                        AxisMarks { _ in
+                            AxisGridLine()
+                            AxisTick()
+                            AxisValueLabel()
+                                .font(.caption2)
+                        }
+                    }
+                    .chartXAxis {
+                        AxisMarks(position: .bottom)
+                    }
+                    .chartLegend(position: .bottom)
+                    .frame(height: max(340, CGFloat(timeChartEntries.count) * 56))
+                    .padding(.horizontal)
+                    .padding(.bottom, 12)
+                }
             }
         }
     }
@@ -718,7 +855,14 @@ struct HabitOverviewView: View {
                     return !Set(taskTags).isDisjoint(with: selectedTagsFilter)
                 }
             }
-            .filter { appliedSearch.isEmpty || $0.localizedCaseInsensitiveContains(appliedSearch) }
+            .filter { name in
+                guard !appliedMultiSearch.isEmpty else { return true }
+                let terms = appliedMultiSearch
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                return terms.isEmpty || terms.contains { name.localizedCaseInsensitiveContains($0) }
+            }
             .filter { name in
                 guard percentageFilter != "all" else { return true }
                 let pct = cachedStats[name]?.percentage ?? 0
@@ -729,7 +873,7 @@ struct HabitOverviewView: View {
     private var dateRange: [Date] { cachedDateRange }
 
     private var overviewBarChartEntries: [HabitOverviewBarEntry] {
-        filteredHabitNames.map { name in
+        var entries = filteredHabitNames.map { name in
             let stats = cachedStats[name]
             let interval = cachedRepeatInterval[name] ?? 1
             return HabitOverviewBarEntry(
@@ -738,6 +882,20 @@ struct HabitOverviewView: View {
                 missed: stats?.missed ?? 0
             )
         }
+        switch chartSortOrder {
+        case "desc": entries.sort {
+            let r0 = $0.total > 0 ? Double($0.completed) / Double($0.total) : 0
+            let r1 = $1.total > 0 ? Double($1.completed) / Double($1.total) : 0
+            return r0 < r1  // low ratio first → high ratio at top (High → Low)
+        }
+        case "asc": entries.sort {
+            let r0 = $0.total > 0 ? Double($0.completed) / Double($0.total) : 0
+            let r1 = $1.total > 0 ? Double($1.completed) / Double($1.total) : 0
+            return r0 > r1  // high ratio first → low ratio at top (Low → High)
+        }
+        default: break
+        }
+        return entries
     }
 
     private var overviewBarChartSegments: [HabitOverviewBarSegment] {
@@ -994,41 +1152,247 @@ struct HabitOverviewView: View {
                         }
                     }
                     
-                    // Search Filter
+                    // Dynamic Multi-Search Filter
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Search Habits")
                                 .font(.subheadline)
                                 .fontWeight(.medium)
-                            
+
                             Spacer()
-                            
-                            if !searchText.isEmpty {
+
+                            if !appliedMultiSearch.isEmpty {
                                 Button("Clear") {
-                                    searchText = ""
+                                    multiSearchText = ""
+                                    appliedMultiSearch = ""
+                                    showSearchSuggestions = false
                                 }
                                 .font(.caption)
                                 .foregroundColor(.blue)
                             }
                         }
-                        
-                        HStack(spacing: 8) {
+
+                        Text("Type to search — pick from the dropdown or type comma-separated terms")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 6) {
                             Image(systemName: "magnifyingglass")
-                                .font(.caption).foregroundColor(.secondary)
-                            TextField("Search habits…", text: $searchText)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            TextField("exercise, study, …", text: $multiSearchText)
                                 .textFieldStyle(.roundedBorder)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .onChange(of: multiSearchText) { _, _ in
+                                    showSearchSuggestions = true
+                                }
                             Button {
-                                appliedSearch = searchText
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showSearchSuggestions.toggle()
+                                }
                             } label: {
-                                Text("Search")
+                                Image(systemName: showSearchSuggestions ? "chevron.up" : "chevron.down")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 6))
+                            }
+                            Button {
+                                appliedMultiSearch = multiSearchText
+                                showSearchSuggestions = false
+                                showSaveSearchField = false
+                            } label: {
+                                Text("Apply")
                                     .font(.caption.weight(.semibold))
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
                                     .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
                             }
-                            if !appliedSearch.isEmpty {
-                                Button { searchText = ""; appliedSearch = "" } label: {
-                                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                            if !appliedMultiSearch.isEmpty {
+                                Button {
+                                    multiSearchText = ""
+                                    appliedMultiSearch = ""
+                                    showSearchSuggestions = false
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+
+                        // Suggestions dropdown
+                        if showSearchSuggestions && !searchSuggestions.isEmpty {
+                            VStack(alignment: .leading, spacing: 0) {
+                                HStack {
+                                    Text("Select habits")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            showSearchSuggestions = false
+                                        }
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.top, 8)
+                                .padding(.bottom, 4)
+
+                                Divider()
+
+                                ScrollView {
+                                    VStack(spacing: 0) {
+                                        ForEach(searchSuggestions, id: \.self) { suggestion in
+                                            let isSelected = selectedSearchTerms.contains(suggestion)
+                                            Button(action: { toggleSuggestion(suggestion) }) {
+                                                HStack(spacing: 8) {
+                                                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                                        .font(.caption)
+                                                        .foregroundColor(isSelected ? .blue : Color(.systemGray3))
+                                                    Text(suggestion)
+                                                        .font(.caption)
+                                                        .foregroundColor(.primary)
+                                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                                }
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 9)
+                                                .background(isSelected ? Color.blue.opacity(0.06) : Color.clear)
+                                            }
+                                            .buttonStyle(PlainButtonStyle())
+                                            Divider()
+                                                .padding(.leading, 10)
+                                        }
+                                    }
+                                }
+                                .frame(maxHeight: 200)
+                            }
+                            .background(Color(.systemBackground))
+                            .cornerRadius(8)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.systemGray4), lineWidth: 0.5))
+                            .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
+                        }
+
+                        // Selected terms as chips
+                        let chips = selectedSearchTerms
+                        if !chips.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(chips, id: \.self) { term in
+                                        HStack(spacing: 3) {
+                                            Text(term)
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .foregroundColor(.white)
+                                                .padding(.leading, 8)
+                                                .padding(.vertical, 4)
+                                            Button(action: { toggleSuggestion(term) }) {
+                                                Image(systemName: "xmark")
+                                                    .font(.system(size: 9, weight: .semibold))
+                                                    .foregroundColor(.white.opacity(0.8))
+                                                    .padding(.trailing, 7)
+                                                    .padding(.vertical, 4)
+                                            }
+                                            .buttonStyle(PlainButtonStyle())
+                                        }
+                                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.indigo))
+                                    }
+                                }
+                                .padding(.horizontal, 1)
+                            }
+                        }
+
+                        if !appliedMultiSearch.isEmpty {
+                            HStack(spacing: 8) {
+                                if showSaveSearchField {
+                                    TextField("Name this search…", text: $saveSearchName)
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.caption)
+                                    Button {
+                                        let trimmed = saveSearchName.trimmingCharacters(in: .whitespaces)
+                                        if !trimmed.isEmpty {
+                                            savedSearches.append(SavedSearch(name: trimmed, terms: appliedMultiSearch))
+                                            persistSavedSearches()
+                                            saveSearchName = ""
+                                            showSaveSearchField = false
+                                        }
+                                    } label: {
+                                        Text("Save")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 5)
+                                            .background(Color.green, in: RoundedRectangle(cornerRadius: 7))
+                                    }
+                                    Button {
+                                        showSaveSearchField = false
+                                        saveSearchName = ""
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                } else {
+                                    Button {
+                                        showSaveSearchField = true
+                                    } label: {
+                                        Label("Save this search", systemImage: "bookmark")
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                                Spacer()
+                            }
+                        }
+
+                        if !savedSearches.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Saved Searches")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 6) {
+                                        ForEach(savedSearches) { search in
+                                            HStack(spacing: 0) {
+                                                Button(action: {
+                                                    multiSearchText = search.terms
+                                                    appliedMultiSearch = search.terms
+                                                    showSearchSuggestions = false
+                                                }) {
+                                                    Text(search.name)
+                                                        .font(.caption)
+                                                        .fontWeight(.medium)
+                                                        .foregroundColor(appliedMultiSearch == search.terms ? .white : .primary)
+                                                        .padding(.leading, 10)
+                                                        .padding(.vertical, 6)
+                                                }
+                                                .buttonStyle(PlainButtonStyle())
+
+                                                Button(action: {
+                                                    savedSearches.removeAll { $0.id == search.id }
+                                                    persistSavedSearches()
+                                                }) {
+                                                    Image(systemName: "xmark")
+                                                        .font(.system(size: 9))
+                                                        .foregroundColor(appliedMultiSearch == search.terms ? .white.opacity(0.8) : .secondary)
+                                                        .padding(.horizontal, 8)
+                                                        .padding(.vertical, 6)
+                                                }
+                                                .buttonStyle(PlainButtonStyle())
+                                            }
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .fill(appliedMultiSearch == search.terms ? Color.indigo : Color(.systemGray6))
+                                            )
+                                        }
+                                    }
+                                    .padding(.horizontal, 1)
                                 }
                             }
                         }
@@ -1328,9 +1692,10 @@ struct HabitOverviewView: View {
             toDate = Date()
             pendingToDate = Date()
         }
+        loadSavedSearches()
         recomputeAllStats()
     }
-    
+
     private func saveDateSettings() {
         if let settings = habitSettings {
             settings.updateFromDate(fromDate, context: modelContext)
@@ -1342,6 +1707,153 @@ struct HabitOverviewView: View {
         }
     }
     
+    // MARK: - Time Chart Data
+
+    private var timeChartEntries: [TimeChartEntry] {
+        var spentByTitle: [String: Double] = [:]
+        var elapsedByTitle: [String: Double] = [:]
+
+        for task in tasks {
+            guard let taskDate = task.date,
+                  taskDate >= fromDate && taskDate <= toDate else { continue }
+
+            let allocated = task.allocatedTimeInMinutes
+            let effectiveSpent: Double
+            let effectiveElapsed: Double
+
+            if let ts = task.timeSpent {
+                // Recorded time spent: green = ts, red = remaining allocated
+                effectiveSpent = ts
+                effectiveElapsed = max(allocated, ts)
+            } else if task.completed && allocated > 0 {
+                // Completed, no time spent → full green
+                effectiveSpent = allocated
+                effectiveElapsed = allocated
+            } else if !task.completed && allocated > 0 {
+                // Not completed, no time spent → full red (missed)
+                effectiveSpent = 0
+                effectiveElapsed = allocated
+            } else {
+                continue
+            }
+
+            guard effectiveElapsed > 0 || effectiveSpent > 0 else { continue }
+
+            spentByTitle[task.title, default: 0] += effectiveSpent
+            elapsedByTitle[task.title, default: 0] += effectiveElapsed
+        }
+
+        let searchTerms = appliedMultiSearch
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        var entries: [TimeChartEntry] = spentByTitle.keys.compactMap { title in
+            let spent = spentByTitle[title] ?? 0
+            let elapsed = elapsedByTitle[title] ?? 0
+            guard spent > 0 || elapsed > 0 else { return nil }
+            if !searchTerms.isEmpty && !searchTerms.contains(where: { title.localizedCaseInsensitiveContains($0) }) {
+                return nil
+            }
+            return TimeChartEntry(label: title, spent: spent, remaining: max(0, elapsed - spent))
+        }
+
+        switch timeChartSortOrder {
+        case "desc": entries.sort {
+            let r0 = $0.elapsed > 0 ? $0.spent / $0.elapsed : 0
+            let r1 = $1.elapsed > 0 ? $1.spent / $1.elapsed : 0
+            return r0 < r1  // low ratio first → high ratio at top (High → Low)
+        }
+        case "asc": entries.sort {
+            let r0 = $0.elapsed > 0 ? $0.spent / $0.elapsed : 0
+            let r1 = $1.elapsed > 0 ? $1.spent / $1.elapsed : 0
+            return r0 > r1  // high ratio first → low ratio at top (Low → High)
+        }
+        default:     entries.sort { $0.label < $1.label }
+        }
+
+        return entries
+    }
+
+    private var timeChartSegments: [TimeChartSegment] {
+        timeChartEntries.flatMap { entry in
+            [
+                TimeChartSegment(label: entry.label, status: "Spent",     minutes: entry.spent),
+                TimeChartSegment(label: entry.label, status: "Remaining", minutes: entry.remaining)
+            ]
+        }
+    }
+
+    private func formatMinutes(_ minutes: Double) -> String {
+        let m = Int(minutes.rounded())
+        guard m > 0 else { return "0m" }
+        if m < 60 { return "\(m)m" }
+        let h = m / 60
+        let rem = m % 60
+        return rem == 0 ? "\(h)h" : "\(h)h \(rem)m"
+    }
+
+    // MARK: - Search Suggestion Helpers
+
+    private var selectedSearchTerms: [String] {
+        multiSearchText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var currentPartialTerm: String {
+        let text = multiSearchText
+        if text.hasSuffix(",") || text.hasSuffix(", ") { return "" }
+        return text.split(separator: ",").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? text.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var searchSuggestions: [String] {
+        let partial = currentPartialTerm
+        let candidates: [String]
+        if selectedView == "time" {
+            let titlesInRange = Set(tasks.compactMap { task -> String? in
+                guard let d = task.date, d >= fromDate && d <= toDate else { return nil }
+                return task.title
+            })
+            candidates = titlesInRange.sorted()
+        } else {
+            candidates = cachedStats.keys.sorted()
+        }
+        return candidates.filter { name in
+            partial.isEmpty || name.localizedCaseInsensitiveContains(partial)
+        }
+    }
+
+    private func toggleSuggestion(_ name: String) {
+        let partial = currentPartialTerm
+        var terms = multiSearchText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if let idx = terms.firstIndex(of: name) {
+            terms.remove(at: idx)
+        } else {
+            // Replace the partial term (what was being typed) with the selected full name
+            if !partial.isEmpty && partial != name {
+                terms.removeAll { $0 == partial }
+            }
+            terms.append(name)
+        }
+        multiSearchText = terms.isEmpty ? "" : terms.joined(separator: ", ") + ", "
+    }
+
+    private func loadSavedSearches() {
+        guard let data = UserDefaults.standard.data(forKey: "habitSavedSearches"),
+              let decoded = try? JSONDecoder().decode([SavedSearch].self, from: data) else { return }
+        savedSearches = decoded
+    }
+
+    private func persistSavedSearches() {
+        guard let encoded = try? JSONEncoder().encode(savedSearches) else { return }
+        UserDefaults.standard.set(encoded, forKey: "habitSavedSearches")
+    }
+
     // MARK: - Filter Helper Methods
     
     private func getAvailableRepeatValues() -> [Int] {
@@ -1367,7 +1879,7 @@ struct HabitOverviewView: View {
     }
     
     private func hasActiveFilters() -> Bool {
-        return selectedRepeatFilter != nil || !searchText.isEmpty || !selectedTagsFilter.isEmpty || percentageFilter != "all"
+        return selectedRepeatFilter != nil || !appliedMultiSearch.isEmpty || !selectedTagsFilter.isEmpty || percentageFilter != "all"
     }
     
     private func getAvailableHabitTags() -> [String] { cachedHabitTags }
@@ -1381,8 +1893,8 @@ struct HabitOverviewView: View {
             filters.append(getRepeatDisplayText(repeatFilter))
         }
         
-        if !searchText.isEmpty {
-            filters.append("Search: \(searchText)")
+        if !appliedMultiSearch.isEmpty {
+            filters.append("Search: \(appliedMultiSearch)")
         }
 
         if percentageFilter != "all" {
@@ -1469,6 +1981,33 @@ struct HabitOverviewView: View {
             showShareSheet = true
         }
     }
+}
+
+struct SavedSearch: Codable, Identifiable {
+    let id: UUID
+    var name: String
+    var terms: String
+
+    init(name: String, terms: String) {
+        self.id = UUID()
+        self.name = name
+        self.terms = terms
+    }
+}
+
+struct TimeChartEntry: Identifiable {
+    let id = UUID()
+    let label: String
+    let spent: Double     // green (minutes)
+    let remaining: Double // red = max(0, elapsed - spent) (minutes)
+    var elapsed: Double { spent + remaining }
+}
+
+struct TimeChartSegment: Identifiable {
+    let id = UUID()
+    let label: String
+    let status: String   // "Spent" or "Remaining"
+    let minutes: Double
 }
 
 struct HabitOverviewBarEntry: Identifiable {

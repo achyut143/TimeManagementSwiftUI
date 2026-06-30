@@ -6632,14 +6632,45 @@ struct AutoScheduleSheet: View {
 
     private enum Field { case startTime, duration }
 
+    // Timed before 4 PM → untimed → timed 4 PM and after (mirrors TaskTableView ordering)
+    private enum AutoTimeSlot: Int {
+        case morning = 0    // timed, starts before 12:00
+        case afternoon = 1  // timed, starts 12:00–15:59
+        case untimed = 2
+        case evening = 3    // timed, starts 16:00+
+    }
+
+    private func autoStartMinutes(_ time: String) -> Int? {
+        let parts = time.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return parts[0] * 60 + parts[1]
+    }
+
+    private func autoTimeSlot(_ task: Task) -> AutoTimeSlot {
+        guard !task.startTime.isEmpty || !task.endTime.isEmpty else { return .untimed }
+        guard let minutes = autoStartMinutes(task.startTime) else { return .untimed }
+        if minutes < 12 * 60 { return .morning }
+        if minutes < 16 * 60 { return .afternoon }
+        return .evening
+    }
+
+    private func autoTaskOrder(_ lhs: Task, _ rhs: Task) -> Bool {
+        let ls = autoTimeSlot(lhs), rs = autoTimeSlot(rhs)
+        if ls != rs { return ls.rawValue < rs.rawValue }
+        guard ls != .untimed else { return false }
+        return (autoStartMinutes(lhs.startTime) ?? 0) < (autoStartMinutes(rhs.startTime) ?? 0)
+    }
+
     private var unattendedTasks: [Task] {
         let cal = Calendar.current
         let start = cal.startOfDay(for: selectedDate)
         let end   = cal.date(byAdding: .day, value: 1, to: start)!
-        return allTasks.filter { t in
-            guard let d = t.date else { return false }
-            return d >= start && d < end && !t.completed && !t.notCompleted
-        }
+        return allTasks
+            .filter { t in
+                guard let d = t.date else { return false }
+                return d >= start && d < end && !t.completed && !t.notCompleted
+            }
+            .sorted(by: autoTaskOrder)
     }
 
     private var selectedTasks: [Task] {
@@ -7169,18 +7200,21 @@ struct TaskChartsView: View {
     /// Chart 1 data: same-named tasks combined into one row, in first-appearance order.
     private var byTaskRows: [ChartRow] {
         var order: [String] = []
+        var displayName: [String: String] = [:]
         var allocated: [String: Int] = [:]
         var actual: [String: Int] = [:]
         for item in instances {
-            if allocated[item.name] == nil {
-                order.append(item.name)
-                allocated[item.name] = 0
-                actual[item.name] = 0
+            let key = item.name.lowercased()
+            if allocated[key] == nil {
+                order.append(key)
+                displayName[key] = item.name
+                allocated[key] = 0
+                actual[key] = 0
             }
-            allocated[item.name, default: 0] += item.duration
-            actual[item.name, default: 0] += item.effectiveActual
+            allocated[key, default: 0] += item.duration
+            actual[key, default: 0] += item.effectiveActual
         }
-        return order.map { ChartRow(label: $0, allocated: allocated[$0] ?? 0, actual: actual[$0] ?? 0) }
+        return order.map { ChartRow(label: displayName[$0] ?? $0, allocated: allocated[$0] ?? 0, actual: actual[$0] ?? 0) }
     }
 
     /// Chart 2 data: every occurrence kept separate, in chronological order, labeled with its time.
@@ -7376,13 +7410,10 @@ struct TaskChartsView: View {
                     AxisMarks { value in
                         AxisGridLine()
                         AxisTick()
-                        AxisValueLabel {
+                        AxisValueLabel(orientation: .vertical) {
                             if let label = value.as(String.self) {
                                 Text(label)
                                     .font(.caption2)
-                                    .fixedSize()
-                                    .rotationEffect(.degrees(-90))
-                                    .offset(y: 10)
                             }
                         }
                     }
@@ -7391,8 +7422,7 @@ struct TaskChartsView: View {
                     AxisMarks(position: .leading)
                 }
                 .chartLegend(position: .bottom)
-                .frame(width: max(360, CGFloat(rows.count) * 70), height: 320)
-                .padding(.bottom, 60)
+                .frame(width: max(360, CGFloat(rows.count) * 70), height: 360)
                 .padding(.horizontal)
             }
         }

@@ -13,12 +13,14 @@ struct PointsDashboardView: View {
     @State private var selectedEventDay: EventDay?
     
     var body: some View {
-        VStack(spacing: 16) {
-            headerView
-            dateFilters
-            pointsCalendar
+        ScrollView {
+            VStack(spacing: 16) {
+                headerView
+                dateFilters
+                pointsCalendar
+            }
         }
-        .navigationTitle("Points Dashboard")
+        .navigationTitle("Self-Efficacy Dashboard")
         .sheet(isPresented: $showEventDetail) {
             if let selectedDate = selectedEventDate {
                 EventDetailView(date: selectedDate, eventDay: selectedEventDay)
@@ -28,7 +30,7 @@ struct PointsDashboardView: View {
     
     private var headerView: some View {
         HStack {
-            Text("Points Dashboard")
+            Text("Self-Efficacy Dashboard")
                 .font(.title2)
                 .fontWeight(.semibold)
             Spacer()
