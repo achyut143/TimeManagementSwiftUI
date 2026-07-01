@@ -7,7 +7,7 @@ struct RestraintInstanceRow: Identifiable {
     var windowHour: Int
     var windowMinute: Int
     var record: RestraintInstance?
-    var isPassed: Bool { record?.isPassed ?? true }
+    var status: String { record?.status ?? "pending" }
 }
 
 struct RestraintInstancesView: View {
@@ -56,9 +56,10 @@ struct RestraintInstancesView: View {
 
     private var summaryText: String {
         let rows = generatedRows
-        let passed = rows.filter { $0.isPassed }.count
-        let failed = rows.count - passed
-        return "\(rows.count) total · \(passed) pass · \(failed) fail"
+        let passed  = rows.filter { $0.status == "pass" }.count
+        let failed  = rows.filter { $0.status == "fail" }.count
+        let pending = rows.filter { $0.status == "pending" }.count
+        return "\(rows.count) total · \(passed) pass · \(failed) fail · \(pending) pending"
     }
 
     @ViewBuilder
@@ -152,13 +153,13 @@ private struct InstanceRowCell: View {
     }
 
     private var passFailBadge: some View {
-        Text(row.isPassed ? "Pass" : "Fail")
+        Text(row.status == "pass" ? "Pass" : row.status == "fail" ? "Fail" : "Pending")
             .font(.caption)
             .fontWeight(.semibold)
-            .foregroundColor(row.isPassed ? .green : .red)
+            .foregroundColor(row.status == "pass" ? .green : row.status == "fail" ? .red : .orange)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background((row.isPassed ? Color.green : Color.red).opacity(0.12))
+            .background((row.status == "pass" ? Color.green : row.status == "fail" ? Color.red : Color.orange).opacity(0.12))
             .clipShape(Capsule())
     }
 
@@ -191,7 +192,7 @@ struct LogInstanceView: View {
     let restraint: Restraint
     let row: RestraintInstanceRow
 
-    @State private var isPassed: Bool = true
+    @State private var status: String = "pending"
     @State private var awardedUsed: String = ""
     @State private var overusedAmount: String = ""
     @State private var notes: String = ""
@@ -217,10 +218,13 @@ struct LogInstanceView: View {
                     .font(.subheadline)
                 }
 
-                Section {
-                    Toggle("Passed", isOn: $isPassed)
-                } footer: {
-                    Text("Defaults to Pass unless you mark it Failed.")
+                Section("Status") {
+                    Picker("Status", selection: $status) {
+                        Text("Pending").tag("pending")
+                        Text("Pass").tag("pass")
+                        Text("Fail").tag("fail")
+                    }
+                    .pickerStyle(.segmented)
                 }
 
                 Section {
@@ -267,7 +271,7 @@ struct LogInstanceView: View {
 
     private func loadExisting() {
         guard let rec = row.record else { return }
-        isPassed = rec.isPassed
+        status = rec.status
         awardedUsed = rec.awardedUsed > 0 ? fmt(rec.awardedUsed) : ""
         overusedAmount = rec.overusedAmount > 0 ? fmt(rec.overusedAmount) : ""
         notes = rec.notes
@@ -290,7 +294,7 @@ struct LogInstanceView: View {
             )
             modelContext.insert(rec)
         }
-        rec.isPassed = isPassed
+        rec.status = status
         rec.awardedUsed = Double(awardedUsed) ?? 0
         rec.overusedAmount = Double(overusedAmount) ?? 0
         rec.notes = notes

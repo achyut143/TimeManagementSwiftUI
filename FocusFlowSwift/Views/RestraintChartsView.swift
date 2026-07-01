@@ -30,15 +30,16 @@ struct RestraintChartsView: View {
     struct PassFailItem: Identifiable {
         var id = UUID()
         var name: String
-        var status: String   // "Pass" or "Fail"
+        var status: String   // "Pass", "Fail", or "Pending"
         var count: Int
     }
 
     struct UsageItem: Identifiable {
         var id = UUID()
         var name: String
-        var kind: String     // "Awarded" or "Overused"
+        var kind: String     // "Used" or "Awarded"
         var amount: Double
+        var unit: String
     }
 
     private func instances(for r: Restraint) -> [RestraintInstance] {
@@ -54,11 +55,13 @@ struct RestraintChartsView: View {
     private var passFailItems: [PassFailItem] {
         filtered.flatMap { r -> [PassFailItem] in
             let recs = instances(for: r)
-            let passed = recs.filter { $0.isPassed }.count
-            let failed = recs.filter { !$0.isPassed }.count
+            let passed  = recs.filter { $0.status == "pass" }.count
+            let failed  = recs.filter { $0.status == "fail" }.count
+            let pending = recs.filter { $0.status == "pending" }.count
             return [
-                PassFailItem(name: r.name, status: "Pass", count: passed),
-                PassFailItem(name: r.name, status: "Fail", count: failed)
+                PassFailItem(name: r.name, status: "Pass",    count: passed),
+                PassFailItem(name: r.name, status: "Fail",    count: failed),
+                PassFailItem(name: r.name, status: "Pending", count: pending)
             ]
         }
     }
@@ -66,11 +69,15 @@ struct RestraintChartsView: View {
     private var usageItems: [UsageItem] {
         filtered.flatMap { r -> [UsageItem] in
             let recs = instances(for: r)
-            let awarded = recs.reduce(0.0) { $0 + $1.awardedUsed }
-            let overused = recs.reduce(0.0) { $0 + $1.overusedAmount }
+            let isDuration = r.effectiveLimitType == .duration
+            let unit = isDuration ? "min" : r.quantityUnit
+            let awarded: Double = isDuration
+                ? Double(r.awardedMinutes) * Double(recs.count)
+                : r.quantityLimit * Double(recs.count)
+            let used = recs.reduce(0.0) { $0 + $1.awardedUsed + $1.overusedAmount }
             return [
-                UsageItem(name: r.name, kind: "Awarded", amount: awarded),
-                UsageItem(name: r.name, kind: "Overused", amount: overused)
+                UsageItem(name: r.name, kind: "Awarded", amount: awarded, unit: unit),
+                UsageItem(name: r.name, kind: "Used", amount: used, unit: unit)
             ]
         }
     }
@@ -93,7 +100,7 @@ struct RestraintChartsView: View {
             Divider()
 
             Picker("Chart", selection: $selectedTab) {
-                Text("Pass / Fail").tag(0)
+                Text("Pass / Fail / Pending").tag(0)
                 Text("Usage").tag(1)
             }
             .pickerStyle(.segmented)
@@ -135,13 +142,13 @@ struct RestraintChartsView: View {
                         }
                     }
                 }
-                .chartForegroundStyleScale(["Pass": Color.green, "Fail": Color.red])
+                .chartForegroundStyleScale(["Pass": Color.green, "Fail": Color.red, "Pending": Color.orange])
                 .chartXScale(domain: 0...(maxStack + 1))
                 .chartXAxisLabel("Instances")
                 .frame(height: barHeight)
             }
         } label: {
-            Label("Pass / Fail", systemImage: "checkmark.circle")
+            Label("Pass / Fail / Pending", systemImage: "checkmark.circle")
                 .font(.headline)
         }
     }
@@ -149,33 +156,34 @@ struct RestraintChartsView: View {
     @ViewBuilder
     private var chartB: some View {
         let items = usageItems
-        let maxStack = Dictionary(grouping: items, by: \.name)
-            .values.map { $0.reduce(0.0) { $0 + $1.amount } }.max() ?? 0.0
+        let maxVal = items.map(\.amount).max() ?? 0.0
         GroupBox {
-            if filtered.isEmpty || maxStack == 0 {
+            if filtered.isEmpty || maxVal == 0 {
                 emptyLabel("No usage logged yet")
             } else {
                 Chart(items) { item in
                     BarMark(
                         x: .value("Amount", item.amount),
-                        y: .value("Restraint", item.name)
+                        y: .value("Restraint", item.name),
+                        width: .fixed(14)
                     )
+                    .position(by: .value("Type", item.kind))
                     .foregroundStyle(by: .value("Type", item.kind))
-                    .annotation(position: .overlay) {
+                    .annotation(position: .trailing, spacing: 4) {
                         if item.amount > 0 {
-                            let label = item.amount == item.amount.rounded()
+                            let num = item.amount == item.amount.rounded()
                                 ? "\(Int(item.amount))"
                                 : String(format: "%.1f", item.amount)
-                            Text(label)
-                                .font(.caption2).fontWeight(.bold)
-                                .foregroundColor(.white)
+                            Text("\(num) \(item.unit)")
+                                .font(.caption2).fontWeight(.semibold)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
-                .chartForegroundStyleScale(["Awarded": Color.blue, "Overused": Color.orange])
-                .chartXScale(domain: 0...(maxStack * 1.2 + 1))
-                .chartXAxisLabel("Amount")
-                .frame(height: barHeight)
+                .chartForegroundStyleScale(["Awarded": Color.green, "Used": Color.orange])
+                .chartXScale(domain: 0...(maxVal * 1.3 + 1))
+                .chartXAxisLabel("Quantities")
+                .frame(height: CGFloat(max(filtered.count, 1)) * 72 + 24)
             }
         } label: {
             Label("Used vs Awarded", systemImage: "chart.bar.fill")
