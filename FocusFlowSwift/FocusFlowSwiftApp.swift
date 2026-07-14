@@ -70,7 +70,7 @@ struct FocusFlowSwiftApp: App {
             AlertInstance.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self,
             HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self,
             Book.self, BookQuote.self, ScheduleTemplate.self, TaskOKR.self, TaskInsight.self,
-            Goal.self, DayBlock.self
+            Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self
         ]
         // Restraints live in a separate store so schema changes never touch existing data.
         let mainConfig = ModelConfiguration(schema: Schema(mainTypes))

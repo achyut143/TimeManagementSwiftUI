@@ -162,6 +162,7 @@ struct DailyNotesView: View {
     @State private var isFocusMode = false
     @AppStorage("display.widgetMode") private var widgetMode: String = "books"
     @State private var showRestraintList = false
+    @State private var showProjectList = false
     @State private var showSaveTemplate = false
     @State private var showTemplates = false
     @State private var showAutoGenSheet = false
@@ -345,16 +346,17 @@ struct DailyNotesView: View {
                             .tint(.secondary)
                         }
 
-                        // Widget selector: Books or Restraints
+                        // Widget selector: Books, Restraints, or Projects
                         Divider()
 
                         HStack(spacing: 8) {
                             Picker("", selection: $widgetMode) {
                                 Text("Books").tag("books")
                                 Text("Restraints").tag("restraints")
+                                Text("Projects").tag("projects")
                             }
                             .pickerStyle(.segmented)
-                            .frame(maxWidth: 180)
+                            .frame(maxWidth: 260)
                             Spacer()
                             if widgetMode == "books" {
                                 Button(action: { showBooksLibrary = true }) {
@@ -362,18 +364,27 @@ struct DailyNotesView: View {
                                         .font(.caption)
                                         .foregroundColor(.indigo)
                                 }
-                            } else {
+                            } else if widgetMode == "restraints" {
                                 Button(action: { showRestraintList = true }) {
                                     Text("Manage")
                                         .font(.caption)
+                                }
+                            } else {
+                                Button(action: { showProjectList = true }) {
+                                    Text("Manage")
+                                        .font(.caption)
+                                        .foregroundColor(.blue)
                                 }
                             }
                         }
 
                         if widgetMode == "books" {
                             BookQuoteDisplayView()
-                        } else {
+                        } else if widgetMode == "restraints" {
                             RestraintBarsView(isDark: false)
+                        } else {
+                            TimeInsightsView(range: .day(selectedDate))
+                                .frame(height: 260)
                         }
                     }
                 }
@@ -660,6 +671,11 @@ struct DailyNotesView: View {
             .sheet(isPresented: $showRestraintList) {
                 NavigationStack {
                     RestraintListView()
+                }
+            }
+            .sheet(isPresented: $showProjectList) {
+                NavigationStack {
+                    ProjectListView()
                 }
             }
             .sheet(isPresented: $showTemplates) {
@@ -5522,11 +5538,40 @@ struct FocusModeView: View {
     @State private var showAdjustOptionsFocus = false
     @State private var showClearDistractionsConfirm = false
     @AppStorage("focusSidebar.showActiveOnly") private var showActiveOnly: Bool = false
+    @State private var showProjectListFocus = false
+    // "From" persists across sessions; "To" always resets to today.
+    @AppStorage("focusWidget.projectFromDateInterval") private var projectFromDateInterval: Double =
+        DateRange.currentWeek().start.timeIntervalSince1970
+
+    private var projectRange: DateRange {
+        let from = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: projectFromDateInterval))
+        let today = Calendar.current.startOfDay(for: Date())
+        return DateRange(start: min(from, today), end: today)
+    }
+
+    private var projectFromDateBinding: Binding<Date> {
+        Binding(
+            get: { Date(timeIntervalSince1970: projectFromDateInterval) },
+            set: { projectFromDateInterval = Calendar.current.startOfDay(for: $0).timeIntervalSince1970 }
+        )
+    }
 
     private var timeRemainingFormatted: String {
         let minutes = Int(timeRemaining) / 60
         let seconds = Int(timeRemaining) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    @ViewBuilder
+    private func widgetTabButton(mode: String, icon: String) -> some View {
+        let isActive = widgetMode == mode
+        Button(action: { withAnimation { widgetMode = mode } }) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundColor(isActive ? .cyan : .cyan.opacity(0.35))
+                .padding(6)
+                .background(Capsule().fill(Color.white.opacity(isActive ? 0.16 : 0.08)))
+        }
     }
 
     private func formatWaitCountUpFocus(_ seconds: Int) -> String {
@@ -5901,24 +5946,41 @@ struct FocusModeView: View {
                     .padding(.bottom, 28)
                 }
 
-                // Widget toggle (Books ↔ Restraints)
-                HStack {
+                // Widget tabs (Books | Restraints | Projects) — direct access, no cycling
+                HStack(spacing: 8) {
                     Spacer()
-                    Button(action: {
-                        withAnimation { widgetMode = widgetMode == "books" ? "restraints" : "books" }
-                    }) {
-                        Image(systemName: widgetMode == "books" ? "books.vertical" : "hand.raised.fill")
-                            .font(.caption2)
-                            .foregroundColor(.cyan.opacity(0.5))
-                            .padding(6)
-                            .background(Capsule().fill(Color.white.opacity(0.08)))
-                    }
+                    widgetTabButton(mode: "books", icon: "books.vertical")
+                    widgetTabButton(mode: "restraints", icon: "hand.raised.fill")
+                    widgetTabButton(mode: "projects", icon: "folder.fill")
                 }
                 .padding(.trailing, 28)
 
-                // Large quote or Restraints bars
+                if widgetMode == "projects" {
+                    HStack(spacing: 8) {
+                        Spacer()
+                        Text("From")
+                            .font(.caption2)
+                            .foregroundColor(.cyan.opacity(0.5))
+                        DatePicker("", selection: projectFromDateBinding, in: ...Date(), displayedComponents: .date)
+                            .labelsHidden()
+                            .colorScheme(.dark)
+                        Button(action: { showProjectListFocus = true }) {
+                            Text("Manage")
+                                .font(.caption2)
+                                .foregroundColor(.cyan.opacity(0.7))
+                        }
+                    }
+                    .padding(.trailing, 28)
+                    .padding(.top, 4)
+                }
+
+                // Large quote, Restraints bars, or Project time insights
                 if widgetMode == "restraints" {
                     RestraintBarsView(isDark: true)
+                        .padding(.horizontal, 32)
+                } else if widgetMode == "projects" {
+                    TimeInsightsView(range: projectRange)
+                        .frame(height: 300)
                         .padding(.horizontal, 32)
                 } else if quotesVisible && quotePool.isEmpty {
                     VStack(spacing: 16) {
@@ -6019,6 +6081,11 @@ struct FocusModeView: View {
         .sheet(isPresented: $showSwapSheetFocus) {
             SwapTasksSheet(defaultA: focusSwapDefaults.0, defaultB: focusSwapDefaults.1) { a, b in
                 return onSwapTasks(a, b)
+            }
+        }
+        .sheet(isPresented: $showProjectListFocus) {
+            NavigationStack {
+                ProjectListView()
             }
         }
         .confirmationDialog("Cancel Current Task", isPresented: $showCancelMenuFocus, titleVisibility: .visible) {
