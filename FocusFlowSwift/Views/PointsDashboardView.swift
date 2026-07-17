@@ -39,12 +39,15 @@ struct PointsDashboardView: View {
     }
     
     private var dateFilters: some View {
-        HStack {
-            DatePicker("From", selection: $fromDate, displayedComponents: .date)
-                .datePickerStyle(.compact)
-            
-            DatePicker("To", selection: $toDate, displayedComponents: .date)
-                .datePickerStyle(.compact)
+        VStack(spacing: 4) {
+            DateRangeShiftControl(start: $fromDate, end: $toDate)
+            HStack {
+                DatePicker("From", selection: $fromDate, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+
+                DatePicker("To", selection: $toDate, displayedComponents: .date)
+                    .datePickerStyle(.compact)
+            }
         }
         .padding(.horizontal)
     }

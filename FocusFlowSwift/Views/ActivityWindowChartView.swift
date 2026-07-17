@@ -300,6 +300,7 @@ struct ActivityWindowChartView: View {
                 
                 if showDatePicker {
                     VStack(spacing: 12) {
+                        DateRangeShiftControl(start: $startDate, end: $endDate)
                         DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
                             .onChange(of: startDate) { _, _ in
                                 saveStartDate()

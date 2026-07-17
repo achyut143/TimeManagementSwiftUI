@@ -116,6 +116,7 @@ struct TagAnalyticsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Date Range")
                 .font(.headline)
+            DateRangeShiftControl(start: $startDate, end: $endDate)
             HStack {
                 DatePicker("From", selection: $startDate, displayedComponents: .date)
                     .datePickerStyle(.compact)

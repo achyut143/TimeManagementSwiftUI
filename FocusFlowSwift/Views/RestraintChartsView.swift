@@ -86,6 +86,8 @@ struct RestraintChartsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            DateRangeShiftControl(start: startDateBinding, end: $endDate)
+                .padding(.horizontal)
             HStack {
                 DatePicker("", selection: startDateBinding, in: ...endDate, displayedComponents: .date)
                     .labelsHidden()

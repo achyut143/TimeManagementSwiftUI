@@ -12,19 +12,29 @@ private struct InsightSlice: Identifiable {
 struct TimeInsightsView: View {
     @Query(sort: \Project.createdAt, order: .reverse) private var projects: [Project]
     let range: DateRange
+    var isDark: Bool = false
 
+    // Local shift override so the < > navigator can move the window without a live
+    // binding back to the caller; resets whenever the caller passes a new `range`.
+    @State private var overrideRange: DateRange?
     @State private var selectedCategory: ActivityCategory?
 
     private static let palette: [Color] = [.blue, .green, .purple, .orange, .pink, .teal, .indigo, .cyan]
 
+    private var effectiveRange: DateRange { overrideRange ?? range }
+
+    private var rangeBinding: Binding<DateRange> {
+        Binding(get: { effectiveRange }, set: { overrideRange = $0 })
+    }
+
     private var availableMinutes: Double {
-        range.elapsedMinutes()
+        effectiveRange.elapsedMinutes()
     }
 
     private var slices: [InsightSlice] {
         guard availableMinutes > 0 else { return [] }
         var result = projects.map { project -> InsightSlice in
-            let minutes = project.totalMinutes(from: range.start, to: range.end, category: selectedCategory)
+            let minutes = project.totalMinutes(from: effectiveRange.start, to: effectiveRange.end, category: selectedCategory)
             return InsightSlice(name: project.name, minutes: minutes, percent: minutes / availableMinutes * 100)
         }
         let loggedMinutes = result.reduce(0.0) { $0 + $1.minutes }
@@ -49,21 +59,36 @@ struct TimeInsightsView: View {
     private var barHeight: CGFloat { CGFloat(max(slices.count, 1)) * 44 + 24 }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                chartSection
-                if !slices.isEmpty {
-                    breakdownSection
+        Group {
+            if isDark {
+                // No inner ScrollView / navigationTitle here: this mode is embedded in a
+                // fixed (non-scrolling) Focus View layout, so it must size to its natural
+                // content height like its sibling widgets, not scroll internally.
+                content
+            } else {
+                ScrollView {
+                    content
+                        .padding()
                 }
+                .navigationTitle("Time Insights")
             }
-            .padding()
         }
-        .navigationTitle("Time Insights")
+        .onChange(of: range) { _, _ in overrideRange = nil }
+    }
+
+    private var content: some View {
+        VStack(spacing: 16) {
+            DateRangeNavigatorView(range: rangeBinding, isDark: isDark)
+            chartSection
+            if !slices.isEmpty {
+                breakdownSection
+            }
+        }
     }
 
     @ViewBuilder
     private var chartSection: some View {
-        GroupBox {
+        cardContainer(title: "Time Breakdown", icon: "chart.bar.fill") {
             categoryFilterRow
             if slices.isEmpty {
                 emptyLabel("No projects yet")
@@ -83,9 +108,28 @@ struct TimeInsightsView: View {
                 .chartXAxisLabel("Hours")
                 .frame(height: barHeight)
             }
-        } label: {
-            Label("Time Breakdown", systemImage: "chart.bar.fill")
-                .font(.headline)
+        }
+    }
+
+    // Mirrors GroupBox's look but recolors for the Focus View's dark background when isDark.
+    @ViewBuilder
+    private func cardContainer<Content: View>(title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
+        if isDark {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(title, systemImage: icon)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                content()
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.08)))
+        } else {
+            GroupBox {
+                content()
+            } label: {
+                Label(title, systemImage: icon)
+                    .font(.headline)
+            }
         }
     }
 
@@ -112,9 +156,9 @@ struct TimeInsightsView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
-                    Capsule().fill(cat?.color.opacity(isSelected ? 0.85 : 0.18) ?? Color.secondary.opacity(isSelected ? 0.3 : 0.12))
+                    Capsule().fill(cat?.color.opacity(isSelected ? 0.85 : 0.18) ?? (isDark ? Color.white.opacity(isSelected ? 0.3 : 0.12) : Color.secondary.opacity(isSelected ? 0.3 : 0.12)))
                 )
-                .foregroundColor(cat == nil ? .primary : (isSelected ? .white : .primary))
+                .foregroundColor(cat == nil ? (isDark ? .white : .primary) : (isSelected ? .white : (isDark ? .white : .primary)))
         }
         .buttonStyle(.plain)
     }
@@ -130,15 +174,12 @@ struct TimeInsightsView: View {
 
     @ViewBuilder
     private var breakdownSection: some View {
-        GroupBox {
+        cardContainer(title: "Breakdown", icon: "list.bullet") {
             VStack(spacing: 8) {
                 ForEach(slices) { slice in
                     breakdownRow(for: slice)
                 }
             }
-        } label: {
-            Label("Breakdown", systemImage: "list.bullet")
-                .font(.headline)
         }
     }
 
@@ -150,12 +191,12 @@ struct TimeInsightsView: View {
                 .frame(width: 8, height: 8)
             Text(slice.name)
                 .fontWeight(slice.name == "Undocumented" ? .regular : .medium)
-                .foregroundColor(slice.name == "Undocumented" ? .secondary : .primary)
+                .foregroundColor(slice.name == "Undocumented" ? (isDark ? .white.opacity(0.5) : .secondary) : (isDark ? .white : .primary))
             Spacer()
             Text(DurationInput.string(from: slice.minutes))
-                .foregroundColor(.secondary)
+                .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
             Text(String(format: "%.0f%%", slice.percent))
-                .foregroundColor(.secondary)
+                .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
                 .frame(width: 48, alignment: .trailing)
         }
         .font(.subheadline)
@@ -163,7 +204,7 @@ struct TimeInsightsView: View {
 
     private func emptyLabel(_ text: String) -> some View {
         Text(text)
-            .font(.caption).foregroundColor(.secondary)
+            .font(.caption).foregroundColor(isDark ? .white.opacity(0.5) : .secondary)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 12)
     }

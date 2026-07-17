@@ -380,18 +380,24 @@ struct TaskTableView: View {
                 .tint(showTodayOnly ? .indigo : .gray)
             }
 
-            HStack {
-                DatePicker("From", selection: $pendingStartDate, displayedComponents: .date)
-                DatePicker("To", selection: $pendingEndDate, displayedComponents: .date)
-                Button {
+            VStack(spacing: 4) {
+                DateRangeShiftControl(start: $pendingStartDate, end: $pendingEndDate, onShift: {
                     startDate = pendingStartDate
                     endDate = pendingEndDate
-                } label: {
-                    Text("Apply")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                })
+                HStack {
+                    DatePicker("From", selection: $pendingStartDate, displayedComponents: .date)
+                    DatePicker("To", selection: $pendingEndDate, displayedComponents: .date)
+                    Button {
+                        startDate = pendingStartDate
+                        endDate = pendingEndDate
+                    } label: {
+                        Text("Apply")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+                    }
                 }
             }
             .disabled(showTodayOnly)

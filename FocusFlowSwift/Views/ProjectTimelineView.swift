@@ -39,11 +39,21 @@ struct ProjectTimelineView: View {
     @Query(sort: \Project.createdAt, order: .reverse) private var projects: [Project]
     let range: DateRange
 
+    // Local shift override so the < > navigator can move the window without a live
+    // binding back to the caller; resets whenever the caller passes a new `range`.
+    @State private var overrideRange: DateRange?
+
+    private var effectiveRange: DateRange { overrideRange ?? range }
+
+    private var rangeBinding: Binding<DateRange> {
+        Binding(get: { effectiveRange }, set: { overrideRange = $0 })
+    }
+
     private var dayGroups: [TimelineDayGroup] {
         var byDate: [Date: [TimelineEntry]] = [:]
 
         for project in projects {
-            for activity in project.activities where activity.date >= range.start && activity.date <= range.end {
+            for activity in project.activities where activity.date >= effectiveRange.start && activity.date <= effectiveRange.end {
                 let entry = TimelineEntry(
                     projectName: project.name,
                     activityName: activity.name,
@@ -54,7 +64,7 @@ struct ProjectTimelineView: View {
                 )
                 byDate[activity.date, default: []].append(entry)
             }
-            for direct in project.directTimeEntries where direct.date >= range.start && direct.date <= range.end {
+            for direct in project.directTimeEntries where direct.date >= effectiveRange.start && direct.date <= effectiveRange.end {
                 let entry = TimelineEntry(
                     projectName: project.name,
                     activityName: "Project time",
@@ -73,6 +83,9 @@ struct ProjectTimelineView: View {
 
     var body: some View {
         List {
+            Section {
+                DateRangeNavigatorView(range: rangeBinding)
+            }
             if dayGroups.isEmpty {
                 Section {
                     VStack(spacing: 12) {
@@ -103,6 +116,7 @@ struct ProjectTimelineView: View {
             }
         }
         .navigationTitle("Timeline")
+        .onChange(of: range) { _, _ in overrideRange = nil }
     }
 }
 
@@ -151,6 +165,11 @@ private struct UntimedListView: View {
         } else {
             List(day.untimedEntries) { entry in
                 HStack {
+                    if let category = entry.category {
+                        Circle()
+                            .fill(category.color)
+                            .frame(width: 10, height: 10)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.activityName)
                         Text(entry.projectName)
@@ -176,24 +195,24 @@ private struct DayTimelineView: View {
         timeline
     }
 
+    // Hour rows stack normally in a VStack so the container's real height always matches
+    // its rendered content (no reliance on a hand-computed total that can drift). Activity
+    // blocks are overlaid on top, positioned with .offset relative to that same top edge.
     private var timeline: some View {
-        let range = hourRange
-        let totalHeight = CGFloat(range.count) * 60 * pixelsPerMinute
-
-        return ZStack(alignment: .topLeading) {
-            ForEach(Array(range), id: \.self) { hour in
-                hourRow(hour, baseHour: range.lowerBound)
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                ForEach(Array(hourRange), id: \.self) { hour in
+                    hourRow(hour)
+                }
             }
             ForEach(day.timedEntries) { entry in
-                activityBlock(entry, baseHour: range.lowerBound)
+                activityBlock(entry, baseHour: hourRange.lowerBound)
             }
         }
-        .frame(height: totalHeight)
     }
 
-    private func hourRow(_ hour: Int, baseHour: Int) -> some View {
-        let y = CGFloat(hour - baseHour) * 60 * pixelsPerMinute
-        return HStack(alignment: .top, spacing: 8) {
+    private func hourRow(_ hour: Int) -> some View {
+        HStack(alignment: .top, spacing: 8) {
             Text(hourLabel(hour))
                 .font(.caption2)
                 .foregroundColor(.secondary)
@@ -202,7 +221,7 @@ private struct DayTimelineView: View {
                 .fill(Color.secondary.opacity(0.15))
                 .frame(height: 1)
         }
-        .offset(y: y)
+        .frame(height: 60 * pixelsPerMinute, alignment: .top)
     }
 
     @ViewBuilder

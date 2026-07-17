@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-struct DateRange {
+struct DateRange: Equatable {
     var start: Date
     var end: Date
 
@@ -48,6 +48,64 @@ struct DateRange {
         let sunday = cal.date(byAdding: .day, value: 6, to: monday) ?? today
         return DateRange(start: monday, end: sunday)
     }
+
+    // Moves the whole window forward/backward by its own length, so consecutive
+    // ranges tile back-to-back (e.g. a 7-day range shifts by 7 days).
+    func shifted(by direction: Int) -> DateRange {
+        let cal = Calendar.current
+        let offset = dayCount * direction
+        guard let newStart = cal.date(byAdding: .day, value: offset, to: start),
+              let newEnd = cal.date(byAdding: .day, value: offset, to: end) else { return self }
+        return DateRange(start: newStart, end: newEnd)
+    }
+}
+
+// Reusable "< range label >" control: tapping the arrows shifts the bound range
+// forward/backward by its own length (a week stays a week, a day stays a day, etc).
+struct DateRangeNavigatorView: View {
+    @Binding var range: DateRange
+    var isDark: Bool = false
+
+    var body: some View {
+        HStack {
+            Button {
+                range = range.shifted(by: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.headline)
+                    .foregroundColor(isDark ? .cyan : .accentColor)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text(rangeLabel)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(isDark ? .white : .primary)
+
+            Spacer()
+
+            Button {
+                range = range.shifted(by: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.headline)
+                    .foregroundColor(isDark ? .cyan : .accentColor)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var rangeLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy"
+        if Calendar.current.isDate(range.start, inSameDayAs: range.end) {
+            return formatter.string(from: range.start)
+        }
+        return "\(formatter.string(from: range.start)) – \(formatter.string(from: range.end))"
+    }
 }
 
 struct ProjectListView: View {
@@ -56,8 +114,6 @@ struct ProjectListView: View {
 
     @State private var useCustomRange = false
     @State private var range: DateRange = .currentWeek()
-    @State private var customStart: Date = DateRange.currentWeek().start
-    @State private var customEnd: Date = DateRange.currentWeek().end
 
     @State private var showCreate = false
     @State private var projectToEdit: Project?
@@ -67,23 +123,21 @@ struct ProjectListView: View {
     var body: some View {
         List {
             Section {
+                DateRangeNavigatorView(range: $range)
                 Toggle("Custom Range", isOn: $useCustomRange)
                     .onChange(of: useCustomRange) { _, newValue in
-                        if newValue { updateCustomRange() } else { range = .currentWeek() }
+                        if !newValue { range = .currentWeek() }
                     }
 
                 if useCustomRange {
-                    DatePicker("Start", selection: $customStart, displayedComponents: .date)
-                        .onChange(of: customStart) { _, _ in updateCustomRange() }
-                    DatePicker("End", selection: $customEnd, displayedComponents: .date)
-                        .onChange(of: customEnd) { _, _ in updateCustomRange() }
-                } else {
-                    HStack {
-                        Text("This Week")
-                        Spacer()
-                        Text(weekRangeLabel)
-                            .foregroundColor(.secondary)
-                    }
+                    DatePicker("Start", selection: Binding(
+                        get: { range.start },
+                        set: { range = DateRange(start: Calendar.current.startOfDay(for: $0), end: range.end) }
+                    ), displayedComponents: .date)
+                    DatePicker("End", selection: Binding(
+                        get: { range.end },
+                        set: { range = DateRange(start: range.start, end: Calendar.current.startOfDay(for: $0)) }
+                    ), displayedComponents: .date)
                 }
             }
 
@@ -173,15 +227,6 @@ struct ProjectListView: View {
         }
     }
 
-    private var weekRangeLabel: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return "\(formatter.string(from: range.start)) – \(formatter.string(from: range.end))"
-    }
-
-    private func updateCustomRange() {
-        range = DateRange(start: Calendar.current.startOfDay(for: customStart), end: Calendar.current.startOfDay(for: customEnd))
-    }
 }
 
 private struct ProjectRowView: View {

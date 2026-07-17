@@ -18,8 +18,8 @@ enum DurationInput {
             matched = true
         }
         if !matched, let bare = Double(trimmed) {
-            // Bare number with no unit is treated as hours (e.g. "2.5")
-            total = bare * 60
+            // Bare number with no unit is treated as minutes (e.g. "10" = 10m)
+            total = bare
             matched = true
         }
 

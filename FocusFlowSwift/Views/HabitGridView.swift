@@ -249,6 +249,13 @@ struct HabitGridView: View {
         Group {
             if showFilters {
                 VStack(spacing: 10) {
+                    DateRangeShiftControl(start: $pendingFromDate, end: $pendingToDate, onShift: {
+                        appliedFromDate = pendingFromDate
+                        appliedToDate = pendingToDate
+                        fromDate = pendingFromDate
+                        toDate = pendingToDate
+                        recomputeGrid()
+                    })
                     HStack {
                         Text("From").font(.caption).foregroundColor(.secondary).frame(width: 36, alignment: .leading)
                         DatePicker("", selection: $pendingFromDate, displayedComponents: .date)

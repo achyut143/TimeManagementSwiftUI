@@ -350,6 +350,8 @@ struct InsightsSection: View {
                     .datePickerStyle(.compact)
                     .labelsHidden()
             }
+
+            DateRangeShiftControl(start: $fromDate, end: $toDate)
         }
         .padding(.horizontal).padding(.vertical, 10)
         .background(Color(.systemGroupedBackground))

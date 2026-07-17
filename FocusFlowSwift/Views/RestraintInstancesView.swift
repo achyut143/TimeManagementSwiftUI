@@ -81,6 +81,7 @@ struct RestraintInstancesView: View {
     var body: some View {
         List {
             Section("Date Range") {
+                DateRangeShiftControl(start: $startDate, end: $endDate)
                 DatePicker("From", selection: $startDate, in: ...endDate, displayedComponents: .date)
                 DatePicker("To", selection: $endDate, in: startDate..., displayedComponents: .date)
             }

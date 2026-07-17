@@ -32,11 +32,12 @@ class ProjectActivity {
     var startTime: String?  // "HH:mm", nil = untimed (optional so existing rows without it stay valid)
     var endTime: String?    // "HH:mm", nil = untimed
     var categoryRaw: String?  // ActivityCategory.rawValue, nil = uncategorized (optional so existing rows stay valid)
+    var notes: String?  // optional so existing rows without it stay valid
 
     @Relationship(deleteRule: .cascade, inverse: \ProjectTimeEntry.activity)
     var timeEntries: [ProjectTimeEntry] = []
 
-    init(project: Project, name: String, date: Date, startTime: String? = nil, endTime: String? = nil, category: ActivityCategory? = nil) {
+    init(project: Project, name: String, date: Date, startTime: String? = nil, endTime: String? = nil, category: ActivityCategory? = nil, notes: String? = nil) {
         self.project = project
         self.name = name
         self.date = Calendar.current.startOfDay(for: date)
@@ -44,6 +45,7 @@ class ProjectActivity {
         self.startTime = startTime
         self.endTime = endTime
         self.categoryRaw = category?.rawValue
+        self.notes = notes
     }
 
     var category: ActivityCategory? {

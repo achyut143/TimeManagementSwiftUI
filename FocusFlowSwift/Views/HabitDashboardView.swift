@@ -169,6 +169,11 @@ struct HabitDashboardView: View {
     
     private var dateFilters: some View {
         VStack(spacing: 8) {
+            DateRangeShiftControl(start: $pendingFromDate, end: $pendingToDate, onShift: {
+                fromDate = pendingFromDate
+                toDate = pendingToDate
+                saveStartDate()
+            })
             DatePicker("Start Date", selection: $pendingFromDate, displayedComponents: .date)
                 .datePickerStyle(.compact)
             DatePicker("End Date", selection: $pendingToDate, displayedComponents: .date)

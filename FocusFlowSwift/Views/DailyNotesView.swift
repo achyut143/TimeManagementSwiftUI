@@ -5725,6 +5725,70 @@ struct FocusModeView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
+            GeometryReader { geo in
+                ScrollView {
+                    focusContent
+                        .frame(minHeight: geo.size.height)
+                }
+            }
+
+            // Sidebar overlay
+            if showSidebar {
+                sidebarPanel
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        .onAppear {
+            buildQuotePool()
+            startCycling()
+            clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                currentTime = Date()
+            }
+        }
+        .onDisappear {
+            stopCycling()
+            clockTimer?.invalidate()
+            clockTimer = nil
+        }
+        .onChange(of: activeBooks.count) { _, _ in
+            buildQuotePool()
+        }
+        .onChange(of: activeBooks.map { $0.id }) { _, _ in
+            buildQuotePool()
+        }
+        .sheet(isPresented: $showSwapSheetFocus) {
+            SwapTasksSheet(defaultA: focusSwapDefaults.0, defaultB: focusSwapDefaults.1) { a, b in
+                return onSwapTasks(a, b)
+            }
+        }
+        .sheet(isPresented: $showProjectListFocus) {
+            NavigationStack {
+                ProjectListView()
+            }
+        }
+        .confirmationDialog("Cancel Current Task", isPresented: $showCancelMenuFocus, titleVisibility: .visible) {
+            Button("Stop & Start Next") { onCancelTask() }
+            Button("Remove & Adjust Times") { onRemoveCurrentAdjust() }
+            Button("Just Remove") { onRemoveCurrentOnly() }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Add Adjust (5 min) — start from?", isPresented: $showAdjustOptionsFocus, titleVisibility: .visible) {
+            Button("Current Task") { onAdjust(false) }
+            Button("Last Completed Task") { onAdjust(true) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Recalculate Distractions", isPresented: $showClearDistractionsConfirm, titleVisibility: .visible) {
+            Button("Recalculate from Notes") {
+                onRecalculateDistractions()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rebuilds distraction counts and time-away from the /N ~Xm values saved in your notes.")
+        }
+    }
+
+    @ViewBuilder
+    private var focusContent: some View {
             VStack(spacing: 0) {
                 // Top bar
                 HStack {
@@ -5979,8 +6043,7 @@ struct FocusModeView: View {
                     RestraintBarsView(isDark: true)
                         .padding(.horizontal, 32)
                 } else if widgetMode == "projects" {
-                    TimeInsightsView(range: projectRange)
-                        .frame(height: 300)
+                    TimeInsightsView(range: projectRange, isDark: true)
                         .padding(.horizontal, 32)
                 } else if quotesVisible && quotePool.isEmpty {
                     VStack(spacing: 16) {
@@ -6053,60 +6116,6 @@ struct FocusModeView: View {
                     Color.clear.frame(height: 32)
                 }
             }
-
-            // Sidebar overlay
-            if showSidebar {
-                sidebarPanel
-                    .transition(.move(edge: .trailing))
-            }
-        }
-        .onAppear {
-            buildQuotePool()
-            startCycling()
-            clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-                currentTime = Date()
-            }
-        }
-        .onDisappear {
-            stopCycling()
-            clockTimer?.invalidate()
-            clockTimer = nil
-        }
-        .onChange(of: activeBooks.count) { _, _ in
-            buildQuotePool()
-        }
-        .onChange(of: activeBooks.map { $0.id }) { _, _ in
-            buildQuotePool()
-        }
-        .sheet(isPresented: $showSwapSheetFocus) {
-            SwapTasksSheet(defaultA: focusSwapDefaults.0, defaultB: focusSwapDefaults.1) { a, b in
-                return onSwapTasks(a, b)
-            }
-        }
-        .sheet(isPresented: $showProjectListFocus) {
-            NavigationStack {
-                ProjectListView()
-            }
-        }
-        .confirmationDialog("Cancel Current Task", isPresented: $showCancelMenuFocus, titleVisibility: .visible) {
-            Button("Stop & Start Next") { onCancelTask() }
-            Button("Remove & Adjust Times") { onRemoveCurrentAdjust() }
-            Button("Just Remove") { onRemoveCurrentOnly() }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Add Adjust (5 min) — start from?", isPresented: $showAdjustOptionsFocus, titleVisibility: .visible) {
-            Button("Current Task") { onAdjust(false) }
-            Button("Last Completed Task") { onAdjust(true) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Recalculate Distractions", isPresented: $showClearDistractionsConfirm, titleVisibility: .visible) {
-            Button("Recalculate from Notes") {
-                onRecalculateDistractions()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Rebuilds distraction counts and time-away from the /N ~Xm values saved in your notes.")
-        }
     }
 
     private var visibleEntries: [ScheduleEntry] {
