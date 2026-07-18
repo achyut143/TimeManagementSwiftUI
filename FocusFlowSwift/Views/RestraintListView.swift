@@ -64,6 +64,10 @@ struct RestraintListView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
+                    NavigationLink(destination: AllRestraintInstancesView()) {
+                        Image(systemName: "checklist")
+                            .foregroundColor(.indigo)
+                    }
                     NavigationLink(destination: RestraintChartsView()) {
                         Image(systemName: "chart.bar.fill")
                             .foregroundColor(.indigo)
@@ -92,6 +96,7 @@ struct RestraintListView: View {
 }
 
 private struct RestraintRowView: View {
+    @Environment(\.modelContext) private var modelContext
     let restraint: Restraint
 
     var body: some View {
@@ -100,6 +105,14 @@ private struct RestraintRowView: View {
                 Text(restraint.name)
                     .font(.headline)
                 Spacer()
+                Button {
+                    restraint.showInFocusWidget.toggle()
+                    try? modelContext.save()
+                } label: {
+                    Image(systemName: restraint.showInFocusWidget ? "eye.fill" : "eye.slash")
+                        .foregroundColor(restraint.showInFocusWidget ? .indigo : .secondary)
+                }
+                .buttonStyle(.plain)
                 limitBadge
             }
             Text(restraint.weekdayNames)

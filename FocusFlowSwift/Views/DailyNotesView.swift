@@ -160,7 +160,10 @@ struct DailyNotesView: View {
     @State private var reminderTimer: Timer?
     @State private var showBooksLibrary = false
     @State private var isFocusMode = false
-    @AppStorage("display.widgetMode") private var widgetMode: String = "books"
+    // Multiple widgets can be enabled at once (stacked, scrollable in Focus View).
+    @AppStorage("display.focusShowBooks") private var showBooksWidget: Bool = true
+    @AppStorage("display.focusShowRestraints") private var showRestraintsWidget: Bool = false
+    @AppStorage("display.focusShowProjects") private var showProjectsWidget: Bool = false
     @State private var showRestraintList = false
     @State private var showProjectList = false
     @State private var showSaveTemplate = false
@@ -346,43 +349,50 @@ struct DailyNotesView: View {
                             .tint(.secondary)
                         }
 
-                        // Widget selector: Books, Restraints, or Projects
+                        // Widget selector: Books, Restraints, Projects — any combination,
+                        // they stack (and scroll) in Focus View in this order.
                         Divider()
 
                         HStack(spacing: 8) {
-                            Picker("", selection: $widgetMode) {
-                                Text("Books").tag("books")
-                                Text("Restraints").tag("restraints")
-                                Text("Projects").tag("projects")
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 260)
+                            widgetPickerChip(label: "Books", isOn: $showBooksWidget)
+                            widgetPickerChip(label: "Restraints", isOn: $showRestraintsWidget)
+                            widgetPickerChip(label: "Projects", isOn: $showProjectsWidget)
                             Spacer()
-                            if widgetMode == "books" {
+                        }
+
+                        if showBooksWidget {
+                            HStack {
+                                Text("Books").font(.caption).foregroundColor(.secondary)
+                                Spacer()
                                 Button(action: { showBooksLibrary = true }) {
                                     Text("Manage")
                                         .font(.caption)
                                         .foregroundColor(.indigo)
                                 }
-                            } else if widgetMode == "restraints" {
+                            }
+                            BookQuoteDisplayView()
+                        }
+                        if showRestraintsWidget {
+                            HStack {
+                                Text("Restraints").font(.caption).foregroundColor(.secondary)
+                                Spacer()
                                 Button(action: { showRestraintList = true }) {
                                     Text("Manage")
                                         .font(.caption)
                                 }
-                            } else {
+                            }
+                            RestraintBarsView(isDark: false)
+                        }
+                        if showProjectsWidget {
+                            HStack {
+                                Text("Projects").font(.caption).foregroundColor(.secondary)
+                                Spacer()
                                 Button(action: { showProjectList = true }) {
                                     Text("Manage")
                                         .font(.caption)
                                         .foregroundColor(.blue)
                                 }
                             }
-                        }
-
-                        if widgetMode == "books" {
-                            BookQuoteDisplayView()
-                        } else if widgetMode == "restraints" {
-                            RestraintBarsView(isDark: false)
-                        } else {
                             TimeInsightsView(range: .day(selectedDate))
                                 .frame(height: 260)
                         }
@@ -688,8 +698,8 @@ struct DailyNotesView: View {
                     selectedDate: selectedDate,
                     allTasks: allTasksQuery,
                     duration: $autoGenDuration,
-                    onGenerate: { tasks, duration, startTimeStr in
-                        autoGenerateSchedule(tasks: tasks, minutesPerTask: duration, startTimeStr: startTimeStr)
+                    onGenerate: { tasks, durations, startTimeStr in
+                        autoGenerateSchedule(tasks: tasks, durationsPerTask: durations, startTimeStr: startTimeStr)
                     }
                 )
             }
@@ -813,6 +823,20 @@ struct DailyNotesView: View {
         }
     }
     
+    @ViewBuilder
+    private func widgetPickerChip(label: String, isOn: Binding<Bool>) -> some View {
+        Button(action: { isOn.wrappedValue.toggle() }) {
+            Text(label)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(isOn.wrappedValue ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12)))
+                .foregroundColor(isOn.wrappedValue ? .accentColor : .primary)
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
     private func toolbarButton(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -2263,16 +2287,22 @@ struct DailyNotesView: View {
         let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
         guard let timeRegex = try? NSRegularExpression(pattern: timePattern) else { return 0 }
         var result = 0
+        var bestStart = Int.min
         for i in (startIdx + 1)..<endIdx {
-            let t = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
-            if t.isEmpty { continue }
+            let raw = allLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty { continue }
+            // Struck-through (completed) tasks don't occupy a slot in the live timeline.
+            let t = (raw.hasPrefix("~~") && raw.hasSuffix("~~")) ? String(raw.dropFirst(2).dropLast(2)) : raw
+            if raw.hasPrefix("~~") { continue }
             guard let pIdx = t.firstIndex(of: ")"),
                   let num = Int(String(t[t.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)),
                   !t[t.startIndex..<pIdx].contains(" "), num > 0, num < 1000 else { continue }
             guard let m = timeRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
                   let sr = Range(m.range(at: 1), in: t),
                   let startMin = interceptParseMinutes(String(t[sr])) else { continue }
-            if startMin < targetMin { result = num }
+            // Keep the task with the latest start time that's still before the target —
+            // the true nearest preceding task, not merely the last one encountered in file order.
+            if startMin < targetMin && startMin > bestStart { result = num; bestStart = startMin }
         }
         return result
     }
@@ -2501,10 +2531,11 @@ struct DailyNotesView: View {
         }
     }
 
-    /// Generates a schedule block from the given tasks, `minutesPerTask` each, starting at
-    /// `startTimeStr` (e.g. "12:30 PM"). Falls back to current time if empty or unparseable.
+    /// Generates a schedule block from the given tasks, back-to-back using each task's entry in
+    /// `durationsPerTask` (parallel array, minutes), starting at `startTimeStr` (e.g. "12:30 PM").
+    /// Falls back to current time if empty or unparseable.
     /// Inserts at the correct position via `taskNumBefore` and uses wave-based shifting.
-    private func autoGenerateSchedule(tasks: [Task], minutesPerTask: Int, startTimeStr: String = "") {
+    private func autoGenerateSchedule(tasks: [Task], durationsPerTask: [Int], startTimeStr: String = "") {
         guard !tasks.isEmpty else { return }
         let cal = Calendar.current
         let now = Date()
@@ -2519,10 +2550,13 @@ struct DailyNotesView: View {
 
         let startNum = maxScheduleNumber() + 1
         var newLines: [String] = []
+        var cursor = startMin
         for (i, task) in tasks.enumerated() {
-            let taskStart = startMin + i * minutesPerTask
-            let taskEnd   = taskStart + minutesPerTask
+            let dur = i < durationsPerTask.count ? max(1, durationsPerTask[i]) : 10
+            let taskStart = cursor
+            let taskEnd   = taskStart + dur
             newLines.append("\(startNum + i)) \(safeMinutesToTime(taskStart)) - \(safeMinutesToTime(taskEnd)) - \(task.title)")
+            cursor = taskEnd
         }
 
         let allLines = notesText.components(separatedBy: .newlines)
@@ -3631,11 +3665,29 @@ struct DailyNotesView: View {
 
     /// Inserts `lines` after task number `afterNum`, shifts subsequent tasks' times forward
     /// so they start after the intercept block ends, then renumbers everything sequentially.
-    /// UI entry point: resolves afterNum == 0 to the nearest time interval, then delegates.
+    /// UI entry point: resolves afterNum == 0 by anchoring on the pasted block's own first
+    /// start time (same time-based lookup used for group 2+ and for templates), so the
+    /// resulting position is driven by what you typed rather than by whichever task happens
+    /// to be running "now" — that kept multi-task pastes into an active schedule out of sync
+    /// with later groups, which were already anchored this way.
     private func applyIntercept(lines: [String], afterNum: Int) {
         guard !lines.isEmpty else { return }
         let resolved: Int
         if afterNum == 0 {
+            let timePattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)"#
+            let timeRegex = try? NSRegularExpression(pattern: timePattern)
+            var firstStartMin: Int? = nil
+            if let re = timeRegex {
+                for line in lines {
+                    let t = line.trimmingCharacters(in: .whitespaces)
+                    if let m = re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)),
+                       let sr = Range(m.range(at: 1), in: t),
+                       let startMin = interceptParseMinutes(String(t[sr])) {
+                        firstStartMin = startMin
+                        break
+                    }
+                }
+            }
             let allLines = notesText.components(separatedBy: .newlines)
             var s: Int? = nil, e: Int? = nil
             for (i, line) in allLines.enumerated() {
@@ -3643,7 +3695,12 @@ struct DailyNotesView: View {
                 if t == "START" && s == nil { s = i }
                 else if t == "END" && s != nil && e == nil { e = i; break }
             }
-            resolved = (s != nil && e != nil) ? nearestTaskNum(in: allLines, startIdx: s!, endIdx: e!) : 0
+            if let s = s, let e = e, let targetMin = firstStartMin {
+                resolved = taskNumBefore(minutes: targetMin, in: allLines, startIdx: s, endIdx: e)
+            } else {
+                // No parseable time in the pasted block — fall back to "insert next".
+                resolved = (s != nil && e != nil) ? nearestTaskNum(in: allLines, startIdx: s!, endIdx: e!) : 0
+            }
         } else {
             resolved = afterNum
         }
@@ -5523,7 +5580,11 @@ struct FocusModeView: View {
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
     @AppStorage("display.quotesVisible") private var quotesVisible: Bool = true
-    @AppStorage("display.widgetMode") private var widgetMode: String = "books"
+    // Multiple widgets can be enabled at once (stacked, scrollable) — same keys as the
+    // settings-form picker in DailyNotesView, so toggling there stays in sync here.
+    @AppStorage("display.focusShowBooks") private var showBooksWidget: Bool = true
+    @AppStorage("display.focusShowRestraints") private var showRestraintsWidget: Bool = false
+    @AppStorage("display.focusShowProjects") private var showProjectsWidget: Bool = false
 
     @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
     @State private var currentIndex: Int = 0
@@ -5539,6 +5600,8 @@ struct FocusModeView: View {
     @State private var showClearDistractionsConfirm = false
     @AppStorage("focusSidebar.showActiveOnly") private var showActiveOnly: Bool = false
     @State private var showProjectListFocus = false
+    @State private var showRestraintListFocus = false
+    @State private var showBooksLibraryFocus = false
     // "From" persists across sessions; "To" always resets to today.
     @AppStorage("focusWidget.projectFromDateInterval") private var projectFromDateInterval: Double =
         DateRange.currentWeek().start.timeIntervalSince1970
@@ -5563,15 +5626,28 @@ struct FocusModeView: View {
     }
 
     @ViewBuilder
-    private func widgetTabButton(mode: String, icon: String) -> some View {
-        let isActive = widgetMode == mode
-        Button(action: { withAnimation { widgetMode = mode } }) {
+    private func widgetToggleButton(icon: String, isOn: Binding<Bool>) -> some View {
+        Button(action: { withAnimation { isOn.wrappedValue.toggle() } }) {
             Image(systemName: icon)
                 .font(.caption2)
-                .foregroundColor(isActive ? .cyan : .cyan.opacity(0.35))
+                .foregroundColor(isOn.wrappedValue ? .cyan : .cyan.opacity(0.35))
                 .padding(6)
-                .background(Capsule().fill(Color.white.opacity(isActive ? 0.16 : 0.08)))
+                .background(Capsule().fill(Color.white.opacity(isOn.wrappedValue ? 0.16 : 0.08)))
         }
+    }
+
+    // Per-widget "Manage" link, right-aligned above that widget's content.
+    @ViewBuilder
+    private func manageButtonRow(action: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Spacer()
+            Button(action: action) {
+                Text("Manage")
+                    .font(.caption2)
+                    .foregroundColor(.cyan.opacity(0.7))
+            }
+        }
+        .padding(.trailing, 28)
     }
 
     private func formatWaitCountUpFocus(_ seconds: Int) -> String {
@@ -5765,6 +5841,14 @@ struct FocusModeView: View {
             NavigationStack {
                 ProjectListView()
             }
+        }
+        .sheet(isPresented: $showRestraintListFocus) {
+            NavigationStack {
+                RestraintListView()
+            }
+        }
+        .sheet(isPresented: $showBooksLibraryFocus) {
+            BooksView()
         }
         .confirmationDialog("Cancel Current Task", isPresented: $showCancelMenuFocus, titleVisibility: .visible) {
             Button("Stop & Start Next") { onCancelTask() }
@@ -6010,95 +6094,102 @@ struct FocusModeView: View {
                     .padding(.bottom, 28)
                 }
 
-                // Widget tabs (Books | Restraints | Projects) — direct access, no cycling
+                // Widget tabs (Books | Restraints | Projects) — toggle any combination on;
+                // enabled ones stack below in this order (Focus View scrolls to fit them all).
                 HStack(spacing: 8) {
                     Spacer()
-                    widgetTabButton(mode: "books", icon: "books.vertical")
-                    widgetTabButton(mode: "restraints", icon: "hand.raised.fill")
-                    widgetTabButton(mode: "projects", icon: "folder.fill")
+                    widgetToggleButton(icon: "books.vertical", isOn: $showBooksWidget)
+                    widgetToggleButton(icon: "hand.raised.fill", isOn: $showRestraintsWidget)
+                    widgetToggleButton(icon: "folder.fill", isOn: $showProjectsWidget)
                 }
                 .padding(.trailing, 28)
 
-                if widgetMode == "projects" {
-                    HStack(spacing: 8) {
-                        Spacer()
-                        Text("From")
-                            .font(.caption2)
-                            .foregroundColor(.cyan.opacity(0.5))
-                        DatePicker("", selection: projectFromDateBinding, in: ...Date(), displayedComponents: .date)
-                            .labelsHidden()
-                            .colorScheme(.dark)
-                        Button(action: { showProjectListFocus = true }) {
-                            Text("Manage")
-                                .font(.caption2)
-                                .foregroundColor(.cyan.opacity(0.7))
-                        }
-                    }
-                    .padding(.trailing, 28)
-                    .padding(.top, 4)
-                }
+                VStack(spacing: 24) {
+                    if showBooksWidget {
+                        manageButtonRow(action: { showBooksLibraryFocus = true })
 
-                // Large quote, Restraints bars, or Project time insights
-                if widgetMode == "restraints" {
-                    RestraintBarsView(isDark: true)
-                        .padding(.horizontal, 32)
-                } else if widgetMode == "projects" {
-                    TimeInsightsView(range: projectRange, isDark: true)
-                        .padding(.horizontal, 32)
-                } else if quotesVisible && quotePool.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "books.vertical")
-                            .font(.largeTitle)
-                            .foregroundColor(.indigo)
-                        Text("Activate a book in the Books library\nto see quotes here")
-                            .font(.title3)
-                            .foregroundColor(.cyan)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding()
-                } else if quotesVisible {
-                    let quote = quotePool[currentIndex]
-                    VStack(spacing: 24) {
-                        Image(systemName: "quote.opening")
-                            .font(.title)
-                            .foregroundColor(.indigo.opacity(0.6))
-
-                        if showQuote {
-                            Text(quote.text)
-                                .font(.title2)
-                                .fontWeight(.medium)
-                                .foregroundColor(.white)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 32)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .transition(
-                                    .asymmetric(
-                                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                                        removal: .move(edge: .leading).combined(with: .opacity)
-                                    )
-                                )
-                                .id("fq-\(currentIndex)")
-
-                            VStack(spacing: 4) {
-                                Text("— \(quote.author)")
-                                    .font(.callout)
-                                    .italic()
-                                    .foregroundColor(.mint)
-                                Text(quote.bookTitle)
-                                    .font(.caption)
+                        if quotesVisible && quotePool.isEmpty {
+                            VStack(spacing: 16) {
+                                Image(systemName: "books.vertical")
+                                    .font(.largeTitle)
                                     .foregroundColor(.indigo)
-                                if let chNum = quote.chapterNumber {
-                                    let label = quote.chapterName.map { "Chapter \(chNum): \($0)" } ?? "Chapter \(chNum)"
-                                    Text(label)
-                                        .font(.caption2)
-                                        .foregroundColor(.teal)
+                                Text("Activate a book in the Books library\nto see quotes here")
+                                    .font(.title3)
+                                    .foregroundColor(.cyan)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding()
+                        } else if quotesVisible {
+                            let quote = quotePool[currentIndex]
+                            VStack(spacing: 24) {
+                                Image(systemName: "quote.opening")
+                                    .font(.title)
+                                    .foregroundColor(.indigo.opacity(0.6))
+
+                                if showQuote {
+                                    Text(quote.text)
+                                        .font(.title2)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.white)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal, 32)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .transition(
+                                            .asymmetric(
+                                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                                removal: .move(edge: .leading).combined(with: .opacity)
+                                            )
+                                        )
+                                        .id("fq-\(currentIndex)")
+
+                                    VStack(spacing: 4) {
+                                        Text("— \(quote.author)")
+                                            .font(.callout)
+                                            .italic()
+                                            .foregroundColor(.mint)
+                                        Text(quote.bookTitle)
+                                            .font(.caption)
+                                            .foregroundColor(.indigo)
+                                        if let chNum = quote.chapterNumber {
+                                            let label = quote.chapterName.map { "Chapter \(chNum): \($0)" } ?? "Chapter \(chNum)"
+                                            Text(label)
+                                                .font(.caption2)
+                                                .foregroundColor(.teal)
+                                        }
+                                    }
+                                    .transition(.opacity)
+                                    .id("fa-\(currentIndex)")
                                 }
                             }
-                            .transition(.opacity)
-                            .id("fa-\(currentIndex)")
+                            .padding(.horizontal)
                         }
                     }
-                    .padding(.horizontal)
+
+                    if showRestraintsWidget {
+                        manageButtonRow(action: { showRestraintListFocus = true })
+                        RestraintBarsView(isDark: true)
+                            .padding(.horizontal, 32)
+                    }
+
+                    if showProjectsWidget {
+                        HStack(spacing: 8) {
+                            Spacer()
+                            Text("From")
+                                .font(.caption2)
+                                .foregroundColor(.cyan.opacity(0.5))
+                            DatePicker("", selection: projectFromDateBinding, in: ...Date(), displayedComponents: .date)
+                                .labelsHidden()
+                                .colorScheme(.dark)
+                            Button(action: { showProjectListFocus = true }) {
+                                Text("Manage")
+                                    .font(.caption2)
+                                    .foregroundColor(.cyan.opacity(0.7))
+                            }
+                        }
+                        .padding(.trailing, 28)
+                        TimeInsightsView(range: projectRange, isDark: true)
+                            .padding(.horizontal, 32)
+                    }
                 }
 
                 Spacer()
@@ -6739,14 +6830,17 @@ struct AutoScheduleSheet: View {
     let selectedDate: Date
     let allTasks: [Task]
     @Binding var duration: String
-    var onGenerate: ([Task], Int, String) -> Void
+    /// tasks, per-task duration in minutes (parallel array), start time
+    var onGenerate: ([Task], [Int], String) -> Void
 
     @FocusState private var focusedField: Field?
     @State private var startTime: String = Self.currentTimeString()
     /// Ordered list of selected task IDs — position = selection order.
     @State private var selectedIDs: [PersistentIdentifier] = []
+    /// Per-task duration overrides, keyed by task ID. Empty/missing = use `duration` (the default).
+    @State private var customDurations: [PersistentIdentifier: String] = [:]
 
-    private enum Field { case startTime, duration }
+    private enum Field: Hashable { case startTime, duration, taskDuration(PersistentIdentifier) }
 
     // Timed before 4 PM → untimed → timed 4 PM and after (mirrors TaskTableView ordering)
     private enum AutoTimeSlot: Int {
@@ -6795,6 +6889,21 @@ struct AutoScheduleSheet: View {
 
     private var parsedDuration: Int { max(1, Int(duration.trimmingCharacters(in: .whitespaces)) ?? 10) }
 
+    /// The duration to use for a task: its own override if set, otherwise the default `parsedDuration`.
+    private func effectiveDuration(for task: Task) -> Int {
+        if let s = customDurations[task.id], let v = Int(s.trimmingCharacters(in: .whitespaces)), v > 0 {
+            return v
+        }
+        return parsedDuration
+    }
+
+    private func durationBinding(for id: PersistentIdentifier) -> Binding<String> {
+        Binding(
+            get: { customDurations[id] ?? "" },
+            set: { customDurations[id] = $0 }
+        )
+    }
+
     var body: some View {
         NavigationView {
             Form {
@@ -6840,9 +6949,12 @@ struct AutoScheduleSheet: View {
                             .keyboardType(.numberPad)
                             .focused($focusedField, equals: .duration)
                             .frame(width: 60)
-                        Text("minutes per task")
+                        Text("minutes per task (default)")
                             .foregroundColor(.secondary)
                     }
+                    Text("Override an individual task's time in Order Preview below.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
                 .toolbar {
                     ToolbarItemGroup(placement: .keyboard) {
@@ -6890,7 +7002,7 @@ struct AutoScheduleSheet: View {
                                             .background(Color.orange.opacity(0.15), in: Capsule())
                                     }
                                     if isSelected {
-                                        Text("\(parsedDuration) min")
+                                        Text("\(effectiveDuration(for: task)) min")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
@@ -6927,6 +7039,7 @@ struct AutoScheduleSheet: View {
                                     .frame(width: 20, alignment: .trailing)
                                 Text(task.title)
                                     .font(.caption)
+                                    .lineLimit(1)
                                 Spacer()
                                 if let badge = DistractionTracker.shared.badgeTextByTitle(date: selectedDate, title: task.title) {
                                     Text(badge)
@@ -6936,12 +7049,18 @@ struct AutoScheduleSheet: View {
                                         .padding(.vertical, 2)
                                         .background(Color.orange.opacity(0.15), in: Capsule())
                                 }
-                                Text("\(parsedDuration) min")
+                                TextField("\(parsedDuration)", text: durationBinding(for: task.id))
+                                    .keyboardType(.numberPad)
+                                    .focused($focusedField, equals: .taskDuration(task.id))
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 32)
+                                    .font(.caption2)
+                                Text("min")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
                         }
-                        Text("Tasks will be added in the order shown above, starting at \(startTime.trimmingCharacters(in: .whitespaces).isEmpty ? "current time" : startTime.trimmingCharacters(in: .whitespaces)).")
+                        Text("Tasks will be added in the order shown above, starting at \(startTime.trimmingCharacters(in: .whitespaces).isEmpty ? "current time" : startTime.trimmingCharacters(in: .whitespaces)). Leave a task's minutes blank to use the default above.")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .padding(.top, 2)
@@ -6957,7 +7076,9 @@ struct AutoScheduleSheet: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Generate") {
-                        onGenerate(selectedTasks, parsedDuration, startTime)
+                        let tasks = selectedTasks
+                        let durations = tasks.map { effectiveDuration(for: $0) }
+                        onGenerate(tasks, durations, startTime)
                         dismiss()
                     }
                     .fontWeight(.semibold)

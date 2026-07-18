@@ -7,6 +7,14 @@ private struct InsightSlice: Identifiable {
     let name: String
     let minutes: Double
     let percent: Double
+    let project: Project?
+}
+
+private enum GoalFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case exceeded = "Exceeded"
+    case needsImprovement = "Needs Improvement"
+    var id: String { rawValue }
 }
 
 struct TimeInsightsView: View {
@@ -18,6 +26,8 @@ struct TimeInsightsView: View {
     // binding back to the caller; resets whenever the caller passes a new `range`.
     @State private var overrideRange: DateRange?
     @State private var selectedCategory: ActivityCategory?
+    @State private var goalFilter: GoalFilter = .all
+    @State private var sortByAttention = false
 
     private static let palette: [Color] = [.blue, .green, .purple, .orange, .pink, .teal, .indigo, .cyan]
 
@@ -35,12 +45,60 @@ struct TimeInsightsView: View {
         guard availableMinutes > 0 else { return [] }
         var result = projects.map { project -> InsightSlice in
             let minutes = project.totalMinutes(from: effectiveRange.start, to: effectiveRange.end, category: selectedCategory)
-            return InsightSlice(name: project.name, minutes: minutes, percent: minutes / availableMinutes * 100)
+            return InsightSlice(name: project.name, minutes: minutes, percent: minutes / availableMinutes * 100, project: project)
         }
         let loggedMinutes = result.reduce(0.0) { $0 + $1.minutes }
         let undocumented = max(availableMinutes - loggedMinutes, 0)
-        result.append(InsightSlice(name: "Undocumented", minutes: undocumented, percent: undocumented / availableMinutes * 100))
+        result.append(InsightSlice(name: "Undocumented", minutes: undocumented, percent: undocumented / availableMinutes * 100, project: nil))
         return result
+    }
+
+    private var hasGoals: Bool {
+        projects.contains { $0.goalType != nil }
+    }
+
+    private func status(for slice: InsightSlice) -> ProjectGoalStatus {
+        slice.project?.goalStatus(actualPercent: slice.percent) ?? .none
+    }
+
+    // Higher score = needs more attention. Control projects score by how far over the
+    // target they are; Improve projects score by how far under. No goal sorts last.
+    private func attentionScore(for slice: InsightSlice) -> Double {
+        guard let target = slice.project?.targetPercent, let type = slice.project?.goalType else {
+            return -Double.greatestFiniteMagnitude
+        }
+        let delta = slice.percent - target
+        switch type {
+        case .control: return delta
+        case .improve: return -delta
+        }
+    }
+
+    // How far off the target the actual percentage is, phrased per goal type so it
+    // reads naturally either way ("8% over (1h 20m)" vs "8% short (1h 20m)").
+    private func deltaText(for slice: InsightSlice) -> String? {
+        guard let target = slice.project?.targetPercent, let type = slice.project?.goalType else { return nil }
+        let delta = slice.percent - target
+        if abs(delta) < 0.5 { return "on target" }
+        let targetMinutes = target / 100 * availableMinutes
+        let hoursText = DurationInput.string(from: abs(slice.minutes - targetMinutes))
+        switch type {
+        case .control:
+            return delta > 0 ? "\(Int(delta))% over (\(hoursText))" : "\(Int(-delta))% under (\(hoursText))"
+        case .improve:
+            return delta > 0 ? "\(Int(delta))% ahead (\(hoursText))" : "\(Int(-delta))% short (\(hoursText))"
+        }
+    }
+
+    private var filteredSlices: [InsightSlice] {
+        let base: [InsightSlice]
+        switch goalFilter {
+        case .all: base = slices
+        case .exceeded: base = slices.filter { status(for: $0) == .exceeded }
+        case .needsImprovement: base = slices.filter { status(for: $0) == .needsImprovement }
+        }
+        guard sortByAttention else { return base }
+        return base.sorted { attentionScore(for: $0) > attentionScore(for: $1) }
     }
 
     private var colorDomain: [String] {
@@ -56,7 +114,14 @@ struct TimeInsightsView: View {
         return .gray
     }
 
-    private var barHeight: CGFloat { CGFloat(max(slices.count, 1)) * 44 + 24 }
+    // Bars for projects with a goal are colored by status (red/orange/green) instead of
+    // the per-project palette color, so the chart itself flags what needs attention.
+    private func barColor(for slice: InsightSlice) -> Color {
+        let goalStatus = status(for: slice)
+        return goalStatus == .none ? color(for: slice.name) : goalStatus.color
+    }
+
+    private var barHeight: CGFloat { CGFloat(max(filteredSlices.count, 1)) * 44 + 24 }
 
     var body: some View {
         Group {
@@ -78,34 +143,96 @@ struct TimeInsightsView: View {
 
     private var content: some View {
         VStack(spacing: 16) {
-            DateRangeNavigatorView(range: rangeBinding, isDark: isDark)
+            VStack(spacing: 4) {
+                DateRangeNavigatorView(range: rangeBinding, isDark: isDark)
+                HStack {
+                    Spacer()
+                    todayButton
+                }
+            }
             chartSection
-            if !slices.isEmpty {
+            if !filteredSlices.isEmpty {
                 breakdownSection
             }
         }
+    }
+
+    // Tapping again while already in Today mode clears the override and returns to
+    // whatever range the caller originally passed in — otherwise there'd be no way
+    // back short of changing the "From" date picker (which may not even fire onChange
+    // if you re-pick the same date).
+    private var isTodayMode: Bool {
+        overrideRange == .day(Date())
+    }
+
+    private var todayButton: some View {
+        Button {
+            overrideRange = isTodayMode ? nil : .day(Date())
+        } label: {
+            Text(isTodayMode ? "Today ✕" : "Today")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(isTodayMode
+                        ? (isDark ? Color.cyan.opacity(0.55) : Color.accentColor.opacity(0.4))
+                        : (isDark ? Color.cyan.opacity(0.2) : Color.accentColor.opacity(0.15)))
+                )
+                .foregroundColor(isTodayMode ? .white : (isDark ? .cyan : .accentColor))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var chartSection: some View {
         cardContainer(title: "Time Breakdown", icon: "chart.bar.fill") {
             categoryFilterRow
-            if slices.isEmpty {
-                emptyLabel("No projects yet")
+            if hasGoals {
+                goalFilterRow
+            }
+            if filteredSlices.isEmpty {
+                emptyLabel(slices.isEmpty ? "No projects yet" : "Nothing matches this filter")
             } else {
-                Chart(slices) { slice in
+                Chart(filteredSlices) { slice in
                     BarMark(
                         x: .value("Hours", slice.minutes / 60),
                         y: .value("Project", slice.name)
                     )
-                    .foregroundStyle(by: .value("Project", slice.name))
-                    .annotation(position: .overlay) {
+                    .foregroundStyle(barColor(for: slice))
+                    .annotation(position: .trailing) {
                         barAnnotation(for: slice)
                     }
+
+                    if let target = slice.project?.targetPercent, slice.project?.goalType != nil {
+                        // A tick mark (not a second bar, so Charts can't dodge it
+                        // side-by-side) crossing the actual bar right at the target
+                        // position — the gap between the tick and the bar's end is
+                        // exactly how much is missed by / exceeded past the mark.
+                        PointMark(
+                            x: .value("Target", target / 100 * availableMinutes / 60),
+                            y: .value("Project", slice.name)
+                        )
+                        .symbol {
+                            Rectangle()
+                                .fill(isDark ? Color.white : Color.black.opacity(0.85))
+                                .frame(width: 3, height: 26)
+                        }
+                    }
                 }
-                .chartForegroundStyleScale(domain: colorDomain, range: colorRange)
                 .chartLegend(.hidden)
                 .chartXAxisLabel("Hours")
+                .chartXAxis {
+                    AxisMarks { _ in
+                        AxisGridLine().foregroundStyle(isDark ? Color.white.opacity(0.2) : Color.gray.opacity(0.25))
+                        AxisValueLabel().foregroundStyle(isDark ? Color.white.opacity(0.7) : Color.primary)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks { _ in
+                        AxisValueLabel().foregroundStyle(isDark ? Color.white : Color.primary)
+                    }
+                }
                 .frame(height: barHeight)
             }
         }
@@ -166,9 +293,71 @@ struct TimeInsightsView: View {
     @ViewBuilder
     private func barAnnotation(for slice: InsightSlice) -> some View {
         if slice.percent > 0 {
-            Text(String(format: "%.0f%%", slice.percent))
-                .font(.caption2).fontWeight(.bold)
-                .foregroundColor(.white)
+            HStack(spacing: 3) {
+                if let icon = status(for: slice).icon {
+                    Image(systemName: icon)
+                        .font(.caption2)
+                        .foregroundColor(status(for: slice).color)
+                }
+                Text(String(format: "%.0f%%", slice.percent))
+            }
+            .font(.caption2).fontWeight(.bold)
+            .foregroundColor(isDark ? .white : .primary)
+        }
+    }
+
+    private var goalFilterRow: some View {
+        HStack(spacing: 8) {
+            ForEach(GoalFilter.allCases) { filter in
+                goalFilterChip(filter)
+            }
+            Spacer()
+            sortByAttentionChip
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var sortByAttentionChip: some View {
+        Button {
+            sortByAttention.toggle()
+        } label: {
+            Label("Attention", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(Color.red.opacity(sortByAttention ? 0.85 : 0.18))
+                )
+                .foregroundColor(sortByAttention ? .white : (isDark ? .white : .primary))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func goalFilterChip(_ filter: GoalFilter) -> some View {
+        let isSelected = goalFilter == filter
+        Button {
+            goalFilter = filter
+        } label: {
+            Text(filter.rawValue)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(goalFilterColor(filter).opacity(isSelected ? 0.85 : 0.18))
+                )
+                .foregroundColor(isSelected ? .white : (isDark ? .white : .primary))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func goalFilterColor(_ filter: GoalFilter) -> Color {
+        switch filter {
+        case .all: return isDark ? .white.opacity(0.4) : .secondary
+        case .exceeded: return .red
+        case .needsImprovement: return .orange
         }
     }
 
@@ -176,7 +365,7 @@ struct TimeInsightsView: View {
     private var breakdownSection: some View {
         cardContainer(title: "Breakdown", icon: "list.bullet") {
             VStack(spacing: 8) {
-                ForEach(slices) { slice in
+                ForEach(filteredSlices) { slice in
                     breakdownRow(for: slice)
                 }
             }
@@ -185,6 +374,7 @@ struct TimeInsightsView: View {
 
     @ViewBuilder
     private func breakdownRow(for slice: InsightSlice) -> some View {
+        let goalStatus = status(for: slice)
         HStack {
             Circle()
                 .fill(color(for: slice.name))
@@ -192,7 +382,18 @@ struct TimeInsightsView: View {
             Text(slice.name)
                 .fontWeight(slice.name == "Undocumented" ? .regular : .medium)
                 .foregroundColor(slice.name == "Undocumented" ? (isDark ? .white.opacity(0.5) : .secondary) : (isDark ? .white : .primary))
+            if let icon = goalStatus.icon {
+                Image(systemName: icon)
+                    .font(.caption2)
+                    .foregroundColor(goalStatus.color)
+            }
             Spacer()
+            if let delta = deltaText(for: slice) {
+                Text(delta)
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .foregroundColor(goalStatus == .none ? (isDark ? .white.opacity(0.4) : .secondary) : goalStatus.color)
+            }
             Text(DurationInput.string(from: slice.minutes))
                 .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
             Text(String(format: "%.0f%%", slice.percent))

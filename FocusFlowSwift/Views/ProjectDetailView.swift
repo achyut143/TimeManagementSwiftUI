@@ -55,6 +55,8 @@ struct ProjectDetailView: View {
     @State private var showDeleteActivityConfirm = false
     @State private var entryToDelete: ProjectTimeEntry?
     @State private var showDeleteEntryConfirm = false
+    @State private var pdfURL: URL?
+    @State private var showShareSheet = false
 
     private var effectiveRange: DateRange { overrideRange ?? range }
 
@@ -191,8 +193,18 @@ struct ProjectDetailView: View {
         .onChange(of: range) { _, _ in overrideRange = nil }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showEditProject = true }) {
-                    Text("Edit")
+                HStack(spacing: 16) {
+                    NavigationLink(destination: ProjectActivitySearchView(project: project)) {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    Button {
+                        exportPDF()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    Button(action: { showEditProject = true }) {
+                        Text("Edit")
+                    }
                 }
             }
         }
@@ -217,6 +229,11 @@ struct ProjectDetailView: View {
                 .padding()
                 .frame(minWidth: 200, maxWidth: 320)
         }
+        .sheet(isPresented: $showShareSheet) {
+            if let pdfURL {
+                ShareSheet(items: [pdfURL])
+            }
+        }
         .confirmationDialog("Delete Time Entry?", isPresented: $showDeleteEntryConfirm, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 if let entry = entryToDelete { modelContext.delete(entry) }
@@ -230,6 +247,13 @@ struct ProjectDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes the activity and all time logged against it.")
+        }
+    }
+
+    private func exportPDF() {
+        if let url = ProjectPDFExporter.generatePDF(project: project, from: effectiveRange.start, to: effectiveRange.end) {
+            pdfURL = url
+            showShareSheet = true
         }
     }
 

@@ -22,6 +22,7 @@ struct CreateRestraintView: View {
     }()
     @State private var colorName: String = "blue"
     @State private var iconName: String = "hand.raised.fill"
+    @State private var showInFocusWidget: Bool = true
 
     private let weekdayLabels: [(Int, String)] = [
         (1,"Sun"),(2,"Mon"),(3,"Tue"),(4,"Wed"),(5,"Thu"),(6,"Fri"),(7,"Sat")
@@ -61,6 +62,12 @@ struct CreateRestraintView: View {
                 Section("Days") {
                     Toggle("Every Day", isOn: $everyDay)
                     if !everyDay { weekdayGrid }
+                }
+
+                Section {
+                    Toggle("Show in Focus View widget", isOn: $showInFocusWidget)
+                } footer: {
+                    Text("Turn off to hide this restraint's bar from the Focus View restraints widget without deactivating it.")
                 }
 
                 Section("Appearance") {
@@ -253,6 +260,7 @@ struct CreateRestraintView: View {
         releaseWindows = r.timeWindows
         colorName = r.colorName
         iconName = r.iconName
+        showInFocusWidget = r.showInFocusWidget
     }
 
     private func save() {
@@ -268,6 +276,7 @@ struct CreateRestraintView: View {
             r.timeWindows = releaseWindows
             r.colorName = colorName
             r.iconName = iconName
+            r.showInFocusWidget = showInFocusWidget
         } else {
             let r = Restraint(
                 name: name.trimmingCharacters(in: .whitespaces),
@@ -280,6 +289,7 @@ struct CreateRestraintView: View {
                 colorName: colorName,
                 iconName: iconName
             )
+            r.showInFocusWidget = showInFocusWidget
             modelContext.insert(r)
         }
         dismiss()

@@ -6,7 +6,35 @@ struct RestraintBarsView: View {
     let isDark: Bool
 
     private var todayRestraints: [Restraint] {
-        restraints.filter { !$0.timeWindows.isEmpty }
+        restraints.filter { !$0.timeWindows.isEmpty && $0.showInFocusWidget }
+    }
+
+    // Today's release windows for one restraint whose time has already passed but
+    // haven't been marked pass/fail yet — same "pending" definition RestraintInstancesView
+    // uses (no record, or an explicit "pending" record).
+    private func pendingCount(for r: Restraint) -> Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let now = Date()
+        guard r.isScheduledOn(date: today) else { return 0 }
+        var count = 0
+        for window in r.timeWindows {
+            var comps = cal.dateComponents([.year, .month, .day], from: today)
+            comps.hour = window.hour
+            comps.minute = window.minute
+            guard let windowDate = cal.date(from: comps), windowDate <= now else { continue }
+            let record = r.instances.first { inst in
+                cal.isDate(inst.date, inSameDayAs: today)
+                    && inst.windowHour == window.hour
+                    && inst.windowMinute == window.minute
+            }
+            if record?.isPending ?? true { count += 1 }
+        }
+        return count
+    }
+
+    private var pendingCount: Int {
+        todayRestraints.reduce(0) { $0 + pendingCount(for: $1) }
     }
 
     var body: some View {
@@ -25,6 +53,18 @@ struct RestraintBarsView: View {
                     }
                     .padding(.vertical, 4)
                 } else {
+                    if pendingCount > 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                            Text("\(pendingCount) pending")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.orange)
+                            Spacer()
+                        }
+                    }
                     ForEach(todayRestraints) { r in
                         restraintBar(r, at: now)
                     }
@@ -50,6 +90,16 @@ struct RestraintBarsView: View {
                     .font(.caption2)
                     .fontWeight(.bold)
                     .foregroundColor(isDark ? .white : .primary)
+                let restraintPending = pendingCount(for: r)
+                if restraintPending > 0 {
+                    Text("\(restraintPending)")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange))
+                }
                 Spacer()
                 if let next = nextWindow {
                     Text("next: \(timeString(next))")

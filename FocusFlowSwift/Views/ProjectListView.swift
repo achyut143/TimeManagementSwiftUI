@@ -205,6 +205,10 @@ struct ProjectListView: View {
                         Image(systemName: "chart.bar.fill")
                             .foregroundColor(.indigo)
                     }
+                    NavigationLink(destination: ProjectGoalsView()) {
+                        Image(systemName: "target")
+                            .foregroundColor(.indigo)
+                    }
                     Button(action: { showCreate = true }) {
                         Image(systemName: "plus")
                     }

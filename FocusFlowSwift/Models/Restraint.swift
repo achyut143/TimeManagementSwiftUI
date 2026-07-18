@@ -39,6 +39,7 @@ class Restraint {
     var createdAt: Date
     var colorName: String = "blue"          // default keeps existing records valid
     var iconName: String = "hand.raised.fill"
+    var showInFocusWidget: Bool = true      // default true keeps existing restraints visible
 
     @Relationship(deleteRule: .cascade, inverse: \RestraintInstance.restraint)
     var instances: [RestraintInstance] = []
