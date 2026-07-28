@@ -74,19 +74,44 @@ struct TimeInsightsView: View {
         }
     }
 
-    // How far off the target the actual percentage is, phrased per goal type so it
-    // reads naturally either way ("8% over (1h 20m)" vs "8% short (1h 20m)").
-    private func deltaText(for slice: InsightSlice) -> String? {
-        guard let target = slice.project?.targetPercent, let type = slice.project?.goalType else { return nil }
-        let delta = slice.percent - target
-        if abs(delta) < 0.5 { return "on target" }
+    // Absolute time the project's goal target works out to over the current range,
+    // "—" for projects with no goal (and for the Undocumented row).
+    private func targetText(for slice: InsightSlice) -> String {
+        guard let target = slice.project?.targetPercent else { return "—" }
         let targetMinutes = target / 100 * availableMinutes
-        let hoursText = DurationInput.string(from: abs(slice.minutes - targetMinutes))
+        return DurationInput.string(from: targetMinutes)
+    }
+
+    // How far off the target the actual time is, relative to the target itself
+    // (e.g. spending 3h against a 2h target reads "50% over", not "10% over").
+    private func feedbackText(for slice: InsightSlice) -> String {
+        guard slice.project != nil else { return "—" }
+        guard let target = slice.project?.targetPercent, let type = slice.project?.goalType else { return "No goal" }
+        let targetMinutes = target / 100 * availableMinutes
+        guard targetMinutes > 0 else { return "No goal" }
+        let delta = (slice.minutes - targetMinutes) / targetMinutes * 100
+        if abs(delta) < 0.5 { return "On target" }
         switch type {
         case .control:
-            return delta > 0 ? "\(Int(delta))% over (\(hoursText))" : "\(Int(-delta))% under (\(hoursText))"
+            return delta > 0 ? "\(Int(delta))% over" : "\(Int(-delta))% under"
         case .improve:
-            return delta > 0 ? "\(Int(delta))% ahead (\(hoursText))" : "\(Int(-delta))% short (\(hoursText))"
+            return delta > 0 ? "\(Int(delta))% ahead" : "\(Int(-delta))% short"
+        }
+    }
+
+    // The same comparison but as raw percentage-POINTS of total available time
+    // (the "% of your day" column), rather than relative to the target's own size.
+    // Shown as a secondary line alongside feedbackText so both readings are visible.
+    private func feedbackPointsText(for slice: InsightSlice) -> String? {
+        guard slice.project != nil else { return nil }
+        guard let target = slice.project?.targetPercent, let type = slice.project?.goalType else { return nil }
+        let delta = slice.percent - target
+        if abs(delta) < 0.5 { return nil }
+        switch type {
+        case .control:
+            return delta > 0 ? "\(Int(delta))pt over" : "\(Int(-delta))pt under"
+        case .improve:
+            return delta > 0 ? "\(Int(delta))pt ahead" : "\(Int(-delta))pt short"
         }
     }
 
@@ -364,7 +389,23 @@ struct TimeInsightsView: View {
     @ViewBuilder
     private var breakdownSection: some View {
         cardContainer(title: "Breakdown", icon: "list.bullet") {
-            VStack(spacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                GridRow {
+                    Text("Project")
+                    Text("%")
+                        .gridColumnAlignment(.trailing)
+                    Text("Spent")
+                        .gridColumnAlignment(.trailing)
+                    Text("Target")
+                        .gridColumnAlignment(.trailing)
+                    Text("Feedback")
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundColor(isDark ? .white.opacity(0.5) : .secondary)
+
+                Divider()
+                    .gridCellColumns(5)
+
                 ForEach(filteredSlices) { slice in
                     breakdownRow(for: slice)
                 }
@@ -375,32 +416,44 @@ struct TimeInsightsView: View {
     @ViewBuilder
     private func breakdownRow(for slice: InsightSlice) -> some View {
         let goalStatus = status(for: slice)
-        HStack {
-            Circle()
-                .fill(color(for: slice.name))
-                .frame(width: 8, height: 8)
-            Text(slice.name)
-                .fontWeight(slice.name == "Undocumented" ? .regular : .medium)
-                .foregroundColor(slice.name == "Undocumented" ? (isDark ? .white.opacity(0.5) : .secondary) : (isDark ? .white : .primary))
-            if let icon = goalStatus.icon {
-                Image(systemName: icon)
-                    .font(.caption2)
-                    .foregroundColor(goalStatus.color)
+        GridRow {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(color(for: slice.name))
+                    .frame(width: 8, height: 8)
+                Text(slice.name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer()
-            if let delta = deltaText(for: slice) {
-                Text(delta)
-                    .font(.caption2)
-                    .fontWeight(.medium)
-                    .foregroundColor(goalStatus == .none ? (isDark ? .white.opacity(0.4) : .secondary) : goalStatus.color)
-            }
-            Text(DurationInput.string(from: slice.minutes))
-                .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
+            .fontWeight(slice.name == "Undocumented" ? .regular : .medium)
+            .foregroundColor(slice.name == "Undocumented" ? (isDark ? .white.opacity(0.5) : .secondary) : (isDark ? .white : .primary))
+
             Text(String(format: "%.0f%%", slice.percent))
                 .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
-                .frame(width: 48, alignment: .trailing)
+
+            Text(DurationInput.string(from: slice.minutes))
+                .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
+
+            Text(targetText(for: slice))
+                .foregroundColor(isDark ? .white.opacity(0.6) : .secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 3) {
+                    if let icon = goalStatus.icon {
+                        Image(systemName: icon)
+                            .font(.caption2)
+                    }
+                    Text(feedbackText(for: slice))
+                }
+                if let pointsText = feedbackPointsText(for: slice) {
+                    Text(pointsText)
+                        .font(.caption2)
+                        .foregroundColor(isDark ? .white.opacity(0.4) : .secondary)
+                }
+            }
+            .foregroundColor(goalStatus == .none ? (isDark ? .white.opacity(0.4) : .secondary) : goalStatus.color)
         }
-        .font(.subheadline)
+        .font(.caption)
     }
 
     private func emptyLabel(_ text: String) -> some View {

@@ -14,8 +14,8 @@ struct DateRange: Equatable {
         return max(days + 1, 1)
     }
 
-    // Minutes actually elapsed within the range as of `now`: past days count as a
-    // full 24h, today counts only the hours elapsed since midnight, future days count as 0.
+    // Minutes within the range as of `now`: past and current days count as a full
+    // 24h each, future days count as 0.
     func elapsedMinutes(asOf now: Date = Date()) -> Double {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
@@ -23,10 +23,8 @@ struct DateRange: Equatable {
         var day = cal.startOfDay(for: start)
         var total = 0.0
         while day <= endDay {
-            if day < today {
+            if day <= today {
                 total += 24 * 60
-            } else if day == today {
-                total += min(max(now.timeIntervalSince(today) / 60, 0), 24 * 60)
             }
             guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
             day = next

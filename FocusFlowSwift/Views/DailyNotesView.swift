@@ -154,6 +154,8 @@ struct DailyNotesView: View {
     @State private var scheduleNoRepeat: Bool = false
     @State private var showFormattedSchedule: Bool = true
     @AppStorage("schedule.hideFinishedTasks") private var hideFinishedTasks: Bool = false
+    @AppStorage("schedule.showOnlyIncomplete") private var showOnlyIncomplete: Bool = false
+    @AppStorage("schedule.autoRecordDistraction") private var autoRecordDistraction: Bool = false
     @State private var editingTask: EditTaskItem? = nil
     @State private var actualMinutesTarget: ActualMinutesTarget? = nil
     @State private var reminderInterval: String = UserDefaults.standard.string(forKey: "DailyNotesView.reminderInterval") ?? "0"
@@ -178,7 +180,6 @@ struct DailyNotesView: View {
     @State private var showInterceptSheet = false
     @State private var showSwapSheet = false
     @State private var swapSheetDefaults: (Int?, Int?) = (nil, nil)
-    @State private var scheduleRenderID: UUID = UUID()
     @State private var showDeleteOptions = false
     @State private var pendingDeleteStart: Int = 0
     @State private var pendingDeleteEnd: Int = 0
@@ -411,6 +412,15 @@ struct DailyNotesView: View {
                         Spacer()
                     }
 
+                    HStack {
+                        Label("Auto-record distractions", systemImage: "bolt.fill")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Toggle("", isOn: $autoRecordDistraction)
+                            .labelsHidden()
+                    }
+
                     if hasSchedule {
                         HStack {
                             Label(
@@ -442,6 +452,12 @@ struct DailyNotesView: View {
                                         .foregroundColor(.orange)
                                 }
                                 .buttonStyle(PlainButtonStyle())
+                                Button(action: { showOnlyIncomplete.toggle() }) {
+                                    Image(systemName: showOnlyIncomplete ? "xmark.circle.fill" : "xmark.circle")
+                                        .font(.caption)
+                                        .foregroundColor(showOnlyIncomplete ? .red : .secondary)
+                                }
+                                .buttonStyle(PlainButtonStyle())
                                 Toggle("", isOn: $hideFinishedTasks)
                                     .labelsHidden()
                             }
@@ -450,7 +466,6 @@ struct DailyNotesView: View {
 
                     if showFormattedSchedule && hasSchedule {
                         scheduleFormattedView
-                            .id(scheduleRenderID)
                     } else {
                         RichTextEditor(text: $notesText)
                             .frame(height: 300)
@@ -669,7 +684,6 @@ struct DailyNotesView: View {
                 loadNotesForDate(selectedDate)
             }
             .onChange(of: notesText) { _, _ in
-                scheduleRenderID = UUID()
                 recalculateTotalIdleTime()
             }
             .onChange(of: currentTaskName) { _, newName in
@@ -1519,10 +1533,12 @@ struct DailyNotesView: View {
         // A slot is "past" if it ended before the active slot starts (or before now if no active slot)
         let cutoffMinutes = activeEntry?.startMinutes ?? currentMinutes
 
-        // Build a set of original lines that should be struck out
+        // Build a set of original lines that should be struck out.
+        // Slots marked incomplete ([✗]) are left alone — the user has already
+        // flagged them and auto-striking would hide that flag.
         let pastOriginalLines = Set(
             timeEntries
-                .filter { $0.endMinutes <= cutoffMinutes }
+                .filter { $0.endMinutes <= cutoffMinutes && !$0.originalLine.contains(" [✗]") }
                 .map { $0.originalLine.trimmingCharacters(in: .whitespacesAndNewlines) }
         )
 
@@ -2151,7 +2167,6 @@ struct DailyNotesView: View {
         }
 
         try? modelContext.save()
-        scheduleRenderID = UUID()
     }
 
     // MARK: - Template Helpers
@@ -2388,6 +2403,10 @@ struct DailyNotesView: View {
                 guard Calendar.current.isDate(result.date, inSameDayAs: selectedDate) else { continue }
                 writeMetricsToNotesText(startMin: result.startMin, desc: result.desc)
             }
+            return
+        }
+        if autoRecordDistraction {
+            confirmDistraction()
             return
         }
         pendingDistractionAbsenceSecs = secs
@@ -4650,7 +4669,10 @@ struct DailyNotesView: View {
 
             // Task rows
             ForEach(Array(tasks.enumerated()), id: \.offset) { _, task in
-                if !hideFinishedTasks || !task.struck {
+                let shouldShowTask = showOnlyIncomplete
+                    ? task.isNotCompleted
+                    : (!hideFinishedTasks || (!task.struck && !task.isNotCompleted))
+                if shouldShowTask {
                     taskDisplayRow(num: task.num, startMin: task.start, endMin: task.end,
                                    desc: task.desc, struck: task.struck, fixed: task.fixed,
                                    isReward: task.isReward, isNotCompleted: task.isNotCompleted,
@@ -7347,6 +7369,7 @@ struct TaskChartsView: View {
     @Binding var notesText: String
     let selectedDate: Date
     @Environment(\.dismiss) private var dismiss
+    @State private var rowToLog: ChartRow? = nil
 
     private enum ChartTab: String, CaseIterable {
         case byTask = "By Task"
@@ -7424,6 +7447,7 @@ struct TaskChartsView: View {
             if let r = desc.range(of: DistractionTracker.metricsSuffixPattern, options: .regularExpression) {
                 desc = String(desc[..<r.lowerBound])
             }
+            desc = desc.replacingOccurrences(of: #"\s*\([^()]*\)"#, with: "", options: .regularExpression)
             desc = desc.trimmingCharacters(in: .whitespaces)
             guard !desc.isEmpty else { continue }
 
@@ -7550,6 +7574,13 @@ struct TaskChartsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(item: $rowToLog) { row in
+                LogChartTaskTimeView(
+                    taskName: row.label,
+                    defaultMinutes: row.actual > 0 ? row.actual : row.allocated,
+                    date: selectedDate
+                )
+            }
         }
     }
 
@@ -7602,6 +7633,21 @@ struct TaskChartsView: View {
                 }
             }
             .chartLegend(position: .bottom)
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(
+                            SpatialTapGesture()
+                                .onEnded { tap in
+                                    let origin = geometry[proxy.plotAreaFrame].origin
+                                    let y = tap.location.y - origin.y
+                                    guard let label: String = proxy.value(atY: y),
+                                          let row = rows.first(where: { $0.label == label }) else { return }
+                                    rowToLog = row
+                                }
+                        )
+                }
+            }
             .frame(height: max(120, CGFloat(rows.count) * 36 + 40))
             .padding(.horizontal)
         }
