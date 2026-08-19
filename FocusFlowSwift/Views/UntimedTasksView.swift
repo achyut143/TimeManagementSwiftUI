@@ -110,7 +110,7 @@ struct UntimedTasksView: View {
         }
         .sheet(isPresented: $showNotesDialog) {
             if let task = notesTask {
-                NotesView(task: task)
+                TaskNotesPagerView(task: task)
             }
         }
         .alert("Delete Task", isPresented: $showDeleteConfirmation) {
@@ -650,7 +650,6 @@ struct UntimedTasksView: View {
             startTime: task.startTime,
             endTime: task.endTime,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
@@ -688,7 +687,6 @@ struct UntimedTasksView: View {
             startTime: task.startTime,
             endTime: task.endTime,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
@@ -727,7 +725,6 @@ struct UntimedTasksView: View {
             endTime: task.endTime,
             reassign: true,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,

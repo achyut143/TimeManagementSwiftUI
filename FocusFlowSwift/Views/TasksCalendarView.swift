@@ -27,7 +27,6 @@ struct TasksCalendarView: View {
     @State private var isUntimedTask = false
     @State private var copySubtasks = false
     @State private var showNotesDialog = false
-    @State private var showPersistentNotesDialog = false
     @State private var notesTask: Task?
     @State private var showDeleteConfirmation = false
     @State private var taskToDelete: Task?
@@ -136,7 +135,7 @@ struct TasksCalendarView: View {
         }
         .sheet(isPresented: $showNotesDialog) {
             if let task = notesTask {
-                NotesView(task: task)
+                TaskNotesPagerView(task: task)
             }
         }
         .alert("Delete Task", isPresented: $showDeleteConfirmation) {
@@ -1308,7 +1307,6 @@ struct TasksCalendarView: View {
             startTime: task.startTime,
             endTime: task.endTime,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
@@ -1375,7 +1373,6 @@ struct TasksCalendarView: View {
             endTime: task.endTime,
             reassign: true,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
@@ -1686,7 +1683,6 @@ struct TaskActionsView: View {
     @State private var showDeleteConfirmation = false
     @State private var showEditDialog = false
     @State private var showNotesDialog = false
-    @State private var showPersistentNotesDialog = false
     @State private var showTimeSpentDialog = false
     @State private var showFileAttachments = false
     @State private var showSubtasksView = false
@@ -1858,11 +1854,7 @@ struct TaskActionsView: View {
                         actionButton("Notes", systemImage: "note.text", color: .orange) {
                             showNotesDialog = true
                         }
-                        
-                        actionButton("Persistent Notes", systemImage: "pin.fill", color: .purple) {
-                            showPersistentNotesDialog = true
-                        }
-                        
+
                         actionButton("Attach Files", systemImage: "paperclip", color: .brown) {
                             showFileAttachments = true
                         }
@@ -1922,10 +1914,7 @@ struct TaskActionsView: View {
             EditTaskView(task: task)
         }
         .sheet(isPresented: $showNotesDialog) {
-            NotesView(task: task)
-        }
-        .sheet(isPresented: $showPersistentNotesDialog) {
-            PersistentNotesView(task: task)
+            TaskNotesPagerView(task: task)
         }
         .sheet(isPresented: $showTimeSpentDialog) {
             TimeSpentEditorView(task: task)
@@ -2023,7 +2012,6 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             startTime: task.startTime,
             endTime: task.endTime,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
@@ -2092,7 +2080,6 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             endTime: task.endTime,
             reassign: true,
             weight: task.weight,
-            persistentNotes: task.persistentNotes,
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
@@ -2131,7 +2118,6 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             startTime: copied.startTime,
             endTime: copied.endTime,
             weight: copied.weight,
-            persistentNotes: copied.persistentNotes,
             date: copied.date,
             repeatAgain: copied.repeatAgain,
             copySubtasks: copied.copySubtasks

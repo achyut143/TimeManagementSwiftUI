@@ -66,8 +66,13 @@ struct RestraintChartsView: View {
         }
     }
 
-    private var usageItems: [UsageItem] {
-        filtered.flatMap { r -> [UsageItem] in
+    // Split by limit type so time (minutes) and quantities (arbitrary, per-restraint
+    // units) never share one chart/x-axis — mixing them made bar lengths meaningless.
+    private var durationRestraints: [Restraint] { filtered.filter { $0.effectiveLimitType == .duration } }
+    private var quantityRestraints: [Restraint] { filtered.filter { $0.effectiveLimitType == .quantity } }
+
+    private func usageItems(for restraintList: [Restraint]) -> [UsageItem] {
+        restraintList.flatMap { r -> [UsageItem] in
             let recs = instances(for: r)
             let isDuration = r.effectiveLimitType == .duration
             let unit = isDuration ? "min" : r.quantityUnit
@@ -103,14 +108,19 @@ struct RestraintChartsView: View {
 
             Picker("Chart", selection: $selectedTab) {
                 Text("Pass / Fail / Pending").tag(0)
-                Text("Usage").tag(1)
+                Text("Time").tag(1)
+                Text("Quantities").tag(2)
             }
             .pickerStyle(.segmented)
             .padding()
 
             ScrollView {
                 Group {
-                    if selectedTab == 0 { chartA } else { chartB }
+                    switch selectedTab {
+                    case 0: chartA
+                    case 1: chartTime
+                    default: chartQuantity
+                    }
                 }
                 .padding()
             }
@@ -156,11 +166,35 @@ struct RestraintChartsView: View {
     }
 
     @ViewBuilder
-    private var chartB: some View {
-        let items = usageItems
+    private var chartTime: some View {
+        usageChart(
+            restraintList: durationRestraints,
+            title: "Time Used vs Awarded",
+            icon: "clock.fill",
+            emptyText: "No duration-based restraints",
+            xAxisLabel: "Minutes"
+        )
+    }
+
+    @ViewBuilder
+    private var chartQuantity: some View {
+        usageChart(
+            restraintList: quantityRestraints,
+            title: "Quantity Used vs Awarded",
+            icon: "number",
+            emptyText: "No quantity-based restraints",
+            xAxisLabel: "Quantities"
+        )
+    }
+
+    @ViewBuilder
+    private func usageChart(restraintList: [Restraint], title: String, icon: String, emptyText: String, xAxisLabel: String) -> some View {
+        let items = usageItems(for: restraintList)
         let maxVal = items.map(\.amount).max() ?? 0.0
         GroupBox {
-            if filtered.isEmpty || maxVal == 0 {
+            if restraintList.isEmpty {
+                emptyLabel(emptyText)
+            } else if maxVal == 0 {
                 emptyLabel("No usage logged yet")
             } else {
                 Chart(items) { item in
@@ -184,11 +218,11 @@ struct RestraintChartsView: View {
                 }
                 .chartForegroundStyleScale(["Awarded": Color.green, "Used": Color.orange])
                 .chartXScale(domain: 0...(maxVal * 1.3 + 1))
-                .chartXAxisLabel("Quantities")
-                .frame(height: CGFloat(max(filtered.count, 1)) * 72 + 24)
+                .chartXAxisLabel(xAxisLabel)
+                .frame(height: CGFloat(max(restraintList.count, 1)) * 72 + 24)
             }
         } label: {
-            Label("Used vs Awarded", systemImage: "chart.bar.fill")
+            Label(title, systemImage: icon)
                 .font(.headline)
         }
     }

@@ -25,7 +25,6 @@ struct TaskTableView: View {
     @State private var selectedTags: Set<String> = []
     @State private var selectedTask: Task?
     @State private var showNotes = false
-    @State private var showPersistentNotes = false
     @State private var taskToDelete: Task?
     @State private var showDeleteConfirmation = false
     @State private var showTagAnalytics = false
@@ -185,11 +184,6 @@ struct TaskTableView: View {
                             selectedTask = task
                             showNotes = true
                         }
-                    }, onPersistentNotesAction: {
-                        if !isSelectionMode {
-                            selectedTask = task
-                            showPersistentNotes = true
-                        }
                     }, onTaskTap: {
                         if !isSelectionMode {
                             selectedTaskForActions = task
@@ -235,12 +229,7 @@ struct TaskTableView: View {
         }
         .sheet(isPresented: $showNotes) {
             if let task = selectedTask {
-                NotesView(task: task)
-            }
-        }
-        .sheet(isPresented: $showPersistentNotes) {
-            if let task = selectedTask {
-                PersistentNotesView(task: task)
+                TaskNotesPagerView(task: task)
             }
         }
         .sheet(isPresented: $showTagAnalytics) {
@@ -446,7 +435,6 @@ struct TaskRowView: View {
     var allTasks: [Task] = []
     var metricDays: Int = 30
     let onNotesAction: () -> Void
-    let onPersistentNotesAction: () -> Void
     var onTaskTap: (() -> Void)? = nil
     var isSelectionMode: Bool = false
     @State private var showTimeSpentEditor = false
@@ -571,12 +559,6 @@ struct TaskRowView: View {
                     Button(action: onNotesAction) {
                         Image(systemName: "note.text")
                             .foregroundStyle(.orange)
-                    }
-                }
-                if task.persistentNotes != nil && !task.persistentNotes!.isEmpty {
-                    Button(action: onPersistentNotesAction) {
-                        Image(systemName: "pin.fill")
-                            .foregroundStyle(.purple)
                     }
                 }
                 if let attachments = task.attachments, !attachments.isEmpty {
@@ -857,96 +839,6 @@ struct TimeSpentEditorView: View {
     }
 }
 
-struct NotesView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    let task: Task
-    @State private var notesText: String = ""
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Task") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(task.title)
-                            .font(.headline)
-                        if !task.taskDescription.isEmpty {
-                            Text(task.taskDescription)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                
-                Section("Notes") {
-                    RichTextEditor(text: $notesText)
-                        .frame(height: 300)
-                }
-            }
-            .navigationTitle("Notes")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        task.notes = notesText.isEmpty ? nil : notesText
-                        try? modelContext.save()
-                        dismiss()
-                    }
-                }
-            }
-            .onAppear {
-                notesText = task.notes ?? ""
-            }
-        }
-    }
-    
-}
-
-struct PersistentNotesView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    let task: Task
-    @State private var notesText: String = ""
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Task") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(task.title)
-                            .font(.headline)
-                        if !task.taskDescription.isEmpty {
-                            Text(task.taskDescription)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                
-                Section("Persistent Notes") {
-                    RichTextEditor(text: $notesText)
-                        .frame(height: 300)
-                }
-            }
-            .navigationTitle("Persistent Notes")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        task.persistentNotes = notesText.isEmpty ? nil : notesText
-                        try? modelContext.save()
-                        dismiss()
-                    }
-                }
-            }
-            .onAppear {
-                notesText = task.persistentNotes ?? ""
-            }
-        }
-    }
-}
+// NotesView and PersistentNotesView were replaced by TaskNotesPagerView
+// (see TaskNotesPagerView.swift), which browses notes across a repeat task's
+// recent occurrences instead of a single task in isolation.

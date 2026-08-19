@@ -55,6 +55,7 @@ struct ProjectDetailView: View {
     @State private var showDeleteActivityConfirm = false
     @State private var entryToDelete: ProjectTimeEntry?
     @State private var showDeleteEntryConfirm = false
+    @State private var entryToEdit: ProjectTimeEntry?
     @State private var pdfURL: URL?
     @State private var showShareSheet = false
 
@@ -79,6 +80,10 @@ struct ProjectDetailView: View {
 
     var body: some View {
         List {
+            Section("Timer") {
+                ProjectTimerWidgetView(project: project)
+            }
+
             Section {
                 DateRangeNavigatorView(range: rangeBinding)
                 HStack {
@@ -143,6 +148,12 @@ struct ProjectDetailView: View {
                                             } label: {
                                                 Label("Delete", systemImage: "trash")
                                             }
+                                            Button {
+                                                entryToEdit = entry
+                                            } label: {
+                                                Label("Edit", systemImage: "pencil")
+                                            }
+                                            .tint(.blue)
                                         }
                                     }
                                 } label: {
@@ -174,6 +185,12 @@ struct ProjectDetailView: View {
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                Button {
+                                    entryToEdit = entry
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .tint(.blue)
                             }
                         }
                     } label: {
@@ -222,6 +239,9 @@ struct ProjectDetailView: View {
         }
         .sheet(item: $activityToEdit) { activity in
             AddActivityView(project: project, activity: activity)
+        }
+        .sheet(item: $entryToEdit) { entry in
+            AddTimeEntryView(entry: entry)
         }
         .popover(item: $activityForNotePreview) { activity in
             Text(activity.notes ?? "")

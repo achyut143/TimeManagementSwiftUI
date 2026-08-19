@@ -9,6 +9,10 @@ struct LogChartTaskTimeView: View {
     @Query(sort: \Project.createdAt, order: .reverse) private var projects: [Project]
 
     let taskName: String
+    /// Called with the minutes actually saved, after the ProjectTimeEntry is committed —
+    /// lets the caller record that this task's time has been logged (e.g. the
+    /// project-log marker written back into the daily notes for "By Task" bars).
+    var onLogged: ((Double) -> Void)? = nil
 
     @State private var selectedProject: Project?
     @State private var durationText: String
@@ -16,10 +20,11 @@ struct LogChartTaskTimeView: View {
     @State private var date: Date
     @State private var showInvalidDuration = false
 
-    init(taskName: String, defaultMinutes: Int, date: Date) {
+    init(taskName: String, defaultMinutes: Int, date: Date, defaultNote: String? = nil, onLogged: ((Double) -> Void)? = nil) {
         self.taskName = taskName
+        self.onLogged = onLogged
         _durationText = State(initialValue: DurationInput.string(from: Double(defaultMinutes)))
-        _note = State(initialValue: taskName)
+        _note = State(initialValue: defaultNote ?? taskName)
         _date = State(initialValue: date)
     }
 
@@ -81,6 +86,7 @@ struct LogChartTaskTimeView: View {
         let entry = ProjectTimeEntry(project: project, durationMinutes: minutes, date: date, note: note)
         modelContext.insert(entry)
         try? modelContext.save()
+        onLogged?(minutes)
         dismiss()
     }
 }

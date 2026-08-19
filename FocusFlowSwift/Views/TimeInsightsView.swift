@@ -21,6 +21,7 @@ struct TimeInsightsView: View {
     @Query(sort: \Project.createdAt, order: .reverse) private var projects: [Project]
     let range: DateRange
     var isDark: Bool = false
+    var onSelect: ((Project) -> Void)? = nil
 
     // Local shift override so the < > navigator can move the window without a live
     // binding back to the caller; resets whenever the caller passes a new `range`.
@@ -454,6 +455,10 @@ struct TimeInsightsView: View {
             .foregroundColor(goalStatus == .none ? (isDark ? .white.opacity(0.4) : .secondary) : goalStatus.color)
         }
         .font(.caption)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let project = slice.project { onSelect?(project) }
+        }
     }
 
     private func emptyLabel(_ text: String) -> some View {

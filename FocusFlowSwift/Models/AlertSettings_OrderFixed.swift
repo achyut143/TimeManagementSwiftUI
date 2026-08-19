@@ -382,6 +382,7 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
     
     private func playSound() {
+        SpeechManager.shared.vibrateIfEnabled()
         // Use mixWithOthers option to allow speech to play alongside other audio (like podcasts)
         try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
@@ -426,6 +427,7 @@ class AlertSettings: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
     
     private func playWorkIntervalSound() {
+        SpeechManager.shared.vibrateIfEnabled()
         // Only speak if custom work text is provided
         guard !workIntervalText.trimmingCharacters(in: .whitespaces).isEmpty else {
             return

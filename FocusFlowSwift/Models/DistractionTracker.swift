@@ -10,6 +10,7 @@ class DistractionTracker: ObservableObject {
     private let exitTimeKey    = "DistractionTracker.pendingExitTime"
     private let exitKeyKey     = "DistractionTracker.pendingExitKey"
     private let exitScheduleKey = "DistractionTracker.pendingExitSchedule"
+    private let whitelistKey   = "DistractionTracker.taskWhitelist"
 
     private let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -68,6 +69,39 @@ class DistractionTracker: ObservableObject {
         "\(dateFormatter.string(from: date))|\(startMin)|\(desc)"
     }
 
+    // MARK: - Whitelist
+    // Comma-separated task names. Empty means "track everything" (the original,
+    // unfiltered behavior). Centralized here — rather than in any one view — so every
+    // consumer of this tracker (Daily Notes, Focus Mode, the schedule generator, etc.)
+    // is automatically consistent about which tasks get tracked.
+
+    var whitelistRaw: String {
+        get { UserDefaults.standard.string(forKey: whitelistKey) ?? "" }
+        set {
+            UserDefaults.standard.set(newValue, forKey: whitelistKey)
+            DispatchQueue.main.async { self.objectWillChange.send() }
+        }
+    }
+
+    private var whitelist: Set<String> {
+        Set(whitelistRaw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty })
+    }
+
+    /// Strips parenthetical detail so "work (office)" is treated as "work".
+    private func baseTaskName(_ name: String) -> String {
+        name.replacingOccurrences(of: #"\s*\([^()]*\)"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    func isTracked(_ taskName: String) -> Bool {
+        let list = whitelist
+        guard !list.isEmpty else { return true }
+        return list.contains(baseTaskName(taskName).lowercased())
+    }
+
     // MARK: - Count API
 
     func increment(date: Date, startMin: Int, desc: String) {
@@ -97,6 +131,19 @@ class DistractionTracker: ObservableObject {
 
     func duration(date: Date, startMin: Int, desc: String) -> TimeInterval {
         durations[makeKey(date: date, startMin: startMin, desc: desc)] ?? 0
+    }
+
+    /// Directly overwrites the stored duration for a slot (manual edit from the task
+    /// sheet), leaving its distraction count untouched.
+    func setDuration(date: Date, startMin: Int, desc: String, seconds: TimeInterval) {
+        var d = durations
+        let k = makeKey(date: date, startMin: startMin, desc: desc)
+        if seconds > 0 {
+            d[k] = seconds
+        } else {
+            d.removeValue(forKey: k)
+        }
+        durations = d
     }
 
     func durationByTitle(date: Date, title: String) -> TimeInterval {
@@ -135,11 +182,15 @@ class DistractionTracker: ObservableObject {
 
     /// Call when the user leaves DailyNotes or backgrounds the app.
     /// `schedule` is the full non-struck task list so that on return we can split time across boundaries.
+    /// No-ops entirely if `desc` isn't whitelisted; non-whitelisted entries are also
+    /// dropped from `schedule` so they can never get swept in as a "subsequent task"
+    /// during a long absence either.
     func recordExit(date: Date, startMin: Int, desc: String,
                     schedule: [(startMin: Int, endMin: Int, desc: String)]) {
+        guard isTracked(desc) else { return }
         pendingExitTime     = Date()
         pendingExitKey      = makeKey(date: date, startMin: startMin, desc: desc)
-        pendingExitSchedule = schedule
+        pendingExitSchedule = schedule.filter { isTracked($0.desc) }
     }
 
     /// Call when the user returns to DailyNotes or the app comes to foreground.
@@ -230,11 +281,21 @@ class DistractionTracker: ObservableObject {
 
     // MARK: - Day totals
 
-    /// Returns (totalCount, totalSeconds) summed across ALL tasks on the given date.
+    /// Returns (totalCount, totalSeconds) summed across every WHITELISTED task on the
+    /// given date (or every task, if the whitelist is empty). Filtering here — not just
+    /// at recordExit — also protects against stale data left over from before a
+    /// whitelist was set, or from recalculateFromNotes re-syncing straight off markers
+    /// already embedded in the notes text.
     func dayTotals(date: Date) -> (count: Int, seconds: TimeInterval) {
         let prefix = "\(dateFormatter.string(from: date))|"
-        let totalCount = counts.filter { $0.key.hasPrefix(prefix) }.values.reduce(0, +)
-        let totalSecs  = durations.filter { $0.key.hasPrefix(prefix) }.values.reduce(0, +)
+        func matches(_ key: String) -> Bool {
+            guard key.hasPrefix(prefix) else { return false }
+            let parts = key.components(separatedBy: "|")
+            guard parts.count >= 3 else { return false }
+            return isTracked(parts[2])
+        }
+        let totalCount = counts.filter { matches($0.key) }.values.reduce(0, +)
+        let totalSecs  = durations.filter { matches($0.key) }.values.reduce(0, +)
         return (totalCount, totalSecs)
     }
 

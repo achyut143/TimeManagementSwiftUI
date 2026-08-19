@@ -62,6 +62,9 @@ class Project {
     @Relationship(deleteRule: .cascade, inverse: \ProjectTimeEntry.project)
     var directTimeEntries: [ProjectTimeEntry] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \ProjectTimer.project)
+    var timer: ProjectTimer?
+
     init(name: String, projectDescription: String = "") {
         self.name = name
         self.projectDescription = projectDescription

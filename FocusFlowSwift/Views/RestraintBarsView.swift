@@ -4,6 +4,7 @@ import SwiftData
 struct RestraintBarsView: View {
     @Query(filter: #Predicate<Restraint> { $0.isActive }) private var restraints: [Restraint]
     let isDark: Bool
+    var onSelect: ((Restraint) -> Void)? = nil
 
     private var todayRestraints: [Restraint] {
         restraints.filter { !$0.timeWindows.isEmpty && $0.showInFocusWidget }
@@ -67,6 +68,8 @@ struct RestraintBarsView: View {
                     }
                     ForEach(todayRestraints) { r in
                         restraintBar(r, at: now)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onSelect?(r) }
                     }
                 }
             }

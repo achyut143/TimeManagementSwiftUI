@@ -7,8 +7,67 @@ struct ProjectGoalsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Project.createdAt, order: .reverse) private var projects: [Project]
 
+    private let dayCounts = [1, 7, 10, 15, 30]
+
+    private var projectsWithGoals: [Project] {
+        projects.filter { $0.targetPercent != nil }
+    }
+
+    /// A target percent is "% of a full day" (see DateRange.elapsedMinutes — every day,
+    /// including today, counts as a full 24h), so minutes over N days = target% × 24h × N.
+    private func targetMinutes(for project: Project, days: Int) -> Double {
+        (project.targetPercent ?? 0) / 100 * 24 * 60 * Double(days)
+    }
+
+    private func totalMinutes(days: Int) -> Double {
+        projectsWithGoals.reduce(0) { $0 + targetMinutes(for: $1, days: days) }
+    }
+
     var body: some View {
         List {
+            if !projectsWithGoals.isEmpty {
+                Section("Target Hours") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Grid(horizontalSpacing: 14, verticalSpacing: 8) {
+                            GridRow {
+                                Text("Project")
+                                    .gridColumnAlignment(.leading)
+                                ForEach(dayCounts, id: \.self) { d in
+                                    Text("\(d)d")
+                                        .gridColumnAlignment(.trailing)
+                                }
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                            Divider().gridCellColumns(dayCounts.count + 1)
+
+                            ForEach(projectsWithGoals) { project in
+                                GridRow {
+                                    Text(project.name)
+                                        .lineLimit(1)
+                                    ForEach(dayCounts, id: \.self) { d in
+                                        Text(DurationInput.string(from: targetMinutes(for: project, days: d)))
+                                    }
+                                }
+                                .font(.caption)
+                            }
+
+                            Divider().gridCellColumns(dayCounts.count + 1)
+
+                            GridRow {
+                                Text("Total")
+                                ForEach(dayCounts, id: \.self) { d in
+                                    Text(DurationInput.string(from: totalMinutes(days: d)))
+                                }
+                            }
+                            .font(.caption.weight(.bold))
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
             if projects.isEmpty {
                 Section {
                     Text("No projects yet")
@@ -26,7 +85,7 @@ struct ProjectGoalsView: View {
                         .pickerStyle(.segmented)
 
                         if let type = project.goalType {
-                            Stepper(value: targetBinding(project), in: 0...100, step: 5) {
+                            Stepper(value: targetBinding(project), in: 0...100, step: 1) {
                                 HStack {
                                     Text("Target")
                                     Spacer()

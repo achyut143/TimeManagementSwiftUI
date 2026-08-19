@@ -24,6 +24,24 @@ struct MigrationWrapper<Content: View>: View {
                     hasMigrated = true
                 }
             }
+            // Any project timer left running when the app is backgrounded or
+            // killed gets paused here, so its elapsed time never silently
+            // includes time the app wasn't actually running.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                pauseRunningProjectTimers()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+                pauseRunningProjectTimers()
+            }
+    }
+
+    private func pauseRunningProjectTimers() {
+        let descriptor = FetchDescriptor<ProjectTimer>(predicate: #Predicate<ProjectTimer> { $0.runningSince != nil })
+        guard let running = try? modelContext.fetch(descriptor), !running.isEmpty else { return }
+        for timer in running {
+            timer.pause()
+        }
+        try? modelContext.save()
     }
 }
 
@@ -70,7 +88,8 @@ struct FocusFlowSwiftApp: App {
             AlertInstance.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self,
             HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self,
             Book.self, BookQuote.self, ScheduleTemplate.self, TaskOKR.self, TaskInsight.self,
-            Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self
+            Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self,
+            ProjectTimer.self
         ]
         // Restraints live in a separate store so schema changes never touch existing data.
         let mainConfig = ModelConfiguration(schema: Schema(mainTypes))

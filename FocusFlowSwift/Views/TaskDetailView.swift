@@ -136,20 +136,7 @@ struct TaskDetailView: View {
                 }
             }
             
-            if let persistentNotes = task.persistentNotes, !persistentNotes.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Persistent Notes")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    
-                    Text(persistentNotes)
-                        .padding()
-                        .background(Color.purple.opacity(0.1))
-                        .cornerRadius(8)
-                }
-            }
-            
-            if (task.notes?.isEmpty ?? true) && (task.persistentNotes?.isEmpty ?? true) {
+            if (task.notes?.isEmpty ?? true) {
                 Text("No notes added")
                     .foregroundStyle(.secondary)
                     .italic()

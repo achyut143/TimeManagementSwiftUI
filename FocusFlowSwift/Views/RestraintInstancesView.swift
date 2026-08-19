@@ -132,18 +132,26 @@ private struct InstanceRowCell: View {
     }()
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(Self.dateFmt.string(from: row.date))
-                    .font(.subheadline)
-                Text(windowTimeString)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Self.dateFmt.string(from: row.date))
+                        .font(.subheadline)
+                    Text(windowTimeString)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 3) {
+                    passFailBadge
+                    usageLabels
+                }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 3) {
-                passFailBadge
-                usageLabels
+            if let rec = row.record, !rec.notes.isEmpty {
+                Text(rec.notes)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
             }
         }
         .padding(.vertical, 4)
