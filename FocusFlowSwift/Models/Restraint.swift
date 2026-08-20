@@ -18,6 +18,9 @@ struct RestraintTimeWindowInfo: Codable, Identifiable {
     var id: UUID = UUID()
     var hour: Int
     var minute: Int
+    // Per-window award override; nil = use the restraint's default award.
+    // Optional so existing encoded windows (with no such key) decode as nil.
+    var awardOverride: Double? = nil
 
     var timeString: String {
         let h = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour)
@@ -28,6 +31,9 @@ struct RestraintTimeWindowInfo: Codable, Identifiable {
 
 @Model
 class Restraint {
+    // Stable identity for notification scheduling etc. Default-generated so
+    // existing rows (created before this field existed) just get a fresh one.
+    var id: UUID = UUID()
     var name: String
     var weekdays: [Int]         // empty = every day; 1=Sun…7=Sat
     var timeWindowsData: Data   // JSON-encoded [RestraintTimeWindowInfo] — these are RELEASE times
@@ -40,6 +46,9 @@ class Restraint {
     var colorName: String = "blue"          // default keeps existing records valid
     var iconName: String = "hand.raised.fill"
     var showInFocusWidget: Bool = true      // default true keeps existing restraints visible
+    // If true, an unused award from the most recent resolved window carries
+    // into the next one. Default false = unchanged behavior for existing restraints.
+    var rolloverEnabled: Bool = false
 
     @Relationship(deleteRule: .cascade, inverse: \RestraintInstance.restraint)
     var instances: [RestraintInstance] = []
@@ -89,6 +98,88 @@ class Restraint {
 
     var effectiveLimitType: RestraintLimitType {
         RestraintLimitType(rawValue: limitType) ?? .duration
+    }
+
+    // A restraint with no release windows is tracked as pure daily abstinence
+    // (one pass/fail per scheduled day) instead of window-by-window release.
+    var isAbstinence: Bool { timeWindows.isEmpty }
+
+    // The award for a specific window: its own override if set, else the
+    // restraint's default.
+    func effectiveAward(for window: RestraintTimeWindowInfo) -> Double {
+        if let override = window.awardOverride { return override }
+        return effectiveLimitType == .duration ? Double(awardedMinutes) : quantityLimit
+    }
+
+    // Unused award carried in from the single most recent *resolved* (not
+    // pending) prior instance — intentionally a one-hop carry, not a deep
+    // ledger, to keep this predictable. 0 when rollover is off or there's
+    // nothing prior to carry from.
+    func rolloverIntoWindow(hour: Int, minute: Int, on date: Date) -> Double {
+        guard rolloverEnabled else { return 0 }
+        let cal = Calendar.current
+        var targetComps = cal.dateComponents([.year, .month, .day], from: date)
+        targetComps.hour = hour
+        targetComps.minute = minute
+        guard let targetDate = cal.date(from: targetComps) else { return 0 }
+
+        let priorCandidates: [(RestraintInstance, Date)] = instances.compactMap { inst in
+            guard !inst.isPending else { return nil }
+            var c = cal.dateComponents([.year, .month, .day], from: inst.date)
+            c.hour = inst.windowHour
+            c.minute = inst.windowMinute
+            guard let d = cal.date(from: c), d < targetDate else { return nil }
+            return (inst, d)
+        }
+        guard let (prior, _) = priorCandidates.max(by: { $0.1 < $1.1 }) else { return 0 }
+        guard let priorWindow = timeWindows.first(where: { $0.hour == prior.windowHour && $0.minute == prior.windowMinute }) else { return 0 }
+        let leftover = effectiveAward(for: priorWindow) - prior.awardedUsed
+        return max(0, leftover)
+    }
+
+    // Consecutive scheduled days/windows resolved as Pass, walking back from
+    // the most recently *fully resolved* day (today only counts once all its
+    // windows have actually happened). Abstinence restraints use their single
+    // daily record instead of a per-window array.
+    func currentPassStreak(asOf date: Date = Date()) -> Int {
+        let cal = Calendar.current
+        var day = cal.startOfDay(for: date)
+
+        if isScheduledOn(date: day) {
+            let windowsToCheck = isAbstinence ? [RestraintTimeWindowInfo(hour: 23, minute: 59)] : timeWindows
+            let allWindowsPast = windowsToCheck.allSatisfy { w in
+                var c = cal.dateComponents([.year, .month, .day], from: day)
+                c.hour = w.hour
+                c.minute = w.minute
+                guard let wd = cal.date(from: c) else { return true }
+                return wd <= date
+            }
+            if !allWindowsPast {
+                day = cal.date(byAdding: .day, value: -1, to: day) ?? day
+            }
+        }
+
+        var streak = 0
+        while streak < 3650 {
+            if isScheduledOn(date: day) {
+                let dayPassed: Bool
+                if isAbstinence {
+                    let rec = instances.first { cal.isDate($0.date, inSameDayAs: day) }
+                    dayPassed = rec?.status == "pass"
+                } else {
+                    guard !timeWindows.isEmpty else { break }
+                    let dayInstances = timeWindows.map { w in
+                        instances.first { cal.isDate($0.date, inSameDayAs: day) && $0.windowHour == w.hour && $0.windowMinute == w.minute }
+                    }
+                    dayPassed = dayInstances.allSatisfy { $0?.status == "pass" }
+                }
+                guard dayPassed else { break }
+                streak += 1
+            }
+            guard let prev = cal.date(byAdding: .day, value: -1, to: day) else { break }
+            day = prev
+        }
+        return streak
     }
 
     var weekdayNames: String {

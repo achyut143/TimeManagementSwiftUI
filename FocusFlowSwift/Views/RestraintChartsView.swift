@@ -76,9 +76,15 @@ struct RestraintChartsView: View {
             let recs = instances(for: r)
             let isDuration = r.effectiveLimitType == .duration
             let unit = isDuration ? "min" : r.quantityUnit
-            let awarded: Double = isDuration
-                ? Double(r.awardedMinutes) * Double(recs.count)
-                : r.quantityLimit * Double(recs.count)
+            // Sum each instance's own window's award (respects per-window
+            // overrides) instead of assuming every instance got the restraint's
+            // flat default.
+            let awarded: Double = recs.reduce(0.0) { total, inst in
+                guard let window = r.timeWindows.first(where: { $0.hour == inst.windowHour && $0.minute == inst.windowMinute }) else {
+                    return total + (isDuration ? Double(r.awardedMinutes) : r.quantityLimit)
+                }
+                return total + r.effectiveAward(for: window)
+            }
             let used = recs.reduce(0.0) { $0 + $1.awardedUsed + $1.overusedAmount }
             return [
                 UsageItem(name: r.name, kind: "Awarded", amount: awarded, unit: unit),

@@ -2,12 +2,19 @@ import SwiftUI
 import SwiftData
 
 struct RestraintInstanceRow: Identifiable {
+    // Sentinel window used for abstinence (zero-tolerance) restraints, which
+    // have one row per day rather than one per release window. -1 can never
+    // collide with a real window time (always 0–23 / 0–59).
+    static let abstinenceHour = -1
+    static let abstinenceMinute = -1
+
     var id: String { "\(Int(date.timeIntervalSince1970))-\(windowHour)-\(windowMinute)" }
     var date: Date
     var windowHour: Int
     var windowMinute: Int
     var record: RestraintInstance?
     var status: String { record?.status ?? "pending" }
+    var isAbstinenceRow: Bool { windowHour == Self.abstinenceHour && windowMinute == Self.abstinenceMinute }
 }
 
 struct RestraintInstancesView: View {
@@ -20,6 +27,11 @@ struct RestraintInstancesView: View {
     @State private var selectedRow: RestraintInstanceRow?
     @State private var showEdit = false
     @State private var showDeleteConfirm = false
+    @State private var showMarkAllPassConfirm = false
+
+    static let dateFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; return f
+    }()
 
     private var generatedRows: [RestraintInstanceRow] {
         let cal = Calendar.current
@@ -29,10 +41,16 @@ struct RestraintInstancesView: View {
         var current = max(requestedStart, createdDay)
         let end = cal.startOfDay(for: endDate)
         let allInstances = restraint.instances
+        // Abstinence restraints (no release windows) get one row per
+        // scheduled day, using a sentinel window time — there's no time of
+        // day to release at, just a daily Pass/Fail.
+        let windows = restraint.isAbstinence
+            ? [RestraintTimeWindowInfo(hour: RestraintInstanceRow.abstinenceHour, minute: RestraintInstanceRow.abstinenceMinute)]
+            : restraint.timeWindows
 
         while current <= end {
             if restraint.isScheduledOn(date: current) {
-                for window in restraint.timeWindows {
+                for window in windows {
                     let wh = window.hour
                     let wm = window.minute
                     let rec = allInstances.first { inst in
@@ -52,6 +70,20 @@ struct RestraintInstancesView: View {
             current = next
         }
         return rows.reversed()
+    }
+
+    private func markAllPendingAsPass() {
+        for row in generatedRows where row.status == "pending" {
+            let rec: RestraintInstance
+            if let existing = row.record {
+                rec = existing
+            } else {
+                rec = RestraintInstance(restraint: restraint, date: row.date, windowHour: row.windowHour, windowMinute: row.windowMinute)
+                modelContext.insert(rec)
+            }
+            rec.status = "pass"
+        }
+        try? modelContext.save()
     }
 
     private var summaryText: String {
@@ -97,6 +129,10 @@ struct RestraintInstancesView: View {
                     Button(action: { showEdit = true }) {
                         Label("Edit Restraint", systemImage: "pencil")
                     }
+                    Button(action: { showMarkAllPassConfirm = true }) {
+                        Label("Mark All Pending as Pass", systemImage: "checkmark.circle")
+                    }
+                    .disabled(!generatedRows.contains { $0.status == "pending" })
                     Button(role: .destructive, action: { showDeleteConfirm = true }) {
                         Label("Delete Restraint", systemImage: "trash")
                     }
@@ -104,6 +140,12 @@ struct RestraintInstancesView: View {
                     Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+        .confirmationDialog("Mark all pending in this range as Pass?", isPresented: $showMarkAllPassConfirm, titleVisibility: .visible) {
+            Button("Mark All Pass") { markAllPendingAsPass() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Applies to every currently-pending instance in \(Self.dateFmt.string(from: startDate)) – \(Self.dateFmt.string(from: endDate)).")
         }
         .sheet(item: $selectedRow) { row in
             LogInstanceView(restraint: restraint, row: row)
@@ -114,6 +156,9 @@ struct RestraintInstancesView: View {
         .confirmationDialog("Delete \"\(restraint.name)\"?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 modelContext.delete(restraint)
+                try? modelContext.save()
+                let remaining = (try? modelContext.fetch(FetchDescriptor<Restraint>())) ?? []
+                RestraintNotificationScheduler.rescheduleAll(from: remaining)
                 dismiss()
             }
             Button("Cancel", role: .cancel) {}
@@ -158,7 +203,7 @@ private struct InstanceRowCell: View {
     }
 
     private var windowTimeString: String {
-        RestraintTimeWindowInfo(hour: row.windowHour, minute: row.windowMinute).timeString
+        row.isAbstinenceRow ? "All day" : RestraintTimeWindowInfo(hour: row.windowHour, minute: row.windowMinute).timeString
     }
 
     private var passFailBadge: some View {
@@ -210,6 +255,15 @@ struct LogInstanceView: View {
         restraint.effectiveLimitType == .duration ? "min" : restraint.quantityUnit
     }
 
+    private var baseAward: Double {
+        guard let window = restraint.timeWindows.first(where: { $0.hour == row.windowHour && $0.minute == row.windowMinute }) else { return 0 }
+        return restraint.effectiveAward(for: window)
+    }
+
+    private var rollover: Double {
+        restraint.rolloverIntoWindow(hour: row.windowHour, minute: row.windowMinute, on: row.date)
+    }
+
     private static let dateFmt: DateFormatter = {
         let f = DateFormatter(); f.dateStyle = .medium; return f
     }()
@@ -221,7 +275,7 @@ struct LogInstanceView: View {
                     HStack {
                         Text(Self.dateFmt.string(from: row.date))
                         Spacer()
-                        Text(RestraintTimeWindowInfo(hour: row.windowHour, minute: row.windowMinute).timeString)
+                        Text(row.isAbstinenceRow ? "All day" : RestraintTimeWindowInfo(hour: row.windowHour, minute: row.windowMinute).timeString)
                             .foregroundColor(.secondary)
                     }
                     .font(.subheadline)
@@ -236,27 +290,38 @@ struct LogInstanceView: View {
                     .pickerStyle(.segmented)
                 }
 
-                Section {
-                    HStack {
-                        Text("Awarded used (\(unit))")
-                        Spacer()
-                        TextField("0", text: $awardedUsed)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
+                if !row.isAbstinenceRow {
+                    Section {
+                        if rollover > 0 {
+                            HStack {
+                                Text("Available today")
+                                Spacer()
+                                Text("\(fmt(baseAward + rollover)) \(unit) (includes \(fmt(rollover)) rolled over)")
+                                    .foregroundColor(.blue)
+                                    .font(.caption)
+                            }
+                        }
+                        HStack {
+                            Text("Awarded used (\(unit))")
+                            Spacer()
+                            TextField("0", text: $awardedUsed)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 80)
+                        }
+                        HStack {
+                            Text("Overused (\(unit))")
+                            Spacer()
+                            TextField("0", text: $overusedAmount)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 80)
+                        }
+                    } header: {
+                        Text("Usage Log")
+                    } footer: {
+                        Text("Logging overuse does not automatically mark this as Failed.")
                     }
-                    HStack {
-                        Text("Overused (\(unit))")
-                        Spacer()
-                        TextField("0", text: $overusedAmount)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
-                    }
-                } header: {
-                    Text("Usage Log")
-                } footer: {
-                    Text("Logging overuse does not automatically mark this as Failed.")
                 }
 
                 Section("Notes") {

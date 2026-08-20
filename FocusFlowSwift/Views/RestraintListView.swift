@@ -9,6 +9,7 @@ struct RestraintListView: View {
     @State private var restraintToEdit: Restraint?
     @State private var restraintToDelete: Restraint?
     @State private var showDeleteConfirm = false
+    @State private var showTrends = false
 
     var body: some View {
         List {
@@ -72,11 +73,18 @@ struct RestraintListView: View {
                         Image(systemName: "chart.bar.fill")
                             .foregroundColor(.indigo)
                     }
+                    Button(action: { showTrends = true }) {
+                        Image(systemName: "chart.xyaxis.line")
+                            .foregroundColor(.indigo)
+                    }
                     Button(action: { showCreate = true }) {
                         Image(systemName: "plus")
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showTrends) {
+            RestraintTrendsView()
         }
         .sheet(isPresented: $showCreate) {
             CreateRestraintView()
@@ -87,6 +95,8 @@ struct RestraintListView: View {
         .confirmationDialog("Delete Restraint?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 if let r = restraintToDelete { modelContext.delete(r) }
+                try? modelContext.save()
+                RestraintNotificationScheduler.rescheduleAll(from: restraints.filter { $0.id != restraintToDelete?.id })
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -115,9 +125,31 @@ private struct RestraintRowView: View {
                 .buttonStyle(.plain)
                 limitBadge
             }
-            Text(restraint.weekdayNames)
-                .font(.caption)
-                .foregroundColor(.secondary)
+            HStack(spacing: 8) {
+                Text(restraint.weekdayNames)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if restraint.isAbstinence {
+                    Text("Zero-Tolerance")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.12))
+                        .foregroundColor(.red)
+                        .clipShape(Capsule())
+                }
+                let streak = restraint.currentPassStreak()
+                if streak > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "flame.fill")
+                        Text("\(streak)")
+                    }
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.orange)
+                }
+            }
             let windows = restraint.timeWindows
             if !windows.isEmpty {
                 Text(windows.map { $0.timeString }.joined(separator: ", "))

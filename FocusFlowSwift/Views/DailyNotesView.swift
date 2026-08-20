@@ -235,6 +235,15 @@ struct DailyNotesView: View {
     @AppStorage("schedule.hideFinishedTasks") private var hideFinishedTasks: Bool = false
     @AppStorage("schedule.showOnlyIncomplete") private var showOnlyIncomplete: Bool = false
     @AppStorage("schedule.autoRecordDistraction") private var autoRecordDistraction: Bool = false
+    // Which half of the day an ambiguous typed time (no AM/PM, no preceding
+    // slot to chain off of — i.e. the first line of the schedule) defaults
+    // to. Every subsequent line still chains forward off the previous one's
+    // end time, rolling through noon/midnight automatically.
+    @AppStorage("schedule.defaultTimePeriodIsPM") private var defaultTimePeriodIsPM: Bool = false
+    @ObservedObject private var awayTimeTracker = AwayTimeTracker.shared
+    @State private var showAwayTimeSettings = false
+    @State private var showAwayTimeTrends = false
+    @State private var showDistractionTrends = false
     @State private var showDistractionWhitelist = false
     @State private var editingTask: EditTaskItem? = nil
     @State private var actualMinutesTarget: ActualMinutesTarget? = nil
@@ -498,6 +507,41 @@ struct DailyNotesView: View {
                 }
 
                 Section("Daily Notes") {
+                    HStack {
+                        Label("Default AM/PM for typed times", systemImage: "clock")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Picker("", selection: $defaultTimePeriodIsPM) {
+                            Text("AM").tag(false)
+                            Text("PM").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 120)
+                    }
+
+                    HStack {
+                        Label("Away today", systemImage: "hourglass")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(AwayTimeTracker.formatted(awayTimeTracker.todaySeconds))
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .monospacedDigit()
+                            .foregroundColor(.orange)
+                        Spacer()
+                        Button(action: { showAwayTimeTrends = true }) {
+                            Image(systemName: "chart.xyaxis.line")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.indigo)
+                        Button(action: { showAwayTimeSettings = true }) {
+                            Image(systemName: "gearshape")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.indigo)
+                    }
+
                     // Toolbar — icon buttons with short labels, always single row
                     HStack(spacing: 6) {
                         toolbarButton(icon: "doc.on.doc.fill",        label: "Templates",  color: .indigo)  { showTemplates       = true }
@@ -514,6 +558,11 @@ struct DailyNotesView: View {
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                         Spacer()
+                        Button(action: { showDistractionTrends = true }) {
+                            Image(systemName: "chart.xyaxis.line")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.indigo)
                         Button(action: { showDistractionWhitelist = true }) {
                             Text("Whitelist")
                                 .font(.caption2)
@@ -817,6 +866,15 @@ struct DailyNotesView: View {
                     get: { distractionTracker.whitelistRaw },
                     set: { distractionTracker.whitelistRaw = $0 }
                 ))
+            }
+            .sheet(isPresented: $showAwayTimeSettings) {
+                AwayTimeSettingsView()
+            }
+            .sheet(isPresented: $showAwayTimeTrends) {
+                AwayTimeTrendsView()
+            }
+            .sheet(isPresented: $showDistractionTrends) {
+                DistractionTrendsView()
             }
             .sheet(item: $restraintDetailTarget) { r in
                 NavigationStack {
@@ -3162,29 +3220,16 @@ struct DailyNotesView: View {
                     finalHours = hours
                 }
             } else {
-                // No previous time - use current time context
-                let now = Date()
-                let calendar = Calendar.current
-                let currentHour = calendar.component(.hour, from: now)
-                
+                // No previous time to chain off (first line of the schedule) —
+                // use the explicit AM/PM default toggle instead of guessing
+                // from the current wall-clock time, which was unreliable
+                // (e.g. planning tomorrow's schedule tonight). Every later
+                // line still chains off this one's end time and rolls through
+                // noon/midnight on its own via the branch above.
                 if hours == 12 {
-                    // 12:XX - determine if noon or midnight based on current time
-                    if currentHour >= 11 && currentHour <= 13 {
-                        finalHours = 12  // Noon
-                    } else if currentHour < 11 {
-                        finalHours = 12  // Assume noon (upcoming)
-                    } else {
-                        finalHours = 0   // Midnight (next day)
-                    }
+                    finalHours = defaultTimePeriodIsPM ? 12 : 0   // noon vs midnight
                 } else if hours < 12 {
-                    // Could be AM or PM - use current time as hint
-                    if currentHour >= 12 {
-                        // Currently PM - assume PM for small hours
-                        finalHours = hours + 12
-                    } else {
-                        // Currently AM - assume AM
-                        finalHours = hours
-                    }
+                    finalHours = defaultTimePeriodIsPM ? hours + 12 : hours
                 } else {
                     // Already 24-hour format
                     finalHours = hours
@@ -4561,6 +4606,15 @@ struct DailyNotesView: View {
         if !wasStruck {
             let durationMinutes = endMin - startMin
             awardDailyNoteCredits(blockDescription: desc, durationMinutes: durationMinutes)
+
+            // If this task had recorded distraction time, auto-fill actual
+            // worked minutes as allocated duration minus that distraction time.
+            let distractionSeconds = distractionTracker.duration(date: selectedDate, startMin: startMin, desc: desc)
+            if distractionSeconds > 0 {
+                let distractionMinutes = Int((distractionSeconds / 60).rounded())
+                let actual = max(0, durationMinutes - distractionMinutes)
+                setActualMinutes(startMin: startMin, endMin: endMin, desc: desc, minutes: actual)
+            }
         }
     }
 

@@ -9,13 +9,14 @@ import WidgetKit
 // Wrapper view to handle migration with access to modelContext
 struct MigrationWrapper<Content: View>: View {
     @Environment(\.modelContext) private var modelContext
+    @Query private var restraints: [Restraint]
     @State private var hasMigrated = false
     let content: Content
-    
+
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
     }
-    
+
     var body: some View {
         content
             .onAppear {
@@ -23,12 +24,22 @@ struct MigrationWrapper<Content: View>: View {
                     TaskAttachmentMigration.migrateAttachmentsIfNeeded(modelContext: modelContext)
                     hasMigrated = true
                 }
+                RestraintMaintenance.resolveStalePending(restraints: restraints, modelContext: modelContext)
+                RestraintNotificationScheduler.rescheduleAll(from: restraints)
+                // Settles any away-time exit left pending from a force-quit
+                // while the app was backgrounded, up to right now.
+                AwayTimeTracker.shared.recordReturn()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                RestraintMaintenance.resolveStalePending(restraints: restraints, modelContext: modelContext)
+                AwayTimeTracker.shared.recordReturn()
             }
             // Any project timer left running when the app is backgrounded or
             // killed gets paused here, so its elapsed time never silently
             // includes time the app wasn't actually running.
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 pauseRunningProjectTimers()
+                AwayTimeTracker.shared.recordExit()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                 pauseRunningProjectTimers()

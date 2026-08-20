@@ -23,6 +23,8 @@ struct CreateRestraintView: View {
     @State private var colorName: String = "blue"
     @State private var iconName: String = "hand.raised.fill"
     @State private var showInFocusWidget: Bool = true
+    @State private var isAbstinence: Bool = false
+    @State private var rolloverEnabled: Bool = false
 
     private let weekdayLabels: [(Int, String)] = [
         (1,"Sun"),(2,"Mon"),(3,"Tue"),(4,"Wed"),(5,"Thu"),(6,"Fri"),(7,"Sat")
@@ -49,7 +51,7 @@ struct CreateRestraintView: View {
     }
 
     private var canSave: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty && !releaseWindows.isEmpty
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && (isAbstinence || !releaseWindows.isEmpty)
     }
 
     var body: some View {
@@ -65,6 +67,12 @@ struct CreateRestraintView: View {
                 }
 
                 Section {
+                    Toggle("Zero-Tolerance", isOn: $isAbstinence)
+                } footer: {
+                    Text("No release windows — this is a straight daily Pass/Fail (e.g. \"No smoking\") instead of a hold-then-release budget.")
+                }
+
+                Section {
                     Toggle("Show in Focus View widget", isOn: $showInFocusWidget)
                 } footer: {
                     Text("Turn off to hide this restraint's bar from the Focus View restraints widget without deactivating it.")
@@ -74,64 +82,79 @@ struct CreateRestraintView: View {
                     appearanceSection
                 }
 
-                Section {
-                    Picker("Type", selection: $limitType) {
-                        ForEach(RestraintLimitType.allCases, id: \.self) { t in
-                            Text(t.displayName).tag(t)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if limitType == .duration {
-                        Stepper("Awarded: \(awardedMinutes) min per window", value: $awardedMinutes, in: 1...480, step: 5)
-                    } else {
-                        HStack {
-                            Text("Awarded amount")
-                            Spacer()
-                            TextField("700", text: $quantityLimit)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 80)
-                            TextField("kcal", text: $quantityUnit)
-                                .frame(width: 60)
-                        }
-                    }
-                } header: {
-                    Text("Award per Release Window")
-                } footer: {
-                    Text("You are restrained at all times. At each release window you earn this amount.")
-                }
-
-                Section {
-                    ForEach(releaseWindows.indices, id: \.self) { idx in
-                        HStack {
-                            DatePicker(
-                                "",
-                                selection: windowBinding(for: idx),
-                                displayedComponents: .hourAndMinute
-                            )
-                            .labelsHidden()
-                            Spacer()
-                            Text(releaseWindows[idx].timeString)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Button(action: { releaseWindows.remove(at: idx) }) {
-                                Image(systemName: "minus.circle.fill")
-                                    .foregroundColor(.red)
+                if !isAbstinence {
+                    Section {
+                        Picker("Type", selection: $limitType) {
+                            ForEach(RestraintLimitType.allCases, id: \.self) { t in
+                                Text(t.displayName).tag(t)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .pickerStyle(.segmented)
+
+                        if limitType == .duration {
+                            Stepper("Awarded: \(awardedMinutes) min per window", value: $awardedMinutes, in: 1...480, step: 5)
+                        } else {
+                            HStack {
+                                Text("Awarded amount")
+                                Spacer()
+                                TextField("700", text: $quantityLimit)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 80)
+                                TextField("kcal", text: $quantityUnit)
+                                    .frame(width: 60)
+                            }
+                        }
+
+                        Toggle("Roll over unused award", isOn: $rolloverEnabled)
+                    } header: {
+                        Text("Award per Release Window")
+                    } footer: {
+                        Text("You are restrained at all times. At each release window you earn this amount. Rollover carries whatever's left unused from the most recent window into the next one.")
                     }
 
-                    DatePicker("New release time", selection: $newWindowTime, displayedComponents: .hourAndMinute)
+                    Section {
+                        ForEach(releaseWindows.indices, id: \.self) { idx in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    DatePicker(
+                                        "",
+                                        selection: windowBinding(for: idx),
+                                        displayedComponents: .hourAndMinute
+                                    )
+                                    .labelsHidden()
+                                    Spacer()
+                                    Text(releaseWindows[idx].timeString)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Button(action: { releaseWindows.remove(at: idx) }) {
+                                        Image(systemName: "minus.circle.fill")
+                                            .foregroundColor(.red)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                HStack {
+                                    Text("Override award")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    TextField("default: \(defaultAwardLabel)", text: overrideBinding(for: idx))
+                                        .keyboardType(.decimalPad)
+                                        .font(.caption)
+                                        .frame(width: 100)
+                                }
+                            }
+                        }
 
-                    Button(action: addWindow) {
-                        Label("Add Release Window", systemImage: "plus.circle")
+                        DatePicker("New release time", selection: $newWindowTime, displayedComponents: .hourAndMinute)
+
+                        Button(action: addWindow) {
+                            Label("Add Release Window", systemImage: "plus.circle")
+                        }
+                    } header: {
+                        Text("Release Windows")
+                    } footer: {
+                        Text("The times each day when you're released from the restraint. Leave a window's override blank to use the default award above.")
                     }
-                } header: {
-                    Text("Release Windows")
-                } footer: {
-                    Text("The times each day when you're released from the restraint.")
                 }
             }
             .navigationTitle(restraint == nil ? "New Restraint" : "Edit Restraint")
@@ -235,6 +258,23 @@ struct CreateRestraintView: View {
         )
     }
 
+    private var defaultAwardLabel: String {
+        limitType == .duration ? "\(awardedMinutes) min" : "\(quantityLimit.isEmpty ? "0" : quantityLimit) \(quantityUnit)"
+    }
+
+    private func overrideBinding(for idx: Int) -> Binding<String> {
+        Binding(
+            get: {
+                guard let v = releaseWindows[idx].awardOverride else { return "" }
+                return v == v.rounded() ? "\(Int(v))" : String(format: "%g", v)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                releaseWindows[idx].awardOverride = trimmed.isEmpty ? nil : Double(trimmed)
+            }
+        )
+    }
+
     private func toggleWeekday(_ num: Int) {
         if selectedWeekdays.contains(num) { selectedWeekdays.remove(num) }
         else { selectedWeekdays.insert(num) }
@@ -261,11 +301,14 @@ struct CreateRestraintView: View {
         colorName = r.colorName
         iconName = r.iconName
         showInFocusWidget = r.showInFocusWidget
+        isAbstinence = r.isAbstinence
+        rolloverEnabled = r.rolloverEnabled
     }
 
     private func save() {
         let days = everyDay ? [] : Array(selectedWeekdays)
         let qLimit = Double(quantityLimit) ?? 0
+        let windows = isAbstinence ? [] : releaseWindows
         if let r = restraint {
             r.name = name.trimmingCharacters(in: .whitespaces)
             r.weekdays = days
@@ -273,10 +316,11 @@ struct CreateRestraintView: View {
             r.awardedMinutes = awardedMinutes
             r.quantityLimit = qLimit
             r.quantityUnit = quantityUnit
-            r.timeWindows = releaseWindows
+            r.timeWindows = windows
             r.colorName = colorName
             r.iconName = iconName
             r.showInFocusWidget = showInFocusWidget
+            r.rolloverEnabled = rolloverEnabled
         } else {
             let r = Restraint(
                 name: name.trimmingCharacters(in: .whitespaces),
@@ -285,12 +329,19 @@ struct CreateRestraintView: View {
                 awardedMinutes: awardedMinutes,
                 quantityLimit: qLimit,
                 quantityUnit: quantityUnit,
-                timeWindows: releaseWindows,
+                timeWindows: windows,
                 colorName: colorName,
                 iconName: iconName
             )
             r.showInFocusWidget = showInFocusWidget
+            r.rolloverEnabled = rolloverEnabled
             modelContext.insert(r)
+        }
+        try? modelContext.save()
+
+        let descriptor = FetchDescriptor<Restraint>()
+        if let all = try? modelContext.fetch(descriptor) {
+            RestraintNotificationScheduler.rescheduleAll(from: all)
         }
         dismiss()
     }
