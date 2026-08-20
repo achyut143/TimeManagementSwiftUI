@@ -117,6 +117,7 @@ struct ProjectListView: View {
     @State private var projectToEdit: Project?
     @State private var projectToDelete: Project?
     @State private var showDeleteConfirm = false
+    @State private var showTrends = false
 
     var body: some View {
         List {
@@ -207,11 +208,18 @@ struct ProjectListView: View {
                         Image(systemName: "target")
                             .foregroundColor(.indigo)
                     }
+                    Button(action: { showTrends = true }) {
+                        Image(systemName: "chart.xyaxis.line")
+                            .foregroundColor(.indigo)
+                    }
                     Button(action: { showCreate = true }) {
                         Image(systemName: "plus")
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showTrends) {
+            ProjectTrendsView()
         }
         .sheet(isPresented: $showCreate) {
             CreateProjectView()

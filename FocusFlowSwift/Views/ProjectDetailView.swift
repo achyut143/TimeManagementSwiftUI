@@ -48,6 +48,7 @@ struct ProjectDetailView: View {
     @State private var showAddActivity = false
     @State private var showAddProjectTime = false
     @State private var showEditProject = false
+    @State private var showVirtues = false
     @State private var activityForNewEntry: ProjectActivity?
     @State private var activityForNotePreview: ProjectActivity?
     @State private var activityToEdit: ProjectActivity?
@@ -103,6 +104,11 @@ struct ProjectDetailView: View {
                     showAddProjectTime = true
                 } label: {
                     Label("Add Project Time", systemImage: "clock.badge.plus")
+                }
+                Button {
+                    showVirtues = true
+                } label: {
+                    Label(project.virtues.isEmpty ? "Add Virtues" : "Virtues (\(project.virtues.count))", systemImage: "star.circle")
                 }
             }
 
@@ -233,6 +239,9 @@ struct ProjectDetailView: View {
         }
         .sheet(isPresented: $showEditProject) {
             CreateProjectView(project: project)
+        }
+        .sheet(isPresented: $showVirtues) {
+            ProjectVirtuesView(project: project)
         }
         .sheet(item: $activityForNewEntry) { activity in
             AddTimeEntryView(activity: activity)

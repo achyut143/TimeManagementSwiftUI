@@ -49,15 +49,34 @@ struct TaskTableView: View {
         case notCompleted = "Not Completed"
     }
 
+    // The date range currently in effect (Today toggle or the from/to pickers),
+    // shared by filteredTasks and allTags so the tag/virtue chip list always
+    // matches what's actually being shown, not the whole task history.
+    private var effectiveDateRange: (start: Date, end: Date) {
+        let calendar = Calendar.current
+        if showTodayOnly {
+            let start = calendar.startOfDay(for: Date())
+            return (start, calendar.date(byAdding: .day, value: 1, to: start)!)
+        } else {
+            let start = calendar.startOfDay(for: startDate)
+            return (start, calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!)
+        }
+    }
+
+    // "Tags" here are Task.virtues, not free-text tags — and restricted to
+    // tasks within the current date range, so the chip list only ever offers
+    // virtues that actually appear in what's currently filtered in.
     var allTags: [String] {
-        var tagSet = Set<String>()
+        let (rangeStart, rangeEnd) = effectiveDateRange
+        var displayByKey: [String: String] = [:] // lowercased -> original casing to display
         for task in tasks {
-            let parts = task.taskDescription.split(separator: ",")
-            for part in parts {
-                tagSet.insert(part.trimmingCharacters(in: .whitespaces).lowercased())
+            guard let taskDate = task.date, taskDate >= rangeStart, taskDate < rangeEnd else { continue }
+            for virtue in task.virtues {
+                let key = virtue.lowercased()
+                if displayByKey[key] == nil { displayByKey[key] = virtue }
             }
         }
-        var tags = tagSet.sorted()
+        var tags = displayByKey.values.sorted()
         tags.insert("No Tag", at: 0)
         return tags
     }
@@ -71,26 +90,16 @@ struct TaskTableView: View {
         }
     }
 
-    private func taskMatchesTags(description: String) -> Bool {
+    private func taskMatchesTags(virtues: [String]) -> Bool {
         guard !selectedTags.isEmpty else { return true }
-        let taskTags = Set(description.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
-        let hasNoTag = description.trimmingCharacters(in: .whitespaces).isEmpty
-        return !taskTags.isDisjoint(with: selectedTags) || (selectedTags.contains("No Tag") && hasNoTag)
+        let taskVirtueKeys = Set(virtues.map { $0.lowercased() })
+        let selectedKeys = Set(selectedTags.map { $0.lowercased() })
+        let hasNoTag = virtues.isEmpty
+        return !taskVirtueKeys.isDisjoint(with: selectedKeys) || (selectedKeys.contains("no tag") && hasNoTag)
     }
 
     var filteredTasks: [Task] {
-        let calendar = Calendar.current
-        let effectiveStart: Date
-        let effectiveEnd: Date
-        if showTodayOnly {
-            effectiveStart = calendar.startOfDay(for: Date())
-            effectiveEnd = calendar.date(byAdding: .day, value: 1, to: effectiveStart)!
-        } else {
-            effectiveStart = calendar.startOfDay(for: startDate)
-            effectiveEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
-        }
-        let rangeStart = effectiveStart
-        let rangeEnd = effectiveEnd
+        let (rangeStart, rangeEnd) = effectiveDateRange
 
         // Pre-compute metrics for habit tasks once — avoids calling calculateMetrics inside the filter (O(n²))
         var completionRateCache: [ObjectIdentifier: Double] = [:]
@@ -109,7 +118,7 @@ struct TaskTableView: View {
             guard !showOnlyWithNotes || (task.notes != nil && !task.notes!.isEmpty) else { return false }
             guard !showOnlyWithAttachments || (task.attachments != nil && !task.attachments!.isEmpty) else { return false }
             guard taskMatchesStatus(completed: task.completed, notCompleted: task.notCompleted) else { return false }
-            guard taskMatchesTags(description: task.taskDescription) else { return false }
+            guard taskMatchesTags(virtues: task.virtues) else { return false }
             if percentageFilter != "all" && task.repeatAgain != nil {
                 let rate = completionRateCache[ObjectIdentifier(task)] ?? 0
                 if percentageFilter == "above" { guard rate >= 85 else { return false } }
@@ -404,6 +413,10 @@ struct TaskTableView: View {
             Toggle("Only tasks with attachments", isOn: $showOnlyWithAttachments)
             
             if !allTags.isEmpty {
+                Text("Virtues")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
                         ForEach(allTags, id: \.self) { tag in
@@ -583,15 +596,14 @@ struct TaskRowView: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                let taskTags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                if !taskTags.isEmpty {
+                if !task.virtues.isEmpty {
                     HStack(spacing: 4) {
-                        ForEach(taskTags, id: \.self) { tag in
-                            Text(tag)
+                        ForEach(task.virtues, id: \.self) { virtue in
+                            Text(virtue)
                                 .font(.caption2)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(.gray.opacity(0.2))
+                                .background(.yellow.opacity(0.2))
                                 .cornerRadius(8)
                         }
                     }

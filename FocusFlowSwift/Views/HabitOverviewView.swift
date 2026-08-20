@@ -33,6 +33,7 @@ struct HabitOverviewView: View {
     @State private var pdfURL: URL?
     @State private var showNoNotesAlert = false
     @State private var noNotesHabitName = ""
+    @State private var showVirtueHabitTrends = false
 
     // MARK: - Performance caches (populated by recomputeAllStats)
     @State private var cachedStats: [String: HabitStats] = [:]
@@ -74,6 +75,15 @@ struct HabitOverviewView: View {
                 }
             }
             .navigationTitle("Habit Overview")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showVirtueHabitTrends = true
+                    } label: {
+                        Image(systemName: "chart.xyaxis.line")
+                    }
+                }
+            }
             .onAppear {
                 loadHabitSettings()
             }
@@ -99,6 +109,9 @@ struct HabitOverviewView: View {
                 if let pdfURL = pdfURL {
                     ShareSheet(items: [pdfURL])
                 }
+            }
+            .sheet(isPresented: $showVirtueHabitTrends) {
+                VirtueHabitTrendsView()
             }
             .alert("No Notes Available", isPresented: $showNoNotesAlert) {
                 Button("OK", role: .cancel) {}

@@ -40,6 +40,7 @@ struct TasksCalendarView: View {
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     @Query(sort: \Goal.name) private var goals: [Goal]
+    @Query private var allSubtasks: [Subtask]
     @State private var selectedGoalForNewTask: Goal?
 
     var body: some View {
@@ -753,7 +754,27 @@ struct TasksCalendarView: View {
                             .clipShape(Capsule())
                     }
                 }
-                
+
+                let taskSubtasks = allSubtasks.filter {
+                    $0.parentTask?.persistentModelID == task.persistentModelID &&
+                    $0.parentSubtask == nil
+                }
+                if !taskSubtasks.isEmpty {
+                    let doneCount = taskSubtasks.filter { $0.completed }.count
+                    HStack(spacing: 1) {
+                        Image(systemName: doneCount == taskSubtasks.count ? "checkmark.circle.fill" : "list.bullet")
+                            .font(.caption2)
+                            .foregroundStyle(.white)
+                        Text("\(doneCount)/\(taskSubtasks.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(doneCount == taskSubtasks.count ? Color.green : Color.indigo)
+                    .clipShape(Capsule())
+                }
+
                 if task.repeatAgain != nil {
                     Image(systemName: "repeat")
                         .font(.caption2)
@@ -1311,7 +1332,8 @@ struct TasksCalendarView: View {
             repeatAgain: task.repeatAgain,
             priority: task.priority,
             elapsedTime: task.elapsedTime,
-            copySubtasks: task.copySubtasks
+            copySubtasks: task.copySubtasks,
+            virtues: task.virtues
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
@@ -1379,7 +1401,8 @@ struct TasksCalendarView: View {
             elapsedTime: task.elapsedTime,
             copySubtasks: task.copySubtasks,
             whyStatement: task.whyStatement,
-            whyStatementPinned: task.whyStatementPinned
+            whyStatementPinned: task.whyStatementPinned,
+            virtues: task.virtues
         )
         newTask.goal = task.goal
 
@@ -1478,6 +1501,7 @@ struct EditTaskView: View {
 
     @State private var title: String
     @State private var description: String
+    @State private var info: String
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var weight: Double
@@ -1494,6 +1518,7 @@ struct EditTaskView: View {
         self.task = task
         _title = State(initialValue: task.title)
         _description = State(initialValue: task.taskDescription)
+        _info = State(initialValue: task.info ?? "")
         _taskDate = State(initialValue: task.date)
         _isUntimed = State(initialValue: task.startTime.isEmpty && task.endTime.isEmpty)
 
@@ -1514,8 +1539,11 @@ struct EditTaskView: View {
         NavigationView {
             Form {
                 TextField("Title", text: $title)
-                TextField("Description", text: $description)
-                
+                TextField("Description (tags, comma separated)", text: $description)
+                Section("Info") {
+                    TextField("Extra context for this task (used by AI, e.g. for virtue suggestions)", text: $info, axis: .vertical)
+                }
+
                 Toggle("Untimed Task", isOn: $isUntimed)
                     .onChange(of: isUntimed) { _, newValue in
                         if !newValue && taskDate == nil {
@@ -1633,7 +1661,9 @@ struct EditTaskView: View {
         
         task.title = title
         task.taskDescription = description
-        
+        let trimmedInfo = info.trimmingCharacters(in: .whitespacesAndNewlines)
+        task.info = trimmedInfo.isEmpty ? nil : trimmedInfo
+
         if isUntimed {
             task.startTime = ""
             task.endTime = ""
@@ -1683,20 +1713,30 @@ struct TaskActionsView: View {
     @State private var showDeleteConfirmation = false
     @State private var showEditDialog = false
     @State private var showNotesDialog = false
+    @State private var showVirtuesDialog = false
     @State private var showTimeSpentDialog = false
     @State private var showFileAttachments = false
     @State private var showSubtasksView = false
     @State private var copiedTask: Task?
     @State private var navigateToHabits = false
-    @State private var showBooksLibrary = false
     @State private var showPartialTimeAlert = false
+    @State private var subtasksAccordionExpanded = true
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
-    
-    private var subtaskCount: Int {
-        return allSubtasks.filter {
+
+    private var topLevelSubtasks: [Subtask] {
+        allSubtasks.filter {
             $0.parentTask?.persistentModelID == task.persistentModelID &&
             $0.parentSubtask == nil
-        }.count
+        }.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private var subtaskCount: Int {
+        topLevelSubtasks.count
+    }
+
+    private func toggleSubtaskCompletion(_ subtask: Subtask) {
+        subtask.completed.toggle()
+        try? modelContext.save()
     }
 
     private func timeToMinutes(_ timeStr: String) -> Int {
@@ -1792,20 +1832,46 @@ struct TaskActionsView: View {
                                 .foregroundStyle(.secondary)
                         }
                         
-                        // Books Quotes Section
-                        VStack(spacing: 6) {
-                            HStack {
-                                Label("Books", systemImage: "books.vertical.fill")
-                                    .font(.caption)
-                                    .foregroundColor(.indigo)
-                                Spacer()
-                                Button(action: { showBooksLibrary = true }) {
-                                    Text("Manage")
+                        // Subtasks Section
+                        DisclosureGroup(isExpanded: $subtasksAccordionExpanded) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if topLevelSubtasks.isEmpty {
+                                    Text("No subtasks yet")
                                         .font(.caption)
-                                        .foregroundColor(.indigo)
+                                        .foregroundStyle(.secondary)
+                                        .italic()
+                                } else {
+                                    ForEach(topLevelSubtasks) { subtask in
+                                        Button {
+                                            toggleSubtaskCompletion(subtask)
+                                        } label: {
+                                            HStack(alignment: .top, spacing: 8) {
+                                                Image(systemName: subtask.completed ? "checkmark.circle.fill" : "circle")
+                                                    .foregroundStyle(subtask.completed ? .green : .secondary)
+                                                Text("•  \(subtask.name)")
+                                                    .strikethrough(subtask.completed)
+                                                    .foregroundStyle(subtask.completed ? .secondary : .primary)
+                                                    .multilineTextAlignment(.leading)
+                                                Spacer()
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
-                            BookQuoteDisplayView()
+                            .padding(.top, 6)
+                        } label: {
+                            HStack {
+                                Label("Subtasks", systemImage: "list.bullet")
+                                    .font(.caption)
+                                    .foregroundColor(.indigo)
+                                if !topLevelSubtasks.isEmpty {
+                                    Text("(\(topLevelSubtasks.filter { $0.completed }.count)/\(topLevelSubtasks.count))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
                         }
                         .padding(.horizontal)
                     }
@@ -1853,6 +1919,10 @@ struct TaskActionsView: View {
                         
                         actionButton("Notes", systemImage: "note.text", color: .orange) {
                             showNotesDialog = true
+                        }
+
+                        actionButton("Virtues", systemImage: "star.circle", color: .yellow) {
+                            showVirtuesDialog = true
                         }
 
                         actionButton("Attach Files", systemImage: "paperclip", color: .brown) {
@@ -1916,6 +1986,9 @@ struct TaskActionsView: View {
         .sheet(isPresented: $showNotesDialog) {
             TaskNotesPagerView(task: task)
         }
+        .sheet(isPresented: $showVirtuesDialog) {
+            TaskVirtuesView(task: task)
+        }
         .sheet(isPresented: $showTimeSpentDialog) {
             TimeSpentEditorView(task: task)
         }
@@ -1929,9 +2002,6 @@ struct TaskActionsView: View {
             NavigationStack {
                 HabitDashboardView(initialHabit: task.title)
             }
-        }
-        .sheet(isPresented: $showBooksLibrary) {
-            BooksView()
         }
     }
     
@@ -2018,7 +2088,8 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             elapsedTime: task.elapsedTime, // Copy elapsed time to new task
             copySubtasks: task.copySubtasks,
             whyStatement: task.whyStatement, // Copy why statement to new task
-            whyStatementPinned: task.whyStatementPinned // Copy pin status
+            whyStatementPinned: task.whyStatementPinned, // Copy pin status
+            virtues: task.virtues
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
@@ -2086,7 +2157,8 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             elapsedTime: task.elapsedTime,
             copySubtasks: task.copySubtasks,
             whyStatement: task.whyStatement, // Copy why statement to new task
-            whyStatementPinned: task.whyStatementPinned // Copy pin status
+            whyStatementPinned: task.whyStatementPinned, // Copy pin status
+            virtues: task.virtues
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal

@@ -65,6 +65,11 @@ class Project {
     @Relationship(deleteRule: .cascade, inverse: \ProjectTimer.project)
     var timer: ProjectTimer?
 
+    // Character virtues this project exercises (e.g. "Discipline", "Patience"),
+    // added manually or via AI suggestion. Default empty array so existing rows
+    // pick this up for free on a lightweight migration — nothing is lost.
+    var virtues: [String] = []
+
     init(name: String, projectDescription: String = "") {
         self.name = name
         self.projectDescription = projectDescription
