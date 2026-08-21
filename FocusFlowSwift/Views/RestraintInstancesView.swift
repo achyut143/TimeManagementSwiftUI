@@ -127,22 +127,22 @@ struct RestraintInstancesView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button(action: { showEdit = true }) {
-                        Label("Edit Restraint", systemImage: "pencil")
+                        Label("Edit \(restraint.kind.displayName)", systemImage: "pencil")
                     }
                     Button(action: { showMarkAllPassConfirm = true }) {
-                        Label("Mark All Pending as Pass", systemImage: "checkmark.circle")
+                        Label("Mark All Pending as \(restraint.kind.passWord)", systemImage: "checkmark.circle")
                     }
                     .disabled(!generatedRows.contains { $0.status == "pending" })
                     Button(role: .destructive, action: { showDeleteConfirm = true }) {
-                        Label("Delete Restraint", systemImage: "trash")
+                        Label("Delete \(restraint.kind.displayName)", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
-        .confirmationDialog("Mark all pending in this range as Pass?", isPresented: $showMarkAllPassConfirm, titleVisibility: .visible) {
-            Button("Mark All Pass") { markAllPendingAsPass() }
+        .confirmationDialog("Mark all pending in this range as \(restraint.kind.passWord)?", isPresented: $showMarkAllPassConfirm, titleVisibility: .visible) {
+            Button("Mark All \(restraint.kind.passWord)") { markAllPendingAsPass() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Applies to every currently-pending instance in \(Self.dateFmt.string(from: startDate)) – \(Self.dateFmt.string(from: endDate)).")
@@ -163,7 +163,7 @@ struct RestraintInstancesView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes the restraint and all its logged instances.")
+            Text("This permanently removes this \(restraint.kind.displayName.lowercased()) and all its logged instances.")
         }
     }
 }
@@ -207,7 +207,7 @@ private struct InstanceRowCell: View {
     }
 
     private var passFailBadge: some View {
-        Text(row.status == "pass" ? "Pass" : row.status == "fail" ? "Fail" : "Pending")
+        Text(row.status == "pass" ? restraint.kind.passWord : row.status == "fail" ? restraint.kind.failWord : "Pending")
             .font(.caption)
             .fontWeight(.semibold)
             .foregroundColor(row.status == "pass" ? .green : row.status == "fail" ? .red : .orange)
@@ -250,14 +250,26 @@ struct LogInstanceView: View {
     @State private var awardedUsed: String = ""
     @State private var overusedAmount: String = ""
     @State private var notes: String = ""
+    // Per-occurrence override of the award/target, blank = use the template's
+    // (window- or restraint-level) default for this day instead.
+    @State private var awardOverrideText: String = ""
 
     private var unit: String {
         restraint.effectiveLimitType == .duration ? "min" : restraint.quantityUnit
     }
 
-    private var baseAward: Double {
+    // Template default (window override or restraint flat default) — shown as
+    // a placeholder/reference; NOT what's actually applied once this specific
+    // occurrence has its own override set.
+    private var templateAward: Double {
         guard let window = restraint.timeWindows.first(where: { $0.hour == row.windowHour && $0.minute == row.windowMinute }) else { return 0 }
         return restraint.effectiveAward(for: window)
+    }
+
+    // What's actually in effect for this occurrence right now: this
+    // occurrence's own override if set, else the template default above.
+    private var baseAward: Double {
+        row.record?.awardOverride ?? templateAward
     }
 
     private var rollover: Double {
@@ -284,13 +296,28 @@ struct LogInstanceView: View {
                 Section("Status") {
                     Picker("Status", selection: $status) {
                         Text("Pending").tag("pending")
-                        Text("Pass").tag("pass")
-                        Text("Fail").tag("fail")
+                        Text(restraint.kind.passWord).tag("pass")
+                        Text(restraint.kind.failWord).tag("fail")
                     }
                     .pickerStyle(.segmented)
                 }
 
                 if !row.isAbstinenceRow {
+                    Section {
+                        HStack {
+                            Text("Override for this day (\(unit))")
+                            Spacer()
+                            TextField("default: \(fmt(templateAward))", text: $awardOverrideText)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+                        }
+                    } header: {
+                        Text("Award / Target")
+                    } footer: {
+                        Text("Leave blank to use this rule's usual \(fmt(templateAward)) \(unit) for this window. Set a number to award a different amount just for \(Self.dateFmt.string(from: row.date)).")
+                    }
+
                     Section {
                         if rollover > 0 {
                             HStack {
@@ -320,7 +347,7 @@ struct LogInstanceView: View {
                     } header: {
                         Text("Usage Log")
                     } footer: {
-                        Text("Logging overuse does not automatically mark this as Failed.")
+                        Text("Logging overuse does not automatically mark this as \(restraint.kind.failWord).")
                     }
                 }
 
@@ -329,7 +356,7 @@ struct LogInstanceView: View {
                         .lineLimit(3, reservesSpace: true)
                 }
             }
-            .navigationTitle("Log Instance")
+            .navigationTitle("Log \(restraint.kind.displayName)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -349,6 +376,7 @@ struct LogInstanceView: View {
         awardedUsed = rec.awardedUsed > 0 ? fmt(rec.awardedUsed) : ""
         overusedAmount = rec.overusedAmount > 0 ? fmt(rec.overusedAmount) : ""
         notes = rec.notes
+        awardOverrideText = rec.awardOverride.map(fmt) ?? ""
     }
 
     private func fmt(_ v: Double) -> String {
@@ -372,6 +400,8 @@ struct LogInstanceView: View {
         rec.awardedUsed = Double(awardedUsed) ?? 0
         rec.overusedAmount = Double(overusedAmount) ?? 0
         rec.notes = notes
+        let trimmedOverride = awardOverrideText.trimmingCharacters(in: .whitespaces)
+        rec.awardOverride = trimmedOverride.isEmpty ? nil : Double(trimmedOverride)
         try? modelContext.save()
         dismiss()
     }

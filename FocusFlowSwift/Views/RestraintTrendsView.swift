@@ -20,6 +20,11 @@ struct RestraintTrendsView: View {
         case passRate = "Pass Rate"
         case overuse = "Overuse"
         var id: String { rawValue }
+        // "Pass Rate" reads oddly for Practices — reuse the same passWord
+        // wording as the dashboard bars ("Done Rate" vs "Pass Rate").
+        func label(for kind: RestraintKind) -> String {
+            self == .passRate ? "\(kind.passWord) Rate" : rawValue
+        }
     }
 
     enum Granularity: String, CaseIterable, Identifiable {
@@ -27,12 +32,25 @@ struct RestraintTrendsView: View {
         var id: String { rawValue }
     }
 
+    @State private var kindFilter: RestraintKind = .restraint
     @State private var mode: Mode = .passRate
     @State private var granularity: Granularity = .week
     @State private var windowEndAnchor = Date()
     @State private var selectedBucketIndex: Int? = 0
 
-    @AppStorage("restraintTrends.hiddenRestraints") private var hiddenRaw: String = ""
+    // Separate persisted chip-selection per kind, so hiding items while
+    // looking at Restraints doesn't affect what's shown for Practices.
+    @AppStorage("restraintTrends.hiddenRestraints") private var hiddenRestraintsRaw: String = ""
+    @AppStorage("restraintTrends.hiddenPractices") private var hiddenPracticesRaw: String = ""
+    private var hiddenRaw: String {
+        get { kindFilter == .restraint ? hiddenRestraintsRaw : hiddenPracticesRaw }
+        nonmutating set {
+            // @AppStorage's own setter is nonmutating (its storage lives
+            // outside the struct), so this can be too.
+            if kindFilter == .restraint { hiddenRestraintsRaw = newValue }
+            else { hiddenPracticesRaw = newValue }
+        }
+    }
 
     private let calendar = Calendar.current
 
@@ -56,8 +74,15 @@ struct RestraintTrendsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    Picker("Kind", selection: $kindFilter) {
+                        ForEach(RestraintKind.allCases) { k in
+                            Text(k.pluralName).tag(k)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
                     Picker("Mode", selection: $mode) {
-                        ForEach(Mode.allCases) { m in Text(m.rawValue).tag(m) }
+                        ForEach(Mode.allCases) { m in Text(m.label(for: kindFilter)).tag(m) }
                     }
                     .pickerStyle(.segmented)
 
@@ -70,7 +95,7 @@ struct RestraintTrendsView: View {
                     pagerHeader
 
                     if seriesNames.isEmpty {
-                        Text("No restraints yet.")
+                        Text("No \(kindFilter.pluralName.lowercased()) yet.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -98,7 +123,7 @@ struct RestraintTrendsView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Restraint Trends")
+            .navigationTitle("Rule Trends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -298,8 +323,12 @@ struct RestraintTrendsView: View {
 
     // MARK: - Data
 
+    private var kindItems: [Restraint] {
+        restraints.filter { $0.kind == kindFilter }
+    }
+
     private var seriesNames: [String] {
-        restraints.map { $0.name }.sorted()
+        kindItems.map { $0.name }.sorted()
     }
 
     private func unit(for r: Restraint) -> String {
@@ -307,11 +336,11 @@ struct RestraintTrendsView: View {
     }
 
     private var allPoints: [TrendPoint] {
-        guard !restraints.isEmpty else { return [] }
+        guard !kindItems.isEmpty else { return [] }
         var points: [TrendPoint] = []
 
         for bucket in buckets {
-            for r in restraints {
+            for r in kindItems {
                 let recs = r.instances.filter { $0.date >= bucket.start && $0.date <= bucket.lastDay }
                 let value: Double
                 switch mode {

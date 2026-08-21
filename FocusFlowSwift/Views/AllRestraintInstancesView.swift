@@ -124,7 +124,7 @@ struct AllRestraintInstancesView: View {
                 }
             }
         }
-        .navigationTitle("All Instances")
+        .navigationTitle("All Rule Instances")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(isSelecting ? "Done" : "Select") {

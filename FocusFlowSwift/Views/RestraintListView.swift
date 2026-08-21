@@ -6,10 +6,14 @@ struct RestraintListView: View {
     @Query(sort: \Restraint.createdAt, order: .reverse) private var restraints: [Restraint]
 
     @State private var showCreate = false
+    @State private var createKind: RestraintKind = .restraint
     @State private var restraintToEdit: Restraint?
     @State private var restraintToDelete: Restraint?
     @State private var showDeleteConfirm = false
     @State private var showTrends = false
+
+    private var restraintItems: [Restraint] { restraints.filter { $0.kind == .restraint } }
+    private var practiceItems: [Restraint] { restraints.filter { $0.kind == .practice } }
 
     var body: some View {
         List {
@@ -18,18 +22,77 @@ struct RestraintListView: View {
                     Image(systemName: "hand.raised.fill")
                         .font(.system(size: 44))
                         .foregroundColor(.secondary)
-                    Text("No restraints yet")
+                    Text("No rules yet")
                         .font(.headline)
                         .foregroundColor(.secondary)
-                    Text("Tap + to create your first restraint")
+                    Text("Tap + to create a Restraint (something to limit) or a Practice (something to do regularly)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 40)
                 .listRowBackground(Color.clear)
             } else {
-                ForEach(restraints) { r in
+                kindSection(.restraint, items: restraintItems)
+                kindSection(.practice, items: practiceItems)
+            }
+        }
+        .navigationTitle("Rules")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 16) {
+                    NavigationLink(destination: AllRestraintInstancesView()) {
+                        Image(systemName: "checklist")
+                            .foregroundColor(.indigo)
+                    }
+                    NavigationLink(destination: RestraintChartsView()) {
+                        Image(systemName: "chart.bar.fill")
+                            .foregroundColor(.indigo)
+                    }
+                    Button(action: { showTrends = true }) {
+                        Image(systemName: "chart.xyaxis.line")
+                            .foregroundColor(.indigo)
+                    }
+                    Menu {
+                        Button(action: { createKind = .restraint; showCreate = true }) {
+                            Label("New Restraint", systemImage: "hand.raised.fill")
+                        }
+                        Button(action: { createKind = .practice; showCreate = true }) {
+                            Label("New Practice", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showTrends) {
+            RestraintTrendsView()
+        }
+        .sheet(isPresented: $showCreate) {
+            CreateRestraintView(initialKind: createKind)
+        }
+        .sheet(item: $restraintToEdit) { r in
+            CreateRestraintView(restraint: r)
+        }
+        .confirmationDialog("Delete this rule?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let r = restraintToDelete { modelContext.delete(r) }
+                try? modelContext.save()
+                RestraintNotificationScheduler.rescheduleAll(from: restraints.filter { $0.id != restraintToDelete?.id })
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes it and all its logged instances.")
+        }
+    }
+
+    @ViewBuilder
+    private func kindSection(_ kind: RestraintKind, items: [Restraint]) -> some View {
+        if !items.isEmpty {
+            Section(kind.pluralName) {
+                ForEach(items) { r in
                     NavigationLink(destination: RestraintInstancesView(restraint: r)) {
                         RestraintRowView(restraint: r)
                     }
@@ -61,47 +124,6 @@ struct RestraintListView: View {
                 }
             }
         }
-        .navigationTitle("Restraints")
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 16) {
-                    NavigationLink(destination: AllRestraintInstancesView()) {
-                        Image(systemName: "checklist")
-                            .foregroundColor(.indigo)
-                    }
-                    NavigationLink(destination: RestraintChartsView()) {
-                        Image(systemName: "chart.bar.fill")
-                            .foregroundColor(.indigo)
-                    }
-                    Button(action: { showTrends = true }) {
-                        Image(systemName: "chart.xyaxis.line")
-                            .foregroundColor(.indigo)
-                    }
-                    Button(action: { showCreate = true }) {
-                        Image(systemName: "plus")
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $showTrends) {
-            RestraintTrendsView()
-        }
-        .sheet(isPresented: $showCreate) {
-            CreateRestraintView()
-        }
-        .sheet(item: $restraintToEdit) { r in
-            CreateRestraintView(restraint: r)
-        }
-        .confirmationDialog("Delete Restraint?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                if let r = restraintToDelete { modelContext.delete(r) }
-                try? modelContext.save()
-                RestraintNotificationScheduler.rescheduleAll(from: restraints.filter { $0.id != restraintToDelete?.id })
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently removes the restraint and all its logged instances.")
-        }
     }
 }
 
@@ -112,6 +134,8 @@ private struct RestraintRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
+                Image(systemName: restraint.iconName)
+                    .foregroundColor(restraint.displayColor)
                 Text(restraint.name)
                     .font(.headline)
                 Spacer()
@@ -162,8 +186,9 @@ private struct RestraintRowView: View {
 
     @ViewBuilder
     private var limitBadge: some View {
+        let verb = restraint.kind == .restraint ? "awarded" : "goal"
         if restraint.effectiveLimitType == .duration {
-            Text("\(restraint.awardedMinutes) min awarded")
+            Text("\(restraint.awardedMinutes) min \(verb)")
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
@@ -174,7 +199,7 @@ private struct RestraintRowView: View {
             let qty = restraint.quantityLimit == restraint.quantityLimit.rounded()
                 ? "\(Int(restraint.quantityLimit))"
                 : String(format: "%.1f", restraint.quantityLimit)
-            Text("\(qty) \(restraint.quantityUnit) awarded")
+            Text("\(qty) \(restraint.quantityUnit) \(verb)")
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)

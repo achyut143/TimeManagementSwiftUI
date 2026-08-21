@@ -203,7 +203,7 @@ struct ContentView: View {
                 }
                 .tabItem {
                     Image(systemName: "hand.raised.fill")
-                    Text("Restraints")
+                    Text("Rules")
                 }
 
                 NavigationStack {

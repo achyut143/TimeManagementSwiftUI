@@ -12,6 +12,12 @@ class RestraintInstance {
     var overusedAmount: Double   // minutes or quantity consumed beyond limit
     var notes: String
     var createdAt: Date
+    // Per-occurrence override of the award/target amount, e.g. "today's window
+    // only awards 10 min instead of the usual 30". nil = fall back to the
+    // matching template window's own override, or the restraint's default.
+    // Optional so existing rows (created before this field existed) decode
+    // as nil and keep behaving exactly as they always have.
+    var awardOverride: Double? = nil
 
     var isPassed: Bool { status == "pass" }
     var isFailed: Bool { status == "fail" }

@@ -219,6 +219,13 @@ struct DailyNotesView: View {
     @State private var currentTaskName: String = ""
     @State private var currentCycleDuration: Int = 0
     @State private var isTransitioning: Bool = false
+    // Circuit breaker for startNextCycle()'s "gap to next task is 0, try again
+    // shortly" self-recursion — without a cap, a schedule where that gap never
+    // resolves to positive (e.g. back-to-back tasks whose boundary keeps
+    // landing exactly on "now") recurses roughly every 0.5s forever, each
+    // pass doing a full, print-heavy re-parse of the notes. Reset on any
+    // successful cycle start.
+    @State private var pendingCycleRetryCount: Int = 0
     @State private var cycleEndObserver: AnyCancellable?
     @State private var pausedAt: Date?
     @State private var totalPausedDuration: TimeInterval = 0
@@ -461,7 +468,7 @@ struct DailyNotesView: View {
 
                         HStack(spacing: 8) {
                             widgetPickerChip(label: "Books", isOn: $showBooksWidget)
-                            widgetPickerChip(label: "Restraints", isOn: $showRestraintsWidget)
+                            widgetPickerChip(label: "Rules", isOn: $showRestraintsWidget)
                             widgetPickerChip(label: "Projects", isOn: $showProjectsWidget)
                             Spacer()
                         }
@@ -480,7 +487,7 @@ struct DailyNotesView: View {
                         }
                         if showRestraintsWidget {
                             HStack {
-                                Text("Restraints").font(.caption).foregroundColor(.secondary)
+                                Text("Rules").font(.caption).foregroundColor(.secondary)
                                 Spacer()
                                 Button(action: { showRestraintList = true }) {
                                     Text("Manage")
@@ -1643,6 +1650,7 @@ struct DailyNotesView: View {
     }
     
     private func startCycleWithDuration(_ minutes: Int, taskName: String) {
+        pendingCycleRetryCount = 0 // a cycle is actually starting — clear the runaway-recursion guard
         // Set up AlertSettings for this cycle
         settings.useCycles = false // Use simple mode
         settings.intervalMinutes = minutes
@@ -1700,6 +1708,7 @@ struct DailyNotesView: View {
             self.currentTaskName = ""
             self.currentCycleDuration = 0
             self.isTransitioning = false
+            self.pendingCycleRetryCount = 0
             self.cycleEndObserver?.cancel()
             self.speechManager.stopSpeaking()
             self.stopReminderTimer()
@@ -2347,40 +2356,21 @@ struct DailyNotesView: View {
         
         var timeEntries: [TimeEntry] = []
         var previousEndMinutes: Int? = nil
-        
-        print("📝 Parsing schedule from notes (lines \(startIndex + 1) to \(endIndex - 1)):")
-        print("📝 Content to parse: \(contentLines.count) lines")
-        
-        for (lineIndex, line) in contentLines.enumerated() {
+
+        // No per-line/per-call logging here — this runs on hot paths (cycle
+        // transitions, distraction tracking, etc.) and per-line print() at
+        // that frequency was a real, measurable cost on its own, separate
+        // from whatever triggered the call in the first place.
+        for line in contentLines {
             let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            // Skip empty lines
-            if trimmedLine.isEmpty {
-                continue
-            }
-            
+            if trimmedLine.isEmpty { continue }
+
             if let entry = parseTimeEntrySequential(line, previousEndMinutes: previousEndMinutes) {
                 timeEntries.append(entry)
                 previousEndMinutes = entry.endMinutes
-                
-                // Add safety checks to prevent EXC_BAD_ACCESS
-                let startTimeStr = safeMinutesToTime(entry.startMinutes)
-                let endTimeStr = safeMinutesToTime(entry.endMinutes)
-                let description = entry.description.isEmpty ? "No description" : entry.description
-                print("✅ Parsed line \(lineIndex + 1): \(startTimeStr) - \(endTimeStr) - \(description)")
-            } else {
-                print("⚠️ Could not parse line \(lineIndex + 1): '\(trimmedLine)'")
             }
         }
-        
-        print("📅 Final schedule (\(timeEntries.count) entries):")
-        for entry in timeEntries {
-            let startTimeStr = safeMinutesToTime(entry.startMinutes)
-            let endTimeStr = safeMinutesToTime(entry.endMinutes)
-            let description = entry.description.isEmpty ? "No description" : entry.description
-            print("   \(startTimeStr) - \(endTimeStr) - \(description)")
-        }
-        
+
         return timeEntries
     }
     
@@ -3707,10 +3697,7 @@ struct DailyNotesView: View {
                         }
                     } else {
                         // Next task starts immediately
-                        print("⚡ Next task starts immediately, recursing...")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            self.startNextCycle()
-                        }
+                        retryStartNextCycleOrGiveUp()
                     }
                 } else {
                     // No more tasks today
@@ -3721,7 +3708,7 @@ struct DailyNotesView: View {
                     stopCycles()
                 }
             }
-            
+
         } else if let nextEntry = findNextTask(after: currentMinutes, in: timeEntries) {
             // In a gap before next task - start preparation/rest/Drink Water cycle
             let gapMinutes = nextEntry.startMinutes - currentMinutes
@@ -3740,12 +3727,9 @@ struct DailyNotesView: View {
                 }
             } else {
                 // Next task starts immediately
-                print("⚡ Next task starts immediately (gap = 0), recursing...")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.startNextCycle()
-                }
+                retryStartNextCycleOrGiveUp()
             }
-            
+
         } else {
             // No more tasks today
             print("✅ No more tasks scheduled for today")
@@ -3755,7 +3739,27 @@ struct DailyNotesView: View {
             stopCycles()
         }
     }
-    
+
+    // Retries startNextCycle() shortly when the gap to the next task computed
+    // as ≤ 0, up to a small cap — guards against an unresolvable schedule
+    // state (e.g. a boundary that keeps landing exactly on "now") recursing
+    // forever instead of settling once the gap actually goes positive.
+    private func retryStartNextCycleOrGiveUp() {
+        pendingCycleRetryCount += 1
+        guard pendingCycleRetryCount < 6 else {
+            print("🛑 startNextCycle didn't resolve after \(pendingCycleRetryCount) retries — stopping cycles instead of retrying forever.")
+            pendingCycleRetryCount = 0
+            currentTaskName = "Free time"
+            currentCycleDuration = 0
+            isTransitioning = false
+            stopCycles()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.startNextCycle()
+        }
+    }
+
     // MARK: - Reminder Timer Functions
     
     private func startReminderTimer() {

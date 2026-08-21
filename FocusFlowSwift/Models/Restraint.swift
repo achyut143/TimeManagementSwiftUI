@@ -14,6 +14,28 @@ enum RestraintLimitType: String, Codable, CaseIterable {
     }
 }
 
+// Two opposite shapes living under one "Rule" umbrella:
+//  - .restraint ("Don't"): restrained by default, released periodically for a
+//    small allowance — e.g. Instagram. This is the original, pre-existing
+//    behavior, and is the default for every row so existing data is
+//    unaffected.
+//  - .practice ("Do"): the mirror image — free by default, prompted
+//    periodically to actively do something for a duration — e.g. "read every
+//    3 hours for 15 minutes."
+enum RestraintKind: String, Codable, CaseIterable, Identifiable {
+    case restraint
+    case practice
+
+    var id: String { rawValue }
+    var displayName: String { self == .restraint ? "Restraint" : "Practice" }
+    var pluralName: String { self == .restraint ? "Restraints" : "Practices" }
+    var subtitle: String { self == .restraint ? "Something to limit" : "Something to do regularly" }
+    var defaultIcon: String { self == .restraint ? "hand.raised.fill" : "arrow.triangle.2.circlepath" }
+    // Wording for the two log states — "Pass/Fail" reads oddly for a Practice.
+    var passWord: String { self == .restraint ? "Pass" : "Done" }
+    var failWord: String { self == .restraint ? "Fail" : "Skipped" }
+}
+
 struct RestraintTimeWindowInfo: Codable, Identifiable {
     var id: UUID = UUID()
     var hour: Int
@@ -49,6 +71,9 @@ class Restraint {
     // If true, an unused award from the most recent resolved window carries
     // into the next one. Default false = unchanged behavior for existing restraints.
     var rolloverEnabled: Bool = false
+    // Default "restraint" so every row created before this field existed —
+    // i.e. all current data — keeps behaving exactly as it always has.
+    var kindRaw: String = RestraintKind.restraint.rawValue
 
     @Relationship(deleteRule: .cascade, inverse: \RestraintInstance.restraint)
     var instances: [RestraintInstance] = []
@@ -62,7 +87,8 @@ class Restraint {
         quantityUnit: String = "",
         timeWindows: [RestraintTimeWindowInfo] = [],
         colorName: String = "blue",
-        iconName: String = "hand.raised.fill"
+        iconName: String = "hand.raised.fill",
+        kind: RestraintKind = .restraint
     ) {
         self.name = name
         self.weekdays = weekdays
@@ -75,6 +101,12 @@ class Restraint {
         self.timeWindowsData = (try? JSONEncoder().encode(timeWindows)) ?? Data()
         self.colorName = colorName
         self.iconName = iconName
+        self.kindRaw = kind.rawValue
+    }
+
+    var kind: RestraintKind {
+        get { RestraintKind(rawValue: kindRaw) ?? .restraint }
+        set { kindRaw = newValue.rawValue }
     }
 
     var displayColor: Color {
@@ -108,6 +140,17 @@ class Restraint {
     // restraint's default.
     func effectiveAward(for window: RestraintTimeWindowInfo) -> Double {
         if let override = window.awardOverride { return override }
+        return effectiveLimitType == .duration ? Double(awardedMinutes) : quantityLimit
+    }
+
+    // The award for one specific logged occurrence: that instance's own
+    // override first (set per-day in the Log sheet), then its matching
+    // template window's override, then the restraint's flat default.
+    func effectiveAward(for instance: RestraintInstance) -> Double {
+        if let override = instance.awardOverride { return override }
+        if let window = timeWindows.first(where: { $0.hour == instance.windowHour && $0.minute == instance.windowMinute }) {
+            return effectiveAward(for: window)
+        }
         return effectiveLimitType == .duration ? Double(awardedMinutes) : quantityLimit
     }
 

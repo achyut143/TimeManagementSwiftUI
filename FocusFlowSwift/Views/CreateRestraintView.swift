@@ -7,6 +7,7 @@ struct CreateRestraintView: View {
 
     var restraint: Restraint?
 
+    @State private var kind: RestraintKind
     @State private var name: String = ""
     @State private var everyDay: Bool = true
     @State private var selectedWeekdays: Set<Int> = []
@@ -25,6 +26,30 @@ struct CreateRestraintView: View {
     @State private var showInFocusWidget: Bool = true
     @State private var isAbstinence: Bool = false
     @State private var rolloverEnabled: Bool = false
+
+    // Quick-generate: fills releaseWindows with evenly-spaced times from
+    // genStartTime to genEndTime, every genIntervalHours, instead of adding
+    // each release window by hand.
+    @State private var genStartTime: Date = {
+        var c = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        c.hour = 6; c.minute = 0
+        return Calendar.current.date(from: c) ?? Date()
+    }()
+    @State private var genEndTime: Date = {
+        var c = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        c.hour = 22; c.minute = 0
+        return Calendar.current.date(from: c) ?? Date()
+    }()
+    @State private var genIntervalHours: Int = 3
+
+    // initialKind only matters for a brand-new rule (restraint == nil) — it
+    // seeds which segment (Restraint/Practice) is preselected, e.g. when
+    // opened from the "New Practice" menu item. Editing an existing rule
+    // always loads its own actual kind in loadExisting(), overriding this.
+    init(restraint: Restraint? = nil, initialKind: RestraintKind = .restraint) {
+        self.restraint = restraint
+        _kind = State(initialValue: restraint?.kind ?? initialKind)
+    }
 
     private let weekdayLabels: [(Int, String)] = [
         (1,"Sun"),(2,"Mon"),(3,"Tue"),(4,"Wed"),(5,"Thu"),(6,"Fri"),(7,"Sat")
@@ -57,8 +82,27 @@ struct CreateRestraintView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Name") {
-                    TextField("e.g. Instagram, TV, Food", text: $name)
+                Section {
+                    Picker("Kind", selection: $kind) {
+                        ForEach(RestraintKind.allCases) { k in
+                            Text(k.displayName).tag(k)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: kind) { _, newValue in
+                        // A Practice always needs specific times to prompt at —
+                        // "zero windows" only makes sense for a Restraint
+                        // (pure daily abstinence, no release concept).
+                        if newValue == .practice { isAbstinence = false }
+                    }
+                } footer: {
+                    Text(kind == .restraint
+                         ? "Restraint: something to limit — restrained by default, released periodically for a small allowance (e.g. Instagram)."
+                         : "Practice: something to do regularly — free by default, prompted periodically to actively do it for a while (e.g. \"read every 3 hours for 15 minutes\").")
+                }
+
+                Section(kind == .restraint ? "Name" : "What to Practice") {
+                    TextField(kind == .restraint ? "e.g. Instagram, TV, Food" : "e.g. Read, Stretch, Drink Water", text: $name)
                 }
 
                 Section("Days") {
@@ -66,10 +110,12 @@ struct CreateRestraintView: View {
                     if !everyDay { weekdayGrid }
                 }
 
-                Section {
-                    Toggle("Zero-Tolerance", isOn: $isAbstinence)
-                } footer: {
-                    Text("No release windows — this is a straight daily Pass/Fail (e.g. \"No smoking\") instead of a hold-then-release budget.")
+                if kind == .restraint {
+                    Section {
+                        Toggle("Zero-Tolerance", isOn: $isAbstinence)
+                    } footer: {
+                        Text("No release windows — this is a straight daily Pass/Fail (e.g. \"No smoking\") instead of a hold-then-release budget.")
+                    }
                 }
 
                 Section {
@@ -92,10 +138,10 @@ struct CreateRestraintView: View {
                         .pickerStyle(.segmented)
 
                         if limitType == .duration {
-                            Stepper("Awarded: \(awardedMinutes) min per window", value: $awardedMinutes, in: 1...480, step: 5)
+                            Stepper("\(kind == .restraint ? "Awarded" : "Duration"): \(awardedMinutes) min per \(kind == .restraint ? "window" : "prompt")", value: $awardedMinutes, in: 1...480, step: 5)
                         } else {
                             HStack {
-                                Text("Awarded amount")
+                                Text(kind == .restraint ? "Awarded amount" : "Target amount")
                                 Spacer()
                                 TextField("700", text: $quantityLimit)
                                     .keyboardType(.decimalPad)
@@ -106,11 +152,29 @@ struct CreateRestraintView: View {
                             }
                         }
 
-                        Toggle("Roll over unused award", isOn: $rolloverEnabled)
+                        if kind == .restraint {
+                            Toggle("Roll over unused award", isOn: $rolloverEnabled)
+                        }
                     } header: {
-                        Text("Award per Release Window")
+                        Text(kind == .restraint ? "Award per Release Window" : "Duration per Practice")
                     } footer: {
-                        Text("You are restrained at all times. At each release window you earn this amount. Rollover carries whatever's left unused from the most recent window into the next one.")
+                        Text(kind == .restraint
+                             ? "You are restrained at all times. At each release window you earn this amount. Rollover carries whatever's left unused from the most recent window into the next one."
+                             : "Each time you're prompted, this is how long you should do it for.")
+                    }
+
+                    Section {
+                        DatePicker("Start", selection: $genStartTime, displayedComponents: .hourAndMinute)
+                        DatePicker("End", selection: $genEndTime, displayedComponents: .hourAndMinute)
+                        Stepper("Every \(genIntervalHours) hour\(genIntervalHours == 1 ? "" : "s")", value: $genIntervalHours, in: 1...12)
+                        Button(action: generateWindows) {
+                            Label(kind == .restraint ? "Generate Release Windows" : "Generate Practice Times", systemImage: "wand.and.stars")
+                        }
+                        .disabled(!genRangeIsValid)
+                    } header: {
+                        Text("Quick Generate")
+                    } footer: {
+                        Text("Fills the list below with times from Start to End, every N hours — replacing whatever's already there. Fine-tune individual times (remove one, override its \(kind == .restraint ? "award" : "duration")) below afterward.")
                     }
 
                     Section {
@@ -134,7 +198,7 @@ struct CreateRestraintView: View {
                                     .buttonStyle(.plain)
                                 }
                                 HStack {
-                                    Text("Override award")
+                                    Text(kind == .restraint ? "Override award" : "Override duration")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                     TextField("default: \(defaultAwardLabel)", text: overrideBinding(for: idx))
@@ -145,19 +209,21 @@ struct CreateRestraintView: View {
                             }
                         }
 
-                        DatePicker("New release time", selection: $newWindowTime, displayedComponents: .hourAndMinute)
+                        DatePicker(kind == .restraint ? "New release time" : "New practice time", selection: $newWindowTime, displayedComponents: .hourAndMinute)
 
                         Button(action: addWindow) {
-                            Label("Add Release Window", systemImage: "plus.circle")
+                            Label(kind == .restraint ? "Add Release Window" : "Add Practice Time", systemImage: "plus.circle")
                         }
                     } header: {
-                        Text("Release Windows")
+                        Text(kind == .restraint ? "Release Windows" : "Practice Times")
                     } footer: {
-                        Text("The times each day when you're released from the restraint. Leave a window's override blank to use the default award above.")
+                        Text(kind == .restraint
+                             ? "The times each day when you're released from the restraint. Leave a window's override blank to use the default award above."
+                             : "The times each day you're prompted to do this. Leave a time's override blank to use the default duration above.")
                     }
                 }
             }
-            .navigationTitle(restraint == nil ? "New Restraint" : "Edit Restraint")
+            .navigationTitle(navTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -288,8 +354,42 @@ struct CreateRestraintView: View {
         ))
     }
 
+    private func minuteOfDay(_ date: Date) -> Int {
+        let cal = Calendar.current
+        return cal.component(.hour, from: date) * 60 + cal.component(.minute, from: date)
+    }
+
+    private var genRangeIsValid: Bool {
+        minuteOfDay(genEndTime) >= minuteOfDay(genStartTime)
+    }
+
+    // e.g. Start 6:00 AM, End 10:00 PM, every 3 hours → 6, 9, 12, 3, 6, 9
+    // (AM/PM), stepping by genIntervalHours until past End.
+    private func generateWindows() {
+        guard genRangeIsValid else { return }
+        let startMin = minuteOfDay(genStartTime)
+        let endMin = minuteOfDay(genEndTime)
+        let step = genIntervalHours * 60
+
+        var generated: [RestraintTimeWindowInfo] = []
+        var current = startMin
+        while current <= endMin {
+            generated.append(RestraintTimeWindowInfo(hour: current / 60, minute: current % 60))
+            current += step
+        }
+        releaseWindows = generated
+    }
+
+    private var navTitle: String {
+        if restraint == nil {
+            return kind == .restraint ? "New Restraint" : "New Practice"
+        }
+        return kind == .restraint ? "Edit Restraint" : "Edit Practice"
+    }
+
     private func loadExisting() {
         guard let r = restraint else { return }
+        kind = r.kind
         name = r.name
         everyDay = r.weekdays.isEmpty
         selectedWeekdays = Set(r.weekdays)
@@ -321,6 +421,7 @@ struct CreateRestraintView: View {
             r.iconName = iconName
             r.showInFocusWidget = showInFocusWidget
             r.rolloverEnabled = rolloverEnabled
+            r.kind = kind
         } else {
             let r = Restraint(
                 name: name.trimmingCharacters(in: .whitespaces),
@@ -331,7 +432,8 @@ struct CreateRestraintView: View {
                 quantityUnit: quantityUnit,
                 timeWindows: windows,
                 colorName: colorName,
-                iconName: iconName
+                iconName: iconName,
+                kind: kind
             )
             r.showInFocusWidget = showInFocusWidget
             r.rolloverEnabled = rolloverEnabled

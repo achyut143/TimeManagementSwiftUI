@@ -12,6 +12,7 @@ struct RestraintChartsView: View {
     @State private var endDate: Date = Date()
     @State private var searchText: String = ""
     @State private var selectedTab: Int = 0
+    @State private var kindFilter: RestraintKind = .restraint
 
     private var startDate: Date { Date(timeIntervalSince1970: startDateInterval) }
 
@@ -23,8 +24,9 @@ struct RestraintChartsView: View {
     }
 
     private var filtered: [Restraint] {
-        guard !searchText.isEmpty else { return restraints }
-        return restraints.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        let byKind = restraints.filter { $0.kind == kindFilter }
+        guard !searchText.isEmpty else { return byKind }
+        return byKind.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
     struct PassFailItem: Identifiable {
@@ -59,9 +61,9 @@ struct RestraintChartsView: View {
             let failed  = recs.filter { $0.status == "fail" }.count
             let pending = recs.filter { $0.status == "pending" }.count
             return [
-                PassFailItem(name: r.name, status: "Pass",    count: passed),
-                PassFailItem(name: r.name, status: "Fail",    count: failed),
-                PassFailItem(name: r.name, status: "Pending", count: pending)
+                PassFailItem(name: r.name, status: r.kind.passWord, count: passed),
+                PassFailItem(name: r.name, status: r.kind.failWord, count: failed),
+                PassFailItem(name: r.name, status: "Pending",       count: pending)
             ]
         }
     }
@@ -76,15 +78,10 @@ struct RestraintChartsView: View {
             let recs = instances(for: r)
             let isDuration = r.effectiveLimitType == .duration
             let unit = isDuration ? "min" : r.quantityUnit
-            // Sum each instance's own window's award (respects per-window
-            // overrides) instead of assuming every instance got the restraint's
-            // flat default.
-            let awarded: Double = recs.reduce(0.0) { total, inst in
-                guard let window = r.timeWindows.first(where: { $0.hour == inst.windowHour && $0.minute == inst.windowMinute }) else {
-                    return total + (isDuration ? Double(r.awardedMinutes) : r.quantityLimit)
-                }
-                return total + r.effectiveAward(for: window)
-            }
+            // Sum each instance's own effective award (its per-day override,
+            // else its window's override, else the restraint's flat default)
+            // instead of assuming every instance got the same fixed amount.
+            let awarded: Double = recs.reduce(0.0) { $0 + r.effectiveAward(for: $1) }
             let used = recs.reduce(0.0) { $0 + $1.awardedUsed + $1.overusedAmount }
             return [
                 UsageItem(name: r.name, kind: "Awarded", amount: awarded, unit: unit),
@@ -97,6 +94,15 @@ struct RestraintChartsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Picker("Kind", selection: $kindFilter) {
+                ForEach(RestraintKind.allCases) { k in
+                    Text(k.pluralName).tag(k)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.top, 10)
+
             DateRangeShiftControl(start: startDateBinding, end: $endDate)
                 .padding(.horizontal)
             HStack {
@@ -131,8 +137,8 @@ struct RestraintChartsView: View {
                 .padding()
             }
         }
-        .navigationTitle("Restraint Charts")
-        .searchable(text: $searchText, prompt: "Search restraints")
+        .navigationTitle("Rule Charts")
+        .searchable(text: $searchText, prompt: "Search \(kindFilter.pluralName.lowercased())")
     }
 
     @ViewBuilder
@@ -142,7 +148,7 @@ struct RestraintChartsView: View {
             .values.map { $0.reduce(0) { $0 + $1.count } }.max() ?? 0
         GroupBox {
             if filtered.isEmpty {
-                emptyLabel("No restraints")
+                emptyLabel("No \(kindFilter.pluralName.lowercased())")
             } else if maxStack == 0 {
                 emptyLabel("No logged instances in this range")
             } else {
@@ -160,13 +166,13 @@ struct RestraintChartsView: View {
                         }
                     }
                 }
-                .chartForegroundStyleScale(["Pass": Color.green, "Fail": Color.red, "Pending": Color.orange])
+                .chartForegroundStyleScale([kindFilter.passWord: Color.green, kindFilter.failWord: Color.red, "Pending": Color.orange])
                 .chartXScale(domain: 0...(maxStack + 1))
                 .chartXAxisLabel("Instances")
                 .frame(height: barHeight)
             }
         } label: {
-            Label("Pass / Fail / Pending", systemImage: "checkmark.circle")
+            Label("\(kindFilter.passWord) / \(kindFilter.failWord) / Pending", systemImage: "checkmark.circle")
                 .font(.headline)
         }
     }
