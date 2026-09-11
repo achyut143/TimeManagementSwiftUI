@@ -10,7 +10,12 @@ import WidgetKit
 struct MigrationWrapper<Content: View>: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var restraints: [Restraint]
+    @Query private var virtueActivities: [VirtueActivity]
     @State private var hasMigrated = false
+    // Ticks every 30s while the app is foregrounded so an activity reminder
+    // becoming due doesn't need an app switch to be noticed — separate from
+    // the didBecomeActive check, which only covers "just returned to the app."
+    private let activityReminderTicker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -29,10 +34,15 @@ struct MigrationWrapper<Content: View>: View {
                 // Settles any away-time exit left pending from a force-quit
                 // while the app was backgrounded, up to right now.
                 AwayTimeTracker.shared.recordReturn()
+                ActivityReminderManager.shared.check(activities: virtueActivities)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 RestraintMaintenance.resolveStalePending(restraints: restraints, modelContext: modelContext)
                 AwayTimeTracker.shared.recordReturn()
+                ActivityReminderManager.shared.check(activities: virtueActivities)
+            }
+            .onReceive(activityReminderTicker) { _ in
+                ActivityReminderManager.shared.check(activities: virtueActivities)
             }
             // Any project timer left running when the app is backgrounded or
             // killed gets paused here, so its elapsed time never silently
@@ -100,7 +110,7 @@ struct FocusFlowSwiftApp: App {
             HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self,
             Book.self, BookQuote.self, ScheduleTemplate.self, TaskOKR.self, TaskInsight.self,
             Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self,
-            ProjectTimer.self
+            ProjectTimer.self, VirtueActivity.self
         ]
         // Restraints live in a separate store so schema changes never touch existing data.
         let restraintTypes: [any PersistentModel.Type] = [Restraint.self, RestraintInstance.self]

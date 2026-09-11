@@ -226,6 +226,13 @@ struct DailyNotesView: View {
     // pass doing a full, print-heavy re-parse of the notes. Reset on any
     // successful cycle start.
     @State private var pendingCycleRetryCount: Int = 0
+    // "X started, please acknowledge" repeats speech+vibration every few
+    // seconds until the user taps anywhere in the view — instead of a single
+    // announcement that's easy to miss if you're not looking/listening right
+    // at that moment. Never blocks the timer/schedule itself — purely a
+    // side-channel nag that stops itself once acknowledged.
+    @State private var isPendingAcknowledgment: Bool = false
+    @State private var acknowledgmentTimer: Timer?
     @State private var cycleEndObserver: AnyCancellable?
     @State private var pausedAt: Date?
     @State private var totalPausedDuration: TimeInterval = 0
@@ -315,6 +322,25 @@ struct DailyNotesView: View {
     var body: some View {
         NavigationView {
             Form {
+                // Dedicated acknowledge button — a plain conditional child
+                // view, not a modifier on the Form/NavigationView chain, so
+                // it can't reintroduce the body-too-complex crash the way a
+                // .gesture modifier did.
+                if isPendingAcknowledgment {
+                    Section {
+                        Button(action: { acknowledgePending() }) {
+                            HStack {
+                                Image(systemName: "bell.badge.fill")
+                                Text("\(currentTaskName) started — Tap to Acknowledge")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                            }
+                            .foregroundColor(.white)
+                        }
+                        .listRowBackground(Color.orange)
+                    }
+                }
+
                 Section("Time Adjustment") {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -748,10 +774,11 @@ struct DailyNotesView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { acknowledgePending(); dismiss() }
                 }
                 ToolbarItem(placement: .principal) {
                     Button(action: {
+                        acknowledgePending()
                         hideKeyboard()
                         saveNotes()
                         // If cycles are enabled, restart them with updated notes
@@ -770,6 +797,7 @@ struct DailyNotesView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
+                        acknowledgePending()
                         hideKeyboard()
                         saveNotes()
                         // If cycles are enabled, restart them with updated notes
@@ -783,7 +811,7 @@ struct DailyNotesView: View {
                 }
                 ToolbarItem(placement: .bottomBar) {
                     HStack {
-                        Button(action: { speechManager.toggleMute() }) {
+                        Button(action: { acknowledgePending(); speechManager.toggleMute() }) {
                             Label(
                                 speechManager.isMuted ? "Unmute" : "Mute",
                                 systemImage: speechManager.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
@@ -791,6 +819,7 @@ struct DailyNotesView: View {
                             .foregroundColor(speechManager.isMuted ? .red : .primary)
                         }
                         Button(action: {
+                            acknowledgePending()
                             speechManager.toggleVibration()
                             if speechManager.isVibrationEnabled {
                                 speechManager.vibrateIfEnabled()
@@ -844,6 +873,8 @@ struct DailyNotesView: View {
                 cycleEndObserver?.cancel()
                 speechManager.stopSpeaking()
                 reminderTimer?.invalidate()
+                acknowledgmentTimer?.invalidate()
+                isPendingAcknowledgment = false
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 trackDistraction()
@@ -1031,7 +1062,9 @@ struct DailyNotesView: View {
                     onRecalculateDistractions: {
                         let entries = parsedDistractionEntries()
                         distractionTracker.recalculateFromNotes(date: selectedDate, entries: entries)
-                    }
+                    },
+                    isPendingAcknowledgment: isPendingAcknowledgment,
+                    onAcknowledge: { acknowledgePending() }
                 )
             }
         }
@@ -1351,24 +1384,6 @@ struct DailyNotesView: View {
                     .tint(.red)
                     .help("Interrupt")
 
-                    // Adjust
-                    Button(action: { showAdjustOptions = true }) {
-                        Image(systemName: "clock.arrow.2.circlepath")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.purple)
-                    .help("Adjust (+5 min)")
-
-                    // End & New
-                    Button(action: { endAndStartNewTask() }) {
-                        Image(systemName: "arrow.trianglehead.turn.up.right.circle.fill")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.orange)
-                    .help("End & New Task")
-
                     // Cancel options
                     Button(action: { showCancelOptions = true }) {
                         Image(systemName: "xmark.circle.fill")
@@ -1664,10 +1679,14 @@ struct DailyNotesView: View {
         settings.isPaused = false
         settings.scheduleIntervalTimer()
         
-        // Announce task start
-        let announcement = "Starting \(taskName) for \(minutes) minute\(minutes == 1 ? "" : "s")"
-        speechManager.speak(announcement)
-        
+        // Announce task start — repeats (speech + vibration) every few seconds
+        // until acknowledged, rather than a single announcement that's easy
+        // to miss. Reads the live currentTaskName on every repeat (not a
+        // string captured once), so if it's still nagging you a while later
+        // it names whatever is actually active right now, self-correcting
+        // instead of parroting a name that might have gone stale.
+        beginAcknowledgmentLoop { "\(self.currentTaskName) started. Please acknowledge." }
+
         // Set up observer for when this cycle ends
         setupCycleEndObserver()
         
@@ -1676,7 +1695,33 @@ struct DailyNotesView: View {
         
         print("🎯 Started cycle: \(taskName) for \(minutes) minutes")
     }
-    
+
+    // MARK: - Acknowledgment Loop
+
+    // Speaks + vibrates immediately, then repeats every 8s until acknowledgePending()
+    // is called. Doesn't touch the timer/schedule at all — purely a
+    // notification side-channel, so it can never block time passing.
+    private func beginAcknowledgmentLoop(message: @escaping () -> String) {
+        acknowledgmentTimer?.invalidate()
+        isPendingAcknowledgment = true
+        speechManager.speak(message())
+        acknowledgmentTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { _ in
+            guard self.isPendingAcknowledgment else { return }
+            self.speechManager.speak(message())
+        }
+    }
+
+    // Called on any tap anywhere in this view (see the simultaneousGesture on
+    // the root Form) — stops the repeating nag as soon as the user does
+    // literally anything, without needing a dedicated "OK" button.
+    private func acknowledgePending() {
+        guard isPendingAcknowledgment else { return }
+        isPendingAcknowledgment = false
+        acknowledgmentTimer?.invalidate()
+        acknowledgmentTimer = nil
+        speechManager.stopSpeaking()
+    }
+
     private func setupCycleEndObserver() {
         cycleEndObserver?.cancel()
 
@@ -1712,6 +1757,9 @@ struct DailyNotesView: View {
             self.cycleEndObserver?.cancel()
             self.speechManager.stopSpeaking()
             self.stopReminderTimer()
+            self.acknowledgmentTimer?.invalidate()
+            self.acknowledgmentTimer = nil
+            self.isPendingAcknowledgment = false
             self.pausedAt = nil
             self.totalPausedDuration = 0
             self.savePauseState()
@@ -1724,6 +1772,7 @@ struct DailyNotesView: View {
     // MARK: - Strike Past Slots
 
     private func strikeOutPastTimeSlots() {
+        acknowledgePending()
         let now = Date()
         let calendar = Calendar.current
         let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
@@ -1831,6 +1880,7 @@ struct DailyNotesView: View {
     // MARK: - Smart Pause/Resume Logic
     
     private func handleSmartPause() {
+        acknowledgePending()
         print("🔘 Smart Pause button clicked, pausedAt: \(pausedAt?.description ?? "nil")")
         
         if pausedAt != nil {
@@ -2092,6 +2142,7 @@ struct DailyNotesView: View {
     }
 
     private func startManualNextTask() {
+        acknowledgePending()
         let waited = max(0, Int(Date().timeIntervalSince(manualWaitStartDate ?? Date())))
         totalIdleSeconds += waited
 
@@ -2108,6 +2159,7 @@ struct DailyNotesView: View {
     }
 
     private func extendPreviousTaskAndStart() {
+        acknowledgePending()
         let cal = Calendar.current
         let nowMin = cal.component(.hour, from: Date()) * 60 + cal.component(.minute, from: Date())
         let extendBy = nowMin - pendingTaskEndMinutes
@@ -4359,6 +4411,7 @@ struct DailyNotesView: View {
     /// Returns true if both tasks were found and swapped, false otherwise.
     @discardableResult
     private func swapScheduleTasks(numA: Int, numB: Int) -> Bool {
+        acknowledgePending()
         let allLines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil, eIdx: Int? = nil
         for (i, line) in allLines.enumerated() {
@@ -4578,6 +4631,7 @@ struct DailyNotesView: View {
     }
 
     private func toggleStrikeTask(startMin: Int, endMin: Int, desc: String) {
+        acknowledgePending()
         var lines = notesText.components(separatedBy: .newlines)
         var sIdx: Int? = nil
         var eIdx: Int? = nil
@@ -4852,6 +4906,7 @@ struct DailyNotesView: View {
     /// Removes the currently-running task from the schedule (used by the cancel menu).
     /// If `adjustTime` is true, shifts all downstream non-fixed tasks earlier by the task's remaining time.
     private func removeCurrentTaskFromNotes(adjustTime: Bool) {
+        acknowledgePending()
         let now = Date()
         let cal = Calendar.current
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
@@ -5222,6 +5277,7 @@ struct DailyNotesView: View {
     // MARK: - Interrupt Current Task
 
     private func insertInterruptTask() {
+        acknowledgePending()
         let now = Date()
         let cal = Calendar.current
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
@@ -5331,6 +5387,7 @@ struct DailyNotesView: View {
     // MARK: - Adjust Schedule (+5 min adjust block)
 
     private func insertAdjustTask(fromStrikethrough: Bool) {
+        acknowledgePending()
         let now = Date()
         let cal = Calendar.current
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
@@ -5479,6 +5536,7 @@ struct DailyNotesView: View {
     // MARK: - End Current Task and Start New
 
     private func endAndStartNewTask() {
+        acknowledgePending()
         let now = Date()
         let cal = Calendar.current
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
@@ -5584,6 +5642,7 @@ struct DailyNotesView: View {
     // MARK: - Stop Current Task at Now & Skip to Next
 
     private func cancelCurrentTask() {
+        acknowledgePending()
         let now = Date()
         let cal = Calendar.current
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
@@ -5697,6 +5756,7 @@ struct DailyNotesView: View {
     // MARK: - Extend Current Task
 
     private func extendCurrentTask(byMinutes minutes: Int = 5) {
+        acknowledgePending()
         let now = Date()
         let calendar = Calendar.current
         let currentMinutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
@@ -5929,6 +5989,12 @@ struct FocusModeView: View {
     let onNotesModified: () -> Void
     let computeSwapDefaults: () -> (Int?, Int?)
     let onRecalculateDistractions: () -> Void
+    // Whether DailyNotesView's "task started" acknowledgment nag is currently
+    // active — drives a dedicated banner button here (see acknowledgeBanner).
+    // Plain value + closure (not a Binding/gesture), so this can't touch the
+    // Form/ZStack modifier-chain complexity that caused the earlier crash.
+    var isPendingAcknowledgment: Bool = false
+    var onAcknowledge: () -> Void = {}
 
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
@@ -6269,6 +6335,28 @@ struct FocusModeView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
 
+                // Dedicated acknowledge banner — plain conditional child view
+                // (not a modifier), matching the same safe pattern as DailyNotesView's.
+                if isPendingAcknowledgment {
+                    Button(action: onAcknowledge) {
+                        HStack {
+                            Image(systemName: "bell.badge.fill")
+                            Text("\(currentTaskName) started — Tap to Acknowledge")
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.orange)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                }
+
                 // Day-total distraction summary
                 if let banner = dayTotalsBanner {
                     HStack(spacing: 8) {
@@ -6424,24 +6512,6 @@ struct FocusModeView: View {
                                     }
                                     .padding(10)
                                     .background(Capsule().fill(Color.red.opacity(0.15)))
-
-                                    // Adjust
-                                    Button(action: { showAdjustOptionsFocus = true }) {
-                                        Image(systemName: "clock.arrow.2.circlepath")
-                                            .font(.title)
-                                            .foregroundColor(.purple)
-                                    }
-                                    .padding(10)
-                                    .background(Capsule().fill(Color.purple.opacity(0.15)))
-
-                                    // End & New
-                                    Button(action: onEndAndNew) {
-                                        Image(systemName: "arrow.trianglehead.turn.up.right.circle.fill")
-                                            .font(.title)
-                                            .foregroundColor(.orange)
-                                    }
-                                    .padding(10)
-                                    .background(Capsule().fill(Color.orange.opacity(0.15)))
 
                                     // Cancel options
                                     Button(action: { showCancelMenuFocus = true }) {

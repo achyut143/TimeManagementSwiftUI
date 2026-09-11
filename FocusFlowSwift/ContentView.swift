@@ -5,8 +5,8 @@ import UIKit
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showAlertManager = false
-    @State private var showBooksLibrary = false
     @State private var showDailyNotes = false
+    @State private var showVirtueActivities = false
     @State private var showNewActivity = false
     @State private var showMetricsSettings = false
     @State private var selectedDate = Date()
@@ -38,6 +38,13 @@ struct ContentView: View {
                                 } label: {
                                     Image(systemName: "note.text")
                                         .foregroundColor(.green)
+                                }
+
+                                Button {
+                                    showVirtueActivities = true
+                                } label: {
+                                    Image(systemName: "leaf.fill")
+                                        .foregroundColor(.mint)
                                 }
 
                                 Button {
@@ -117,12 +124,6 @@ struct ContentView: View {
                                     .frame(width: 220)
                                 }
 
-                                Button {
-                                    showBooksLibrary = true
-                                } label: {
-                                    Image(systemName: "books.vertical")
-                                        .foregroundColor(.indigo)
-                                }
                             }
                         }
                         ToolbarItem(placement: .navigationBarTrailing) {
@@ -220,8 +221,8 @@ struct ContentView: View {
             .sheet(isPresented: $showDailyNotes) {
                 DailyNotesView(selectedDate: selectedDate)
             }
-            .sheet(isPresented: $showBooksLibrary) {
-                BooksView()
+            .sheet(isPresented: $showVirtueActivities) {
+                VirtueActivitiesView()
             }
             .sheet(isPresented: $showNewActivity) {
                 NewScheduledActivityView()
