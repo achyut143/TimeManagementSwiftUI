@@ -25,6 +25,8 @@
 	<string>This app uses the microphone to record your voice for creating tasks through speech-to-text conversion.</string>
 	<key>OPENAI_API_KEY</key>
 	<string>$(OPENAI_API_KEY)</string>
+	<key>ANTHROPIC_API_KEY</key>
+	<string>$(ANTHROPIC_API_KEY)</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

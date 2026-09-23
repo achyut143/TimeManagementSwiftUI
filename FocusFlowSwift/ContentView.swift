@@ -277,5 +277,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self, Restraint.self, RestraintInstance.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self, Restraint.self, RestraintInstance.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self, BacklogFolder.self], inMemory: true)
 }

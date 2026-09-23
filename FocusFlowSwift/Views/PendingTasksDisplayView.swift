@@ -30,8 +30,7 @@ struct PendingTasksDisplayView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                } else {
-                    let task = pendingTasks[currentIndex]
+                } else if let task = pendingTasks.indices.contains(currentIndex) ? pendingTasks[currentIndex] : pendingTasks.first {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Image(systemName: "clock.badge.exclamationmark")
@@ -122,6 +121,11 @@ struct PendingTasksDisplayView: View {
         guard pendingTasks.count > 1 else { return }
         withAnimation(.easeInOut(duration: 0.4)) { showTask = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            // Re-check: a task could have completed/changed during the 0.45s
+            // transition (loadPendingTasks() runs off TaskUpdated/TaskCreated
+            // notifications at any time), shrinking or emptying the list —
+            // without this, `% pendingTasks.count` crashes on divide-by-zero.
+            guard !pendingTasks.isEmpty else { return }
             currentIndex = (currentIndex + 1) % pendingTasks.count
             withAnimation(.easeInOut(duration: 0.4)) { showTask = true }
         }

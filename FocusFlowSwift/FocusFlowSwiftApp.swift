@@ -34,11 +34,14 @@ struct MigrationWrapper<Content: View>: View {
                 // Settles any away-time exit left pending from a force-quit
                 // while the app was backgrounded, up to right now.
                 AwayTimeTracker.shared.recordReturn()
+                // Starts (or restarts) the continuous in-app focus session.
+                FocusSessionTracker.shared.recordEnter()
                 ActivityReminderManager.shared.check(activities: virtueActivities)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 RestraintMaintenance.resolveStalePending(restraints: restraints, modelContext: modelContext)
                 AwayTimeTracker.shared.recordReturn()
+                FocusSessionTracker.shared.recordEnter()
                 ActivityReminderManager.shared.check(activities: virtueActivities)
             }
             .onReceive(activityReminderTicker) { _ in
@@ -50,9 +53,13 @@ struct MigrationWrapper<Content: View>: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                 pauseRunningProjectTimers()
                 AwayTimeTracker.shared.recordExit()
+                FocusSessionTracker.shared.recordExit()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                 pauseRunningProjectTimers()
+                // Safety net — didEnterBackground normally closes the session
+                // first, so this is a no-op in the common case.
+                FocusSessionTracker.shared.recordExit()
             }
     }
 
@@ -108,9 +115,9 @@ struct FocusFlowSwiftApp: App {
             Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self,
             AlertInstance.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self,
             HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self,
-            Book.self, BookQuote.self, ScheduleTemplate.self, TaskOKR.self, TaskInsight.self,
+            Book.self, BookQuote.self, ScheduleTemplate.self, GeneratorTemplate.self, TaskOKR.self, TaskInsight.self,
             Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self,
-            ProjectTimer.self, VirtueActivity.self
+            ProjectTimer.self, VirtueActivity.self, WhyGroup.self, BacklogFolder.self
         ]
         // Restraints live in a separate store so schema changes never touch existing data.
         let restraintTypes: [any PersistentModel.Type] = [Restraint.self, RestraintInstance.self]

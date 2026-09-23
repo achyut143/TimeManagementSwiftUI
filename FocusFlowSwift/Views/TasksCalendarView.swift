@@ -5,6 +5,22 @@ import Foundation
 import UniformTypeIdentifiers
 import QuickLook
 import PhotosUI
+import CoreTransferable
+
+/// Lightweight drag payload carrying just a task's id. `Task.transferRepresentation`
+/// only exports its title (for dragging text out of the app), so it can't be
+/// reconstructed on drop — this round-trips the id instead so the drop handler can
+/// look up the actual persisted `Task` in `modelContext`.
+struct TaskDragPayload: Codable, Transferable {
+    let id: UUID
+
+    static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation(
+            exporting: { $0.id.uuidString },
+            importing: { TaskDragPayload(id: UUID(uuidString: $0) ?? UUID()) }
+        )
+    }
+}
 
 struct TasksCalendarView: View {
     @Environment(\.modelContext) private var modelContext
@@ -20,7 +36,8 @@ struct TasksCalendarView: View {
     @State private var taskTitle = ""
     @State private var taskTags = ""
     @State private var startTime = roundToNearestFiveMinutes(Date())
-    @State private var endTime = Calendar.current.date(byAdding: .minute, value: 30, to: Date()) ?? Date()
+    @State private var endTime = Calendar.current.date(byAdding: .minute, value: 15, to: Date()) ?? Date()
+    @State private var taskDurationMinutes = 15
     @State private var repeatDays = 0
     @State private var taskWeight = 1.0
     @State private var taskPriority = "P3"
@@ -37,6 +54,11 @@ struct TasksCalendarView: View {
     @State private var quickTaskInput = ""
     @State private var showUntimedTasks = false
     @State private var showMarkAllNotCompletedConfirmation = false
+    @State private var isUntimedDropTargeted = false
+    @State private var showBacklogDrawer = false
+    @State private var showBacklogScreen = false
+    @State private var showBacklogPicker = false
+    @State private var backlogSourceTask: Task?
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     @Query(sort: \Goal.name) private var goals: [Goal]
@@ -44,6 +66,7 @@ struct TasksCalendarView: View {
     @State private var selectedGoalForNewTask: Goal?
 
     var body: some View {
+        ZStack(alignment: .bottom) {
         VStack(spacing: 0) {
             PointsIndicatorView(tasks: getAllTasksForDate())
 
@@ -52,6 +75,7 @@ struct TasksCalendarView: View {
                     showTaskCreation.toggle()
                     if !showTaskCreation {
                         showQuickTaskInput = true // reset to Quick Task for next open
+                        backlogSourceTask = nil
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -62,7 +86,17 @@ struct TasksCalendarView: View {
                     .onChange(of: showUntimedTasks) { _, _ in
                         updateQuery()
                     }
-                
+                    .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                        guard let payload = payloads.first, let droppedTask = findTask(withID: payload.id) else { return false }
+                        scheduleAsUntimed(droppedTask)
+                        return true
+                    } isTargeted: { targeted in
+                        isUntimedDropTargeted = targeted
+                    }
+                    .overlay(
+                        Capsule().stroke(Color.blue, lineWidth: isUntimedDropTargeted ? 2 : 0)
+                    )
+
                 DatePicker("", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact)
                     .onChange(of: selectedDate) { _, _ in
@@ -91,6 +125,50 @@ struct TasksCalendarView: View {
                 timelineView
             }
         }
+
+            if showBacklogDrawer {
+                BacklogView(
+                    isDrawer: true,
+                    isPresented: $showBacklogDrawer,
+                    targetDate: selectedDate,
+                    onSchedule: updateQuery,
+                    onExpand: {
+                        showBacklogDrawer = false
+                        showBacklogScreen = true
+                    }
+                )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(1)
+            } else {
+                // Moved out of the toolbar — it was crowding out the
+                // self-efficacy score in the nav bar. Bottom-leading keeps it
+                // clear of the app's other floating buttons (bottom-trailing).
+                VStack {
+                    Spacer()
+                    HStack {
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                showBacklogDrawer = true
+                            }
+                        } label: {
+                            Image(systemName: "tray.full.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(.white)
+                                .frame(width: 50, height: 50)
+                                .background(Color.indigo)
+                                .clipShape(Circle())
+                                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                        }
+                        .padding(.leading, 20)
+                        .padding(.bottom, 20)
+
+                        Spacer()
+                    }
+                }
+                .zIndex(1)
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: showBacklogDrawer)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -112,12 +190,15 @@ struct TasksCalendarView: View {
                         Image(systemName: "xmark.circle")
                             .foregroundColor(.red)
                     }
-                    
+
                     NavigationLink(destination: TaskTableView()) {
                         Image(systemName: "list.bullet")
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showBacklogScreen) {
+            BacklogView(isDrawer: false, isPresented: $showBacklogScreen, targetDate: selectedDate, onSchedule: updateQuery)
         }
         .onAppear {
             updateQuery()
@@ -168,6 +249,11 @@ struct TasksCalendarView: View {
                     .presentationDetents([.medium])
             }
         }
+        .sheet(isPresented: $showBacklogPicker) {
+            BacklogPickerView { task in
+                populateFromBacklog(task)
+            }
+        }
         .environment(\.isTaskFormPresented, showTaskCreation)
 
     }
@@ -200,7 +286,37 @@ struct TasksCalendarView: View {
 
                 Spacer()
             }
-            
+
+            if let source = backlogSourceTask {
+                HStack(spacing: 6) {
+                    Image(systemName: "tray.and.arrow.down")
+                    Text("From Backlog: \(source.title)")
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        backlogSourceTask = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.indigo)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.indigo.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                Button {
+                    showBacklogPicker = true
+                } label: {
+                    Label("Pick from Backlog", systemImage: "tray.and.arrow.down")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .tint(.indigo)
+            }
+
             VStack(spacing: 8) {
                 TextField("Task Title", text: $taskTitle)
                     .textFieldStyle(.roundedBorder)
@@ -220,14 +336,34 @@ struct TasksCalendarView: View {
                             .datePickerStyle(.compact)
                             .onChange(of: startTime) { _, newValue in
                                 startTime = roundToNearestFiveMinutes(newValue)
-                                endTime = Calendar.current.date(byAdding: .minute, value: 30, to: startTime) ?? startTime
+                                endTime = Calendar.current.date(byAdding: .minute, value: taskDurationMinutes, to: startTime) ?? startTime
                             }
-                        
-                        DatePicker("End", selection: $endTime, displayedComponents: .hourAndMinute)
-                            .datePickerStyle(.compact)
-                            .onChange(of: endTime) { _, newValue in
-                                endTime = roundToNearestFiveMinutes(newValue)
-                            }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Duration (min)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            TextField("30", value: $taskDurationMinutes, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .keyboardType(.numberPad)
+                                .frame(width: 70)
+                                .onChange(of: taskDurationMinutes) { _, newValue in
+                                    let clamped = max(5, newValue)
+                                    if clamped != newValue { taskDurationMinutes = clamped }
+                                    endTime = Calendar.current.date(byAdding: .minute, value: clamped, to: startTime) ?? startTime
+                                }
+                        }
+
+                        Spacer()
+
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("Ends at")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text(endTime.formatted(date: .omitted, time: .shortened))
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
                     }
                 }
                 
@@ -570,7 +706,17 @@ struct TasksCalendarView: View {
                 Rectangle()
                     .fill(Color.gray.opacity(0.05))
                     .frame(height: 10)
-                
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        startTaskCreation(atHour: slot.hour, minute: slot.minute)
+                    }
+                    .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                        guard let payload = payloads.first,
+                              let droppedTask = findTask(withID: payload.id) else { return false }
+                        updateTaskTime(droppedTask, to: slot)
+                        return true
+                    }
+
                 GeometryReader { geometry in
                     ForEach(tasksForSlot(slot)) { task in
                         taskView(task: task, slot: slot, containerWidth: geometry.size.width)
@@ -832,9 +978,10 @@ struct TasksCalendarView: View {
     // height: taskHeight
   )
   .offset(x: containerWidth * leftOffset)
-  .draggable(task)
-  .dropDestination(for: Task.self) { droppedTasks, _ in
-    guard let droppedTask = droppedTasks.first else { return false }
+  .draggable(TaskDragPayload(id: task.id))
+  .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+    guard let payload = payloads.first,
+          let droppedTask = findTask(withID: payload.id) else { return false }
     updateTaskTime(droppedTask, to: slot)
     return true
   }
@@ -1174,53 +1321,100 @@ struct TasksCalendarView: View {
         updateQuery()
     }
     
+    private func startTaskCreation(atHour hour: Int, minute: Int) {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: selectedDate)
+        let tappedStart = calendar.date(byAdding: DateComponents(hour: hour, minute: minute), to: dayStart) ?? dayStart
+
+        startTime = tappedStart
+        taskDurationMinutes = 15
+        endTime = calendar.date(byAdding: .minute, value: taskDurationMinutes, to: tappedStart) ?? tappedStart
+        isUntimedTask = false
+        showQuickTaskInput = false
+        showTaskCreation = true
+        backlogSourceTask = nil
+    }
+
     private func createTaskFromSeparateFields() {
         guard !taskTitle.isEmpty else { return }
-        
-        let task: Task
-        
-        if isUntimedTask {
-            task = Task(
-                title: taskTitle,
-                taskDescription: taskTags,
-                startTime: "", // No start time for untimed tasks
-                endTime: "", // No end time for untimed tasks
-                weight: taskWeight,
-                date: selectedDate, // Keep the date
-                repeatAgain: repeatDays > 0 ? repeatDays : nil, // Allow repeat for untimed tasks
-                priority: taskPriority,
-                copySubtasks: copySubtasks
-            )
-        } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "H:mm"
-            
-            let startTimeString = formatter.string(from: startTime)
-            let endTimeString = formatter.string(from: endTime)
-            
-            task = Task(
-                title: taskTitle,
-                taskDescription: taskTags,
-                startTime: startTimeString,
-                endTime: endTimeString,
-                weight: taskWeight,
-                date: selectedDate,
-                repeatAgain: repeatDays > 0 ? repeatDays : nil,
-                priority: taskPriority,
-                copySubtasks: copySubtasks
-            )
-            
-            scheduleTaskNotifications(for: task)
-        }
-        
-        task.goal = selectedGoalForNewTask
-        modelContext.insert(task)
 
-        do {
-            try modelContext.save()
-            updateQuery()
-        } catch {
-            print("Error saving task: \(error)")
+        if let source = backlogSourceTask {
+            // Schedule the same task in place, rather than creating a new
+            // row and deleting the old one — anything the create form
+            // doesn't surface (notes, virtues, subtasks, attachments,
+            // whyStatement, timeSpent, ...) stays intact on this task.
+            source.title = taskTitle
+            source.taskDescription = taskTags
+            source.weight = taskWeight
+            source.priority = taskPriority
+            source.repeatAgain = repeatDays > 0 ? repeatDays : nil
+            source.copySubtasks = copySubtasks
+            source.goal = selectedGoalForNewTask
+            source.date = selectedDate
+
+            if isUntimedTask {
+                source.startTime = ""
+                source.endTime = ""
+            } else {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "H:mm"
+                source.startTime = formatter.string(from: startTime)
+                source.endTime = formatter.string(from: endTime)
+                scheduleTaskNotifications(for: source)
+            }
+
+            do {
+                try modelContext.save()
+                updateQuery()
+            } catch {
+                print("Error saving task: \(error)")
+            }
+        } else {
+            let task: Task
+
+            if isUntimedTask {
+                task = Task(
+                    title: taskTitle,
+                    taskDescription: taskTags,
+                    startTime: "", // No start time for untimed tasks
+                    endTime: "", // No end time for untimed tasks
+                    weight: taskWeight,
+                    date: selectedDate, // Keep the date
+                    repeatAgain: repeatDays > 0 ? repeatDays : nil, // Allow repeat for untimed tasks
+                    priority: taskPriority,
+                    copySubtasks: copySubtasks
+                )
+            } else {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "H:mm"
+
+                let startTimeString = formatter.string(from: startTime)
+                let endTimeString = formatter.string(from: endTime)
+
+                task = Task(
+                    title: taskTitle,
+                    taskDescription: taskTags,
+                    startTime: startTimeString,
+                    endTime: endTimeString,
+                    weight: taskWeight,
+                    date: selectedDate,
+                    repeatAgain: repeatDays > 0 ? repeatDays : nil,
+                    priority: taskPriority,
+                    copySubtasks: copySubtasks
+                )
+
+                scheduleTaskNotifications(for: task)
+            }
+
+            task.goal = selectedGoalForNewTask
+            modelContext.insert(task)
+
+            do {
+                try modelContext.save()
+                updateQuery()
+            } catch {
+                print("Error saving task: \(error)")
+            }
         }
 
         // Reset form
@@ -1230,8 +1424,22 @@ struct TasksCalendarView: View {
         taskWeight = 1.0
         taskPriority = "P3"
         isUntimedTask = false
+        taskDurationMinutes = 15
         copySubtasks = false
         selectedGoalForNewTask = nil
+        backlogSourceTask = nil
+    }
+
+    private func populateFromBacklog(_ task: Task) {
+        taskTitle = task.title
+        taskTags = task.taskDescription
+        taskWeight = task.weight
+        taskPriority = task.priority
+        selectedGoalForNewTask = task.goal
+        if task.repeatAgain != nil {
+            repeatDays = task.repeatAgain ?? 0
+        }
+        backlogSourceTask = task
     }
 
     private func createQuickTask(from parsed: QuickTaskParser.ParsedTask) {
@@ -1418,21 +1626,52 @@ struct TasksCalendarView: View {
         try? modelContext.save()
     }
 
+    private func findTask(withID id: UUID) -> Task? {
+        tasks.first { $0.id == id } ?? allTasks.first { $0.id == id }
+    }
+
     private func updateTaskTime(_ task: Task, to slot: TimeSlot) {
         let startMinutes = slot.hour * 60 + slot.minute
-        let endMinutes = startMinutes + 60
-        
+
+        // Preserve the task's original duration instead of resetting it to a fixed
+        // length — except when it had no time at all yet (a backlog task, or an
+        // untimed task being dragged onto the timeline for the first time), where
+        // there's no prior duration to preserve, so give it a sensible default.
+        let duration: Int
+        if task.startTime.isEmpty || task.endTime.isEmpty {
+            duration = 15
+        } else {
+            let originalStart = timeToMinutes(task.startTime)
+            let originalEnd = timeToMinutes(task.endTime)
+            duration = originalEnd > originalStart
+                ? originalEnd - originalStart
+                : (24 * 60 - originalStart) + originalEnd
+        }
+        let endMinutes = startMinutes + max(duration, 5)
+
         let startHour = startMinutes / 60
         let startMin = startMinutes % 60
-        let endHour = endMinutes / 60
-        let endMin = endMinutes % 60
-        
+        let wrappedEnd = endMinutes % (24 * 60)
+        let endHour = wrappedEnd / 60
+        let endMin = wrappedEnd % 60
+
         task.startTime = String(format: "%d:%02d", startHour, startMin)
         task.endTime = String(format: "%d:%02d", endHour, endMin)
         task.date = selectedDate
-        
+
         scheduleTaskNotifications(for: task)
         try? modelContext.save()
+        updateQuery()
+    }
+
+    /// Drops a task (typically from the Backlog) onto the selected day as an
+    /// untimed task, rather than a specific time slot.
+    private func scheduleAsUntimed(_ task: Task) {
+        task.startTime = ""
+        task.endTime = ""
+        task.date = selectedDate
+        try? modelContext.save()
+        updateQuery()
     }
     
     private func scheduleTaskNotifications(for task: Task) {
@@ -1504,6 +1743,7 @@ struct EditTaskView: View {
     @State private var info: String
     @State private var startTime: Date
     @State private var endTime: Date
+    @State private var durationMinutes: Int
     @State private var weight: Double
     @State private var taskDate: Date?
     @State private var repeatDays: Int
@@ -1524,8 +1764,12 @@ struct EditTaskView: View {
 
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
-        _startTime = State(initialValue: formatter.date(from: task.startTime) ?? Date())
-        _endTime = State(initialValue: formatter.date(from: task.endTime) ?? Date())
+        let initialStart = formatter.date(from: task.startTime) ?? Date()
+        let initialEnd = formatter.date(from: task.endTime) ?? Date()
+        _startTime = State(initialValue: initialStart)
+        _endTime = State(initialValue: initialEnd)
+        let existingDuration = Int(initialEnd.timeIntervalSince(initialStart) / 60)
+        _durationMinutes = State(initialValue: existingDuration > 0 ? existingDuration : 15)
         _weight = State(initialValue: task.weight)
         _repeatDays = State(initialValue: task.repeatAgain ?? 0)
         _priority = State(initialValue: task.priority)
@@ -1560,12 +1804,25 @@ struct EditTaskView: View {
                     DatePicker("Start Time", selection: $startTime, displayedComponents: .hourAndMinute)
                         .onChange(of: startTime) { _, newValue in
                             startTime = roundToNearestFiveMinutes(newValue)
+                            endTime = Calendar.current.date(byAdding: .minute, value: durationMinutes, to: startTime) ?? startTime
                         }
-                    
-                    DatePicker("End Time", selection: $endTime, displayedComponents: .hourAndMinute)
-                        .onChange(of: endTime) { _, newValue in
-                            endTime = roundToNearestFiveMinutes(newValue)
-                        }
+
+                    HStack {
+                        Text("Duration (min)")
+                        TextField("30", value: $durationMinutes, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+                            .frame(width: 80)
+                            .onChange(of: durationMinutes) { _, newValue in
+                                let clamped = max(5, newValue)
+                                if clamped != newValue { durationMinutes = clamped }
+                                endTime = Calendar.current.date(byAdding: .minute, value: clamped, to: startTime) ?? startTime
+                            }
+                        Spacer()
+                        Text("Ends at \(endTime.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 
                 if isUntimed {
@@ -1950,9 +2207,21 @@ struct TaskActionsView: View {
                                 pasteTask()
                             }
                         }
-                        
+
                         Divider()
-                        
+
+                        if task.date != nil {
+                            actionButton("Send to Backlog", systemImage: "tray.and.arrow.down", color: .indigo) {
+                                sendToBacklog()
+                            }
+                        } else {
+                            actionButton("Schedule for \(selectedDate.formatted(date: .abbreviated, time: .omitted))", systemImage: "calendar.badge.plus", color: .indigo) {
+                                scheduleFromBacklog()
+                            }
+                        }
+
+                        Divider()
+
                         actionButton("Delete", systemImage: "trash", color: .red) {
                             showDeleteConfirmation = true
                         }
@@ -2056,7 +2325,29 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         try? modelContext.save()
         dismiss()
     }
-    
+
+    /// Unschedules the task back into the Backlog — clears its date/time so
+    /// it drops out of every day-based query (see `Task.isBacklog`) without
+    /// losing anything else about it (weight, priority, subtasks, etc.).
+    private func sendToBacklog() {
+        task.date = nil
+        task.startTime = ""
+        task.endTime = ""
+        try? modelContext.save()
+        onTaskDeleted()
+        dismiss()
+    }
+
+    /// The reverse of `sendToBacklog` — used when this sheet was opened on a
+    /// backlog task (from the Backlog view). Schedules it onto `selectedDate`
+    /// as untimed; the user can drag it to a specific slot afterward if needed.
+    private func scheduleFromBacklog() {
+        task.date = selectedDate
+        try? modelContext.save()
+        onTaskDeleted()
+        dismiss()
+    }
+
     private func createRepeatTask(from task: Task) {
         guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
         
