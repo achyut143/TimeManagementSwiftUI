@@ -118,6 +118,16 @@ struct PlannerMetricsView: View {
                 ForEach(schedules) { v in sleepStats(for: v) }
             }
 
+            Section("Workouts") {
+                let records = elapsedDays.compactMap { d in days.first { $0.date == d } }
+                let rest = records.filter(\.restDay).count
+                let planned = records.filter { !$0.restDay && $0.workoutPlanned }
+                let done = planned.filter(\.workoutDone).count
+                metric("Done", "\(done) of \(planned.count) planned (\(percent(Double(done), of: Double(planned.count))))")
+                metric("Rest days", "\(rest)")
+                metric("Days with a workout or rest day", percent(Double(planned.count + rest), of: Double(elapsedDays.count)))
+            }
+
             Section("Meals") {
                 let full = elapsedDays.filter { d in (days.first { $0.date == d }?.mealsPlanned ?? 0) == 3 }
                 metric("All 3 meals planned", "\(percent(Double(full.count), of: Double(elapsedDays.count))) of days")
@@ -163,12 +173,21 @@ struct PlannerMetricsView: View {
             return [TrendPoint(month: m, kind: "Planned", hours: s.planned / 60),
                     TrendPoint(month: m, kind: "Unplanned", hours: s.unplanned / 60)]
         }
-        return Chart(points) { p in
-            BarMark(x: .value("Month", p.month, unit: .month), y: .value("Hours", p.hours))
-                .foregroundStyle(by: .value("Kind", p.kind))
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Last 6 months (hours)").font(.caption).foregroundStyle(.secondary)
+            Chart(points) { p in
+                BarMark(x: .value("Month", p.month, unit: .month), y: .value("Hours", p.hours))
+                    .foregroundStyle(by: .value("Kind", p.kind))
+            }
+            .chartForegroundStyleScale(["Planned": Color.green, "Unplanned": Color.red])
+            // Label every month — the automatic axis skips every other one.
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .month)) { _ in
+                    AxisValueLabel(format: .dateTime.month(.abbreviated), centered: true)
+                }
+            }
+            .frame(height: 140)
         }
-        .chartForegroundStyleScale(["Planned": Color.green, "Unplanned": Color.red])
-        .frame(height: 140)
         .padding(.vertical, 4)
     }
 

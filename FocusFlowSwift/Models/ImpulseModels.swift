@@ -165,6 +165,10 @@ final class PlannerDay {
     var lunchEaten: Bool = false
     var dinnerEaten: Bool = false
     var noImpulseDay: Bool = false
+    var workout: String = ""
+    var workoutTime: Date? = nil
+    var workoutDone: Bool = false
+    var restDay: Bool = false
     var wakeActual: Date? = nil
     var sleepActual: Date? = nil
     var createdAt: Date = Date()
@@ -173,6 +177,8 @@ final class PlannerDay {
         self.date = date.startOfDay
         self.createdAt = Date()
     }
+
+    var workoutPlanned: Bool { !workout.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var mealsPlanned: Int {
         [breakfast, lunch, dinner].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
@@ -449,11 +455,14 @@ struct PlannerDayStatus {
     let mealsPlanned: Int
     let impulseTasks: [Task]
     let noImpulseDay: Bool
+    let workoutPlanned: Bool
+    let restDay: Bool
 
     var goalsDone: Bool { dayGoals.count >= 3 }
     var mealsDone: Bool { mealsPlanned == 3 }
     var impulsesDone: Bool { noImpulseDay || !impulseTasks.isEmpty }
-    var isPlanned: Bool { goalsDone && mealsDone && impulsesDone }
+    var workoutSet: Bool { restDay || workoutPlanned }
+    var isPlanned: Bool { goalsDone && mealsDone && impulsesDone && workoutSet }
     var noImpulseBroken: Bool { noImpulseDay && impulseTasks.contains { !ImpulseRules.isSkipped($0) } }
 
     var plannedImpulseMinutes: Double {
@@ -470,7 +479,9 @@ enum PlannerRules {
             dayGoals: goals.filter { $0.periodRaw == GoalPeriod.day.rawValue && $0.periodStart == day && $0.status != .carried },
             mealsPlanned: planner?.mealsPlanned ?? 0,
             impulseTasks: impulseTasks.filter { $0.date.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false },
-            noImpulseDay: planner?.noImpulseDay ?? false
+            noImpulseDay: planner?.noImpulseDay ?? false,
+            workoutPlanned: planner?.workoutPlanned ?? false,
+            restDay: planner?.restDay ?? false
         )
     }
 

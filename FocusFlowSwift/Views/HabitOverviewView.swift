@@ -844,13 +844,18 @@ struct HabitOverviewView: View {
         tasks.filter { $0.repeatAgain != nil }
     }
     
+    /// A–Z ignoring case, so "meditate" sorts next to "Meditation" rather than after every capitalized name.
+    private static func caseInsensitiveAscending(_ a: String, _ b: String) -> Bool {
+        a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+    }
+
     private var filteredHabitNames: [String] {
         // Build lookup dictionary once — avoids re-filtering tasks for every habit name
         var tasksByTitle: [String: [Task]] = [:]
         for task in tasks where task.repeatAgain != nil {
             tasksByTitle[task.title, default: []].append(task)
         }
-        let allHabitNames = tasksByTitle.keys.sorted()
+        let allHabitNames = tasksByTitle.keys.sorted(by: Self.caseInsensitiveAscending)
 
         return allHabitNames
             .filter { name in
@@ -1731,7 +1736,8 @@ struct HabitOverviewView: View {
         var spentByTitle: [String: Double] = [:]
         var elapsedByTitle: [String: Double] = [:]
 
-        for task in tasks {
+        // Habits only — non-repeating tasks don't belong in Habit Overview.
+        for task in tasks where task.repeatAgain != nil {
             guard let taskDate = task.date,
                   taskDate >= fromDate && taskDate <= toDate else { continue }
 
@@ -1787,7 +1793,7 @@ struct HabitOverviewView: View {
             let r1 = $1.elapsed > 0 ? $1.spent / $1.elapsed : 0
             return r0 > r1  // high ratio first → low ratio at top (Low → High)
         }
-        default:     entries.sort { $0.label < $1.label }
+        default:     entries.sort { Self.caseInsensitiveAscending($0.label, $1.label) }
         }
 
         return entries
@@ -1831,12 +1837,12 @@ struct HabitOverviewView: View {
         let candidates: [String]
         if selectedView == "time" {
             let titlesInRange = Set(tasks.compactMap { task -> String? in
-                guard let d = task.date, d >= fromDate && d <= toDate else { return nil }
+                guard task.repeatAgain != nil, let d = task.date, d >= fromDate && d <= toDate else { return nil }
                 return task.title
             })
-            candidates = titlesInRange.sorted()
+            candidates = titlesInRange.sorted(by: Self.caseInsensitiveAscending)
         } else {
-            candidates = cachedStats.keys.sorted()
+            candidates = cachedStats.keys.sorted(by: Self.caseInsensitiveAscending)
         }
         return candidates.filter { name in
             partial.isEmpty || name.localizedCaseInsensitiveContains(partial)

@@ -111,6 +111,23 @@ struct DayPlanDetailView: View {
             readMeal("Dinner", planner?.dinner, planner?.dinnerTime, planner?.dinnerEaten)
         }
 
+        Section("Workout") {
+            if planner?.restDay == true {
+                Badge(text: "Rest day", color: .teal)
+            } else if let planner, planner.workoutPlanned {
+                HStack {
+                    Text(planner.workout)
+                    Spacer()
+                    if let time = planner.workoutTime {
+                        Text(time.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if planner.workoutDone { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                }
+            } else {
+                Text("Not planned").foregroundStyle(.secondary)
+            }
+        }
+
         Section("Impulses") {
             if status.noImpulseBroken {
                 Badge(text: "No-impulse day broken", color: .red)
@@ -166,6 +183,7 @@ struct DayPlanDetailView: View {
             Section {
                 checklistRow("3 or more goals", done: draft.goals.filter { !$0.title.trimmed.isEmpty }.count >= 3)
                 checklistRow("Breakfast, lunch and dinner", done: draft.meals.allSatisfy { !$0.text.trimmed.isEmpty })
+                checklistRow("Workout or rest day", done: draft.restDay || !draft.workout.trimmed.isEmpty)
                 checklistRow("Impulse time or no-impulse day", done: draft.noImpulseDay || draft.impulses.contains { !$0.deleted })
             } header: {
                 Text("To finish planning")
@@ -217,6 +235,18 @@ struct DayPlanDetailView: View {
                         DatePicker("Time", selection: $meal.time, displayedComponents: .hourAndMinute).font(.caption)
                     }
                 }
+            }
+        }
+
+        Section("Workout") {
+            Toggle("Rest day", isOn: $draft.restDay)
+            if !draft.restDay {
+                TextField("e.g. Gym — legs, 5 km run", text: $draft.workout)
+                Toggle("Set a time", isOn: $draft.hasWorkoutTime)
+                if draft.hasWorkoutTime {
+                    DatePicker("Time", selection: $draft.workoutTime, displayedComponents: .hourAndMinute)
+                }
+                Toggle("Done", isOn: $draft.workoutDone)
             }
         }
 
@@ -297,6 +327,11 @@ struct DayPlanDetailView: View {
             MealDraft(name: "Dinner", text: p?.dinner ?? "", time: p?.dinnerTime, eaten: p?.dinnerEaten ?? false, day: date, defaultHour: 19)
         ]
         d.noImpulseDay = p?.noImpulseDay ?? false
+        d.restDay = p?.restDay ?? false
+        d.workout = p?.workout ?? ""
+        d.hasWorkoutTime = p?.workoutTime != nil
+        d.workoutTime = p?.workoutTime ?? Calendar.current.date(byAdding: .hour, value: 7, to: date)!
+        d.workoutDone = p?.workoutDone ?? false
         d.impulses = status.impulseTasks.map { ImpulseDraft(task: $0, day: date) }
         d.hasWake = p?.wakeActual != nil
         d.wake = p?.wakeActual ?? Calendar.current.date(byAdding: .hour, value: 7, to: date)!
@@ -334,6 +369,12 @@ struct DayPlanDetailView: View {
         p.dinner = m[2].text.trimmed; p.dinnerTime = m[2].hasTime ? m[2].time : nil; p.dinnerEaten = m[2].eaten
 
         p.noImpulseDay = draft.noImpulseDay
+
+        // A rest day keeps whatever workout text was typed, but it isn't the plan.
+        p.restDay = draft.restDay
+        p.workout = draft.workout.trimmed
+        p.workoutTime = draft.hasWorkoutTime ? place(draft.workoutTime, on: date) : nil
+        p.workoutDone = !draft.restDay && draft.workoutDone && !p.workout.isEmpty
 
         // Wake & sleep: times are picked as clock times and placed on this day
         // (sleep before noon goes on the next calendar date).
@@ -396,6 +437,11 @@ private struct Draft {
     var goals: [GoalDraft] = []
     var meals: [MealDraft] = []
     var noImpulseDay = false
+    var restDay = false
+    var workout = ""
+    var hasWorkoutTime = false
+    var workoutTime = Date()
+    var workoutDone = false
     var impulses: [ImpulseDraft] = []
     var hasWake = false
     var wake = Date()

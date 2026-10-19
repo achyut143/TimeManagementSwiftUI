@@ -83,6 +83,8 @@ struct PlannerHeaderView: View {
                         Divider()
                         mealsSection
                         Divider()
+                        workoutSection
+                        Divider()
                         impulsesSection
                         if budget.budgetMinutes != nil {
                             Divider()
@@ -244,6 +246,33 @@ struct PlannerHeaderView: View {
         }
     }
 
+    private var workoutSection: some View {
+        HStack(spacing: 6) {
+            Text("Workout").font(.caption.weight(.semibold)).frame(width: 64, alignment: .leading)
+            if planner?.restDay == true {
+                Badge(text: "Rest day", color: .teal)
+                Spacer()
+            } else if let planner, planner.workoutPlanned {
+                Button {
+                    planner.workoutDone.toggle()
+                    try? modelContext.save()
+                } label: {
+                    Image(systemName: planner.workoutDone ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(planner.workoutDone ? .green : .secondary)
+                }
+                .buttonStyle(.plain)
+                Text(planner.workout).font(.caption).lineLimit(1)
+                Spacer()
+                if let time = planner.workoutTime {
+                    Text(time.formatted(date: .omitted, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Not planned").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+    }
+
     private var impulsesSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -295,6 +324,8 @@ struct PlannerHeaderView: View {
                     StripChip(title: "Meals",
                               value: status.mealsPlanned == 0 ? "?" : "\(status.mealsPlanned) / 3",
                               color: status.mealsDone ? .teal : .secondary)
+                    StripChip(title: "Workout", value: workoutChipText,
+                              color: status.workoutSet ? .teal : .secondary)
                     StripChip(title: "Impulse", value: impulseChipText, color: impulseChipColor)
                     StripChip(title: "Sleep", value: sleepChipText, color: .indigo)
                     if let budgetMinutes = budget.budgetMinutes {
@@ -307,6 +338,14 @@ struct PlannerHeaderView: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    private var workoutChipText: String {
+        guard let planner else { return "?" }
+        if planner.restDay { return "Rest day" }
+        guard planner.workoutPlanned else { return "?" }
+        if planner.workoutDone { return "Done" }
+        return planner.workoutTime?.formatted(date: .omitted, time: .shortened) ?? "Planned"
     }
 
     private var impulseChipText: String {

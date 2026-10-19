@@ -5,6 +5,7 @@ import UIKit
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showDailyNotes = false
+    @State private var showWorkouts = false
     @State private var openDailyNotesInFocusMode = false
     @State private var showMetricsSettings = false
     @State private var selectedDate = Date()
@@ -29,6 +30,14 @@ struct ContentView: View {
                                     Image(systemName: "note.text")
                                         .foregroundColor(.green)
                                 }
+
+                                Button {
+                                    showWorkouts = true
+                                } label: {
+                                    Image(systemName: "figure.run")
+                                        .foregroundColor(.red)
+                                }
+                                .accessibilityLabel("Workouts")
 
                                 Button {
                                     showMetricsSettings = true
@@ -154,6 +163,16 @@ struct ContentView: View {
                 .tabItem {
                     Image(systemName: "target")
                     Text("Goals")
+                }
+            }
+            .sheet(isPresented: $showWorkouts) {
+                NavigationStack {
+                    WorkoutsView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showWorkouts = false }
+                            }
+                        }
                 }
             }
             .sheet(isPresented: $showDailyNotes, onDismiss: { openDailyNotesInFocusMode = false }) {
