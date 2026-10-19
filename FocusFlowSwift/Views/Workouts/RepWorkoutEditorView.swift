@@ -8,6 +8,8 @@ struct RepWorkoutEditorView: View {
     @AppStorage("workout.weightUnit") private var weightUnit = "kg"
 
     let workout: RepWorkout?
+    /// Called after a successful save.
+    var onSaved: (() -> Void)? = nil
     @State private var name: String
     @State private var sets: [RepSet]
     @State private var restSeconds: Int
@@ -15,8 +17,9 @@ struct RepWorkoutEditorView: View {
     @State private var showReorderSets = false
 
     /// `prefill` starts a new workout from given values (e.g. built by AI).
-    init(workout: RepWorkout?, prefill: (name: String, sets: [RepSet], restSeconds: Int)? = nil) {
+    init(workout: RepWorkout?, prefill: (name: String, sets: [RepSet], restSeconds: Int)? = nil, onSaved: (() -> Void)? = nil) {
         self.workout = workout
+        self.onSaved = onSaved
         _name = State(initialValue: workout?.name ?? prefill?.name ?? "")
         _sets = State(initialValue: workout?.sets ?? prefill?.sets ?? [RepSet(exercises: [RepExercise()])])
         _restSeconds = State(initialValue: workout?.restBetweenSetsSeconds ?? prefill?.restSeconds ?? 0)
@@ -131,6 +134,7 @@ struct RepWorkoutEditorView: View {
         target.restBetweenSetsSeconds = restSeconds
         try? modelContext.save()
         WorkoutPictureStore.removeUnused(context: modelContext)
+        onSaved?()
         dismiss()
     }
 }

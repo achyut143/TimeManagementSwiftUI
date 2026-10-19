@@ -57,11 +57,21 @@ struct TabataRunView: View {
                     WorkoutSoundToggles()
                 }
 
+                if let interval, interval.partCount > 1 {
+                    Text("PART \(interval.part + 1) OF \(interval.partCount) · \(interval.partName)")
+                        .font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.2), in: Capsule())
+                }
+
                 // Cycle and round in big text, readable from across the room.
                 HStack(alignment: .top) {
-                    statBlock("CYCLE", "\(interval?.cycle ?? 0)/\(timer.draft.cycles)")
+                    statBlock("CYCLE", "\(interval?.cycle ?? 0)/\(interval?.cycles ?? 0)")
                     Spacer()
-                    statBlock("ROUND", "\(interval?.round ?? 0)/\(timer.draft.rounds)")
+                    statBlock("ROUND", "\(interval?.round ?? 0)/\(interval?.rounds ?? 0)")
                 }
 
                 Text("Total left \(WorkoutFormat.clock(timer.totalRemaining))")

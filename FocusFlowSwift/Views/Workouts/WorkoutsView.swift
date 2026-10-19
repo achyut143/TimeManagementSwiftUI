@@ -20,6 +20,7 @@ struct WorkoutsView: View {
     @State private var creatingReps = false
     @State private var showSettings = false
     @State private var creatingWithAI = false
+    @State private var searchText = ""
 
     private var section: WorkoutTab { WorkoutTab(rawValue: sectionRaw) ?? .tabata }
 
@@ -39,6 +40,7 @@ struct WorkoutsView: View {
             }
         }
         .navigationTitle("Workouts")
+        .searchable(text: $searchText, prompt: searchPrompt)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -69,9 +71,11 @@ struct WorkoutsView: View {
     @ViewBuilder private var tabataList: some View {
         if tabatas.isEmpty {
             emptyState("No Tabatas yet", icon: "timer", action: "New Tabata") { creatingTabata = true }
+        } else if filteredTabatas.isEmpty {
+            ContentUnavailableView.search(text: searchText)
         } else {
             List {
-                ForEach(tabatas) { workout in
+                ForEach(filteredTabatas) { workout in
                     NavigationLink {
                         TabataDetailView(workout: workout)
                     } label: {
@@ -95,9 +99,11 @@ struct WorkoutsView: View {
     @ViewBuilder private var repList: some View {
         if repWorkouts.isEmpty {
             emptyState("No rep workouts yet", icon: "dumbbell", action: "New rep workout") { creatingReps = true }
+        } else if filteredReps.isEmpty {
+            ContentUnavailableView.search(text: searchText)
         } else {
             List {
-                ForEach(repWorkouts) { workout in
+                ForEach(filteredReps) { workout in
                     NavigationLink {
                         RepWorkoutDetailView(workout: workout)
                     } label: {
@@ -122,9 +128,11 @@ struct WorkoutsView: View {
         if sessions.isEmpty {
             ContentUnavailableView("No finished workouts", systemImage: "clock.arrow.circlepath",
                                    description: Text("Workouts you finish or stop appear here."))
+        } else if filteredSessions.isEmpty {
+            ContentUnavailableView.search(text: searchText)
         } else {
             List {
-                ForEach(sessions) { session in
+                ForEach(filteredSessions) { session in
                     NavigationLink {
                         WorkoutSessionDetailView(session: session)
                     } label: {
@@ -132,10 +140,61 @@ struct WorkoutsView: View {
                     }
                 }
                 .onDelete { offsets in
-                    offsets.map { sessions[$0] }.forEach(modelContext.delete)
+                    offsets.map { filteredSessions[$0] }.forEach(modelContext.delete)
                     try? modelContext.save()
                 }
             }
+        }
+    }
+
+    // MARK: Search
+
+    private var searchPrompt: String {
+        switch section {
+        case .tabata: return "Search Tabatas or exercises"
+        case .reps: return "Search workouts or exercises"
+        case .history: return "Search history"
+        }
+    }
+
+    /// Words in the query that must all appear (in any order).
+    private var searchTerms: [String] {
+        searchText.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    private func matches(_ fields: [String]) -> Bool {
+        let terms = searchTerms
+        guard !terms.isEmpty else { return true }
+        let haystack = fields.joined(separator: " ").lowercased()
+        return terms.allSatisfy { haystack.contains($0) }
+    }
+
+    /// Matches the name, part names and exercise names.
+    private var filteredTabatas: [TabataWorkout] {
+        guard !searchTerms.isEmpty else { return tabatas }
+        return tabatas.filter { w in
+            let draft = w.draft
+            return matches([w.name] + draft.parts.map(\.name) + draft.parts.flatMap(\.cycleNames))
+        }
+    }
+
+    /// Matches the name, exercise names and notes.
+    private var filteredReps: [RepWorkout] {
+        guard !searchTerms.isEmpty else { return repWorkouts }
+        return repWorkouts.filter { w in
+            let exercises = w.sets.flatMap(\.exercises)
+            return matches([w.name] + exercises.map(\.name) + exercises.map(\.note))
+        }
+    }
+
+    /// Matches the name, date (e.g. "Oct 19"), result, and logged exercises.
+    private var filteredSessions: [WorkoutSession] {
+        guard !searchTerms.isEmpty else { return sessions }
+        return sessions.filter { s in
+            matches([s.name, s.kind.title,
+                     s.startedAt.formatted(date: .abbreviated, time: .omitted),
+                     s.startedAt.formatted(.dateTime.weekday(.wide).month(.wide)),
+                     s.completed ? "completed" : "stopped early"] + s.log.map(\.name))
         }
     }
 
@@ -238,22 +297,28 @@ struct TabataDetailView: View {
         let draft = workout.draft
         List {
             SwiftUI.Section {
-                LabeledContent("Prepare", value: WorkoutFormat.clock(draft.prepareSeconds))
-                LabeledContent("Work", value: WorkoutFormat.clock(draft.workSeconds))
-                LabeledContent("Rest", value: draft.restSeconds == 0 ? "No rest" : WorkoutFormat.clock(draft.restSeconds))
-                LabeledContent("Cycles × rounds", value: "\(draft.cycles) × \(draft.rounds)")
-                if draft.rounds > 1 {
-                    LabeledContent("Rest between rounds", value: draft.restBetweenRoundsSeconds == 0 ? "None" : WorkoutFormat.clock(draft.restBetweenRoundsSeconds))
-                }
                 LabeledContent("Total time", value: WorkoutFormat.clock(draft.totalSeconds))
+                LabeledContent("Work intervals", value: "\(draft.workIntervalCount)")
+                if draft.parts.count > 1 {
+                    LabeledContent("Parts", value: "\(draft.parts.count)")
+                }
             }
-            SwiftUI.Section("Exercises") {
-                ForEach(0..<draft.cycles, id: \.self) { i in
-                    HStack {
-                        Text("\(i + 1)").foregroundStyle(.secondary).frame(width: 26, alignment: .leading)
-                        Text(draft.exerciseName(cycle: i))
-                        Spacer()
-                        WorkoutPictureThumb(imageID: draft.imageID(cycle: i))
+            ForEach(Array(draft.parts.enumerated()), id: \.element.id) { index, part in
+                SwiftUI.Section(draft.parts.count > 1 ? part.title(index: index) : "Timing") {
+                    LabeledContent("Prepare", value: WorkoutFormat.clock(part.prepareSeconds))
+                    LabeledContent("Work", value: WorkoutFormat.clock(part.workSeconds))
+                    LabeledContent("Rest", value: part.restSeconds == 0 ? "No rest" : WorkoutFormat.clock(part.restSeconds))
+                    LabeledContent("Cycles × rounds", value: "\(part.cycles) × \(part.rounds)")
+                    if part.rounds > 1 {
+                        LabeledContent("Rest between rounds", value: part.restBetweenRoundsSeconds == 0 ? "None" : WorkoutFormat.clock(part.restBetweenRoundsSeconds))
+                    }
+                    ForEach(0..<part.cycles, id: \.self) { i in
+                        HStack {
+                            Text("\(i + 1)").foregroundStyle(.secondary).frame(width: 26, alignment: .leading)
+                            Text(part.exerciseName(cycle: i))
+                            Spacer()
+                            WorkoutPictureThumb(imageID: part.imageID(cycle: i))
+                        }
                     }
                 }
             }
@@ -274,6 +339,8 @@ struct TabataDetailView: View {
 
 struct RepWorkoutDetailView: View {
     @Bindable var workout: RepWorkout
+    @Environment(\.modelContext) private var modelContext
+    @State private var lookup: RepHistoryLookup?
     @AppStorage("workout.weightUnit") private var weightUnit = "kg"
     @State private var running = false
     @State private var editing = false
@@ -298,6 +365,12 @@ struct RepWorkoutDetailView: View {
                             if !ex.note.isEmpty {
                                 Text(ex.note).font(.caption).foregroundStyle(.secondary)
                             }
+                            if let last = lookup?.last(name: ex.name, setIndex: i, round: 1) {
+                                Text("Last time: " + [ "\(last.actualReps) reps", WorkoutFormat.weight(last.actualWeight, unit: weightUnit) ]
+                                    .compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(.blue)
+                            }
                         }
                     }
                 }
@@ -311,6 +384,10 @@ struct RepWorkoutDetailView: View {
             Button("Edit") { editing = true }
         }
         .sheet(isPresented: $editing) { RepWorkoutEditorView(workout: workout) }
+        .onAppear { lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext) }
+        .onChange(of: running) { _, isRunning in
+            if !isRunning { lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext) }
+        }
         .fullScreenCover(isPresented: $running) {
             RepRunView(workout: workout) { _ in running = false }
         }
@@ -333,21 +410,73 @@ private struct StartButton: View {
 }
 
 struct WorkoutSessionDetailView: View {
+    @Environment(\.modelContext) private var modelContext
     let session: WorkoutSession
     @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @State private var log: [RepLogEntry] = []
 
     var body: some View {
         List {
-            LabeledContent("Date", value: session.startedAt.formatted(date: .abbreviated, time: .shortened))
-            LabeledContent("Duration", value: WorkoutFormat.clock(session.durationSeconds))
-            LabeledContent("Result", value: session.completed ? "Completed" : "Stopped early")
-            if session.kind == .reps, !session.log.isEmpty {
-                RepLogSummary(log: session.log, unit: weightUnit)
-                    .padding(.vertical, 4)
+            SwiftUI.Section {
+                LabeledContent("Date", value: session.startedAt.formatted(date: .abbreviated, time: .shortened))
+                LabeledContent("Duration", value: WorkoutFormat.clock(session.durationSeconds))
+                LabeledContent("Result", value: session.completed ? "Completed" : "Stopped early")
+            }
+            if session.kind == .reps, !log.isEmpty {
+                SwiftUI.Section {
+                    ForEach($log) { $entry in
+                        HistoryEntryEditor(entry: $entry, unit: weightUnit)
+                    }
+                } header: {
+                    Text("What I did")
+                } footer: {
+                    Text("Edit reps or weight to correct this record. Next time you run this workout, these weights are suggested.")
+                }
             }
         }
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { log = session.log }
+        .onChange(of: log) { _, newValue in
+            session.log = newValue
+            try? modelContext.save()
+        }
+    }
+}
+
+private struct HistoryEntryEditor: View {
+    @Binding var entry: RepLogEntry
+    let unit: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(entry.name).font(.subheadline.weight(.medium))
+                Spacer()
+                Text("Set \(entry.setIndex + 1), round \(entry.round)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Stepper("\(entry.actualReps) reps", value: $entry.actualReps, in: 0...500)
+                    .fixedSize()
+                Spacer()
+                TextField("–", text: WeightText.binding($entry.actualWeight))
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 64)
+                Text(unit).foregroundStyle(.secondary)
+            }
+            Text("Plan: " + planText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var planText: String {
+        if let w = WorkoutFormat.weight(entry.plannedWeight, unit: unit) { return "\(entry.plannedReps) × \(w)" }
+        return "\(entry.plannedReps) reps"
     }
 }
 

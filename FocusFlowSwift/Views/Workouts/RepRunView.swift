@@ -21,6 +21,8 @@ struct RepRunView: View {
     @State private var lastRestBeep: Int?
     @State private var showStopConfirm = false
     @State private var images: [UUID: UIImage] = [:]
+    /// What was done last time for each step, from history.
+    @State private var lastTime: [RepLogEntry?] = []
     @State private var result: (completed: Bool, seconds: Int, log: [RepLogEntry])?
 
     private let audio = WorkoutAudio.shared
@@ -151,6 +153,14 @@ struct RepRunView: View {
 
             // What was actually done; the saved plan stays unchanged.
             GroupBox("What I did") {
+                if let last = lastTime.indices.contains(index) ? lastTime[index] : nil {
+                    HStack {
+                        Label("Last time: \(performance(last.actualReps, last.actualWeight))", systemImage: "clock.arrow.circlepath")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
                 HStack {
                     Stepper("\(actualReps[index]) reps", value: $actualReps[index], in: 0...500)
                 }
@@ -163,8 +173,30 @@ struct RepRunView: View {
                         .frame(width: 80)
                     Text(weightUnit).foregroundStyle(.secondary)
                 }
+                // Quick progressive-overload bump.
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button("−\(stepText)") { bumpWeight(-weightStep) }
+                    Button("+\(stepText)") { bumpWeight(weightStep) }
+                }
+                .buttonStyle(.bordered)
+                .font(.subheadline)
             }
         }
+    }
+
+    private var weightStep: Double { weightUnit == "lb" ? 5 : 2.5 }
+    private var stepText: String { weightUnit == "lb" ? "5 lb" : "2.5 kg" }
+
+    private func bumpWeight(_ delta: Double) {
+        let current = actualWeights[index] ?? 0
+        let next = max(0, current + delta)
+        actualWeights[index] = next == 0 ? nil : next
+    }
+
+    private func performance(_ reps: Int, _ weight: Double?) -> String {
+        if let w = WorkoutFormat.weight(weight, unit: weightUnit) { return "\(reps) × \(w)" }
+        return "\(reps) reps"
     }
 
     private func restPanel(_ seconds: Int) -> some View {
@@ -189,6 +221,14 @@ struct RepRunView: View {
         guard startedAt == nil, !steps.isEmpty else { return }
         startedAt = Date()
         images = WorkoutPictureStore.images(steps.map(\.exercise.imageID), context: modelContext)
+        // Suggest last time's weight: start each exercise from it instead of the plan.
+        let lookup = RepHistoryLookup(workoutID: workoutID, context: modelContext)
+        lastTime = steps.map { lookup.last(name: $0.exercise.name, setIndex: $0.setIndex, round: $0.round) }
+        for i in steps.indices {
+            if let weight = lastTime[i]?.actualWeight, weight > 0 {
+                actualWeights[i] = weight
+            }
+        }
         UIApplication.shared.isIdleTimerDisabled = true
         audio.begin()
         audio.speak(cue(for: steps[0]))

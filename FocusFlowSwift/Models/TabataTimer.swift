@@ -102,9 +102,15 @@ final class TabataTimer {
     private func announce(_ interval: TabataInterval) {
         switch interval.phase {
         case .prepare:
-            audio.speak("Get ready. First: \(interval.exercise).")
+            let part = interval.partCount > 1 ? " \(interval.partName)." : ""
+            audio.speak("Get ready.\(part) First: \(interval.exercise).")
         case .work:
-            audio.speak("\(interval.exercise).")
+            // A part with no prepare time still announces itself.
+            if interval.isPartStart && interval.partCount > 1 {
+                audio.speak("\(interval.partName). \(interval.exercise).")
+            } else {
+                audio.speak("\(interval.exercise).")
+            }
         case .rest:
             let lead = interval.isRoundBreak ? "Round \(interval.round) done. Rest." : "Rest."
             audio.speak("\(lead) Next: \(interval.exercise).")

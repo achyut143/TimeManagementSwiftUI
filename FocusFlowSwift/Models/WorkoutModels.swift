@@ -50,6 +50,10 @@ enum WorkoutJSON {
 final class TabataWorkout {
     var id: UUID = UUID()
     var name: String = ""
+    /// JSON list of TabataPart. Empty for Tabatas saved before parts existed;
+    /// those are read from the single-part fields below.
+    var partsData: Data = Data()
+    // Single-part fields (kept in sync with the first part for older data).
     var prepareSeconds: Int = 10
     var workSeconds: Int = 40
     var restSeconds: Int = 0
@@ -68,28 +72,39 @@ final class TabataWorkout {
     }
 
     var draft: TabataDraft {
-        TabataDraft(name: name, prepareSeconds: prepareSeconds, workSeconds: workSeconds, restSeconds: restSeconds,
-                    cycles: cycles, rounds: rounds, restBetweenRoundsSeconds: restBetweenRoundsSeconds,
-                    cycleNames: cycleNames, cycleImageIDs: cycleImageIDs)
+        var parts = WorkoutJSON.decode([TabataPart].self, from: partsData, fallback: [])
+        if parts.isEmpty {
+            parts = [TabataPart(prepareSeconds: prepareSeconds, workSeconds: workSeconds, restSeconds: restSeconds,
+                                cycles: cycles, rounds: rounds, restBetweenRoundsSeconds: restBetweenRoundsSeconds,
+                                cycleNames: cycleNames, cycleImageIDs: cycleImageIDs)]
+        }
+        return TabataDraft(name: name, parts: parts.map { $0.padded() })
     }
 
     func apply(_ d: TabataDraft) {
         name = d.name.trimmingCharacters(in: .whitespaces)
-        prepareSeconds = d.prepareSeconds
-        workSeconds = d.workSeconds
-        restSeconds = d.restSeconds
-        cycles = d.cycles
-        rounds = d.rounds
-        restBetweenRoundsSeconds = d.restBetweenRoundsSeconds
-        cycleNames = Array(d.cycleNames.prefix(d.cycles))
-        cycleImageIDs = Array(d.cycleImageIDs.prefix(d.cycles))
+        let parts = d.parts.map { $0.trimmed() }
+        partsData = WorkoutJSON.encode(parts)
+        if let first = parts.first {
+            prepareSeconds = first.prepareSeconds
+            workSeconds = first.workSeconds
+            restSeconds = first.restSeconds
+            cycles = first.cycles
+            rounds = first.rounds
+            restBetweenRoundsSeconds = first.restBetweenRoundsSeconds
+            cycleNames = first.cycleNames
+            cycleImageIDs = first.cycleImageIDs
+        }
     }
 
     var summary: String { draft.summary }
 }
 
-/// Editable copy of a Tabata; also builds the interval timeline.
-struct TabataDraft: Equatable {
+/// One timed section of a Tabata, e.g. "Warm up" or "Circuit 1", with its
+/// own timing, cycles, rounds and exercise names. Parts run back to back.
+struct TabataPart: Codable, Equatable, Identifiable {
+    var id = UUID()
+    /// Optional, e.g. "Circuit 1". Blank shows as "Part N".
     var name = ""
     var prepareSeconds = 10
     var workSeconds = 40
@@ -110,37 +125,82 @@ struct TabataDraft: Equatable {
         index < cycleImageIDs.count ? UUID(uuidString: cycleImageIDs[index]) : nil
     }
 
-    var intervals: [TabataInterval] {
+    func title(index: Int) -> String {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? "Part \(index + 1)" : n
+    }
+
+    /// One name and picture slot per cycle.
+    func padded() -> TabataPart {
+        var p = self
+        if p.cycleNames.count < p.cycles { p.cycleNames += Array(repeating: "", count: p.cycles - p.cycleNames.count) }
+        if p.cycleImageIDs.count < p.cycles { p.cycleImageIDs += Array(repeating: "", count: p.cycles - p.cycleImageIDs.count) }
+        return p
+    }
+
+    func trimmed() -> TabataPart {
+        var p = self
+        p.name = p.name.trimmingCharacters(in: .whitespaces)
+        p.cycleNames = Array(p.cycleNames.prefix(p.cycles))
+        p.cycleImageIDs = Array(p.cycleImageIDs.prefix(p.cycles))
+        return p
+    }
+
+    func intervals(index part: Int, count partCount: Int) -> [TabataInterval] {
+        let label = title(index: part)
+        func make(_ phase: TabataPhase, _ seconds: Int, _ exerciseCycle: Int, cycle: Int, round: Int, roundBreak: Bool = false) -> TabataInterval {
+            TabataInterval(phase: phase, seconds: seconds, exercise: exerciseName(cycle: exerciseCycle), cycle: cycle, round: round,
+                           isRoundBreak: roundBreak, imageID: imageID(cycle: exerciseCycle),
+                           part: part, partCount: partCount, partName: label, cycles: cycles, rounds: rounds)
+        }
         var list: [TabataInterval] = []
         if prepareSeconds > 0 {
-            list.append(TabataInterval(phase: .prepare, seconds: prepareSeconds, exercise: exerciseName(cycle: 0), cycle: 1, round: 1, imageID: imageID(cycle: 0)))
+            list.append(make(.prepare, prepareSeconds, 0, cycle: 1, round: 1))
         }
         for round in 1...max(1, rounds) {
             for cycle in 1...max(1, cycles) {
-                let name = exerciseName(cycle: cycle - 1)
-                list.append(TabataInterval(phase: .work, seconds: max(1, workSeconds), exercise: name, cycle: cycle, round: round, imageID: imageID(cycle: cycle - 1)))
+                list.append(make(.work, max(1, workSeconds), cycle - 1, cycle: cycle, round: round))
                 let lastCycle = cycle == cycles
                 let lastRound = round == rounds
                 if lastCycle && lastRound { continue }
                 if lastCycle {
                     // Rest between rounds replaces the normal rest after the last cycle.
                     let pause = restBetweenRoundsSeconds > 0 ? restBetweenRoundsSeconds : restSeconds
-                    if pause > 0 {
-                        list.append(TabataInterval(phase: .rest, seconds: pause, exercise: exerciseName(cycle: 0), cycle: cycle, round: round, isRoundBreak: true, imageID: imageID(cycle: 0)))
-                    }
+                    if pause > 0 { list.append(make(.rest, pause, 0, cycle: cycle, round: round, roundBreak: true)) }
                 } else if restSeconds > 0 {
-                    list.append(TabataInterval(phase: .rest, seconds: restSeconds, exercise: exerciseName(cycle: cycle), cycle: cycle, round: round, imageID: imageID(cycle: cycle)))
+                    list.append(make(.rest, restSeconds, cycle, cycle: cycle, round: round))
                 }
             }
         }
+        if !list.isEmpty { list[0].isPartStart = true }
         return list
     }
 
-    /// Workout time excluding the prepare countdown.
-    var workoutSeconds: Int { intervals.filter { $0.phase != .prepare }.reduce(0) { $0 + $1.seconds } }
-    var totalSeconds: Int { intervals.reduce(0) { $0 + $1.seconds } }
+    var workoutSeconds: Int {
+        intervals(index: 0, count: 1).filter { $0.phase != .prepare }.reduce(0) { $0 + $1.seconds }
+    }
 
     var summary: String { "\(cycles) cycles × \(rounds) rounds · \(WorkoutFormat.minutes(workoutSeconds))" }
+}
+
+/// Editable copy of a Tabata; also builds the interval timeline.
+struct TabataDraft: Equatable {
+    var name = ""
+    var parts: [TabataPart] = [TabataPart()]
+
+    var intervals: [TabataInterval] {
+        parts.enumerated().flatMap { i, part in part.intervals(index: i, count: parts.count) }
+    }
+
+    /// Workout time excluding prepare countdowns.
+    var workoutSeconds: Int { intervals.filter { $0.phase != .prepare }.reduce(0) { $0 + $1.seconds } }
+    var totalSeconds: Int { intervals.reduce(0) { $0 + $1.seconds } }
+    var workIntervalCount: Int { parts.reduce(0) { $0 + $1.cycles * $1.rounds } }
+
+    var summary: String {
+        if parts.count == 1, let only = parts.first { return only.summary }
+        return "\(parts.count) parts · \(WorkoutFormat.minutes(totalSeconds))"
+    }
 }
 
 enum TabataPhase: String {
@@ -165,6 +225,14 @@ struct TabataInterval: Equatable {
     var isRoundBreak = false
     /// Picture of `exercise`, if any.
     var imageID: UUID? = nil
+    /// Which part this belongs to (0-based), and that part's totals.
+    var part = 0
+    var partCount = 1
+    var partName = ""
+    var cycles = 1
+    var rounds = 1
+    /// First interval of its part.
+    var isPartStart = false
 }
 
 // MARK: - Rep workouts
@@ -278,7 +346,49 @@ final class WorkoutSession {
 
     var kind: WorkoutKind { WorkoutKind(rawValue: kindRaw) ?? .tabata }
     var durationSeconds: Int { max(0, Int(endedAt.timeIntervalSince(startedAt))) }
-    var log: [RepLogEntry] { WorkoutJSON.decode([RepLogEntry].self, from: logData, fallback: []) }
+    var log: [RepLogEntry] {
+        get { WorkoutJSON.decode([RepLogEntry].self, from: logData, fallback: []) }
+        set { logData = WorkoutJSON.encode(newValue) }
+    }
+}
+
+// MARK: - Previous performance
+
+/// What was actually done last time for each exercise, from history.
+/// Looks for the same workout, set and round first, then the same exercise
+/// anywhere in this workout, then the same exercise name in any workout.
+struct RepHistoryLookup {
+    private var byStep: [String: RepLogEntry] = [:]
+    private var byNameInWorkout: [String: RepLogEntry] = [:]
+    private var byNameAnywhere: [String: RepLogEntry] = [:]
+
+    init(workoutID: UUID, context: ModelContext) {
+        let repsRaw = WorkoutKind.reps.rawValue
+        let descriptor = FetchDescriptor<WorkoutSession>(predicate: #Predicate { $0.kindRaw == repsRaw },
+                                                         sortBy: [SortDescriptor(\.startedAt, order: .reverse)])
+        // Newest first, so the first entry seen for a key is the latest one.
+        for session in (try? context.fetch(descriptor)) ?? [] {
+            let sameWorkout = session.workoutID == workoutID
+            for entry in session.log {
+                let name = Self.key(entry.name)
+                if sameWorkout {
+                    let stepKey = "\(name)|\(entry.setIndex)|\(entry.round)"
+                    if byStep[stepKey] == nil { byStep[stepKey] = entry }
+                    if byNameInWorkout[name] == nil { byNameInWorkout[name] = entry }
+                }
+                if byNameAnywhere[name] == nil { byNameAnywhere[name] = entry }
+            }
+        }
+    }
+
+    func last(name: String, setIndex: Int, round: Int) -> RepLogEntry? {
+        let n = Self.key(name)
+        return byStep["\(n)|\(setIndex)|\(round)"] ?? byNameInWorkout[n] ?? byNameAnywhere[n]
+    }
+
+    private static func key(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespaces).lowercased()
+    }
 }
 
 // MARK: - Pictures
@@ -317,7 +427,7 @@ enum WorkoutPictureStore {
     static func removeUnused(context: ModelContext) {
         var used = Set<UUID>()
         for w in (try? context.fetch(FetchDescriptor<TabataWorkout>())) ?? [] {
-            used.formUnion(w.cycleImageIDs.compactMap(UUID.init(uuidString:)))
+            used.formUnion(w.draft.parts.flatMap(\.cycleImageIDs).compactMap(UUID.init(uuidString:)))
         }
         for w in (try? context.fetch(FetchDescriptor<RepWorkout>())) ?? [] {
             used.formUnion(w.sets.flatMap(\.exercises).compactMap(\.imageID))
