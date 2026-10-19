@@ -16,8 +16,6 @@ struct FloatingButtonsModifier: ViewModifier {
                     GeometryReader { _ in
                         ZStack {
                             QuickAlertButton()
-                            
-                            QuickActivityButton()
                         }
                     }
                     .allowsHitTesting(true)

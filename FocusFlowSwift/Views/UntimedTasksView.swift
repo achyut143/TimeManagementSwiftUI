@@ -658,6 +658,7 @@ struct UntimedTasksView: View {
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
         try? modelContext.save()
@@ -696,6 +697,7 @@ struct UntimedTasksView: View {
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
         try? modelContext.save()
@@ -735,6 +737,7 @@ struct UntimedTasksView: View {
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
         try? modelContext.save()

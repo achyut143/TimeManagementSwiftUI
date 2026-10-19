@@ -4,32 +4,22 @@ import UIKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var showAlertManager = false
     @State private var showDailyNotes = false
-    @State private var showVirtueActivities = false
-    @State private var showNewActivity = false
+    @State private var openDailyNotesInFocusMode = false
     @State private var showMetricsSettings = false
     @State private var selectedDate = Date()
     @State private var habitSettings: HabitSettings?
     @AppStorage("metricDays") private var metricDays: Int = 30
-    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
-    
-    // Query for active activities (used for points distribution)
-    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
-    private var activeActivities: [ScheduledActivity]
-
-    // Watch completed tasks to award points to activities
-    @Query(filter: #Predicate<Task> { $0.completed == true })
-    private var completedTasks: [Task]
-
-    @State private var initialCompletedTaskIds: Set<UUID> = []
     
     var body: some View {
         ZStack {
             TabView {
                 NavigationStack {
-                    TasksCalendarView(selectedDate: $selectedDate)
+                    TasksCalendarView(selectedDate: $selectedDate, onOpenFocusMode: {
+                        openDailyNotesInFocusMode = true
+                        showDailyNotes = true
+                    })
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {
                             HStack(spacing: 12) {
@@ -38,13 +28,6 @@ struct ContentView: View {
                                 } label: {
                                     Image(systemName: "note.text")
                                         .foregroundColor(.green)
-                                }
-
-                                Button {
-                                    showVirtueActivities = true
-                                } label: {
-                                    Image(systemName: "leaf.fill")
-                                        .foregroundColor(.mint)
                                 }
 
                                 Button {
@@ -126,24 +109,6 @@ struct ContentView: View {
 
                             }
                         }
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Menu {
-                                Button {
-                                    showNewActivity = true
-                                } label: {
-                                    Label("New Activity", systemImage: "clock.badge.plus")
-                                }
-                                Divider()
-                                Button {
-                                    isDarkMode.toggle()
-                                } label: {
-                                    Label(isDarkMode ? "Switch to Light" : "Switch to Dark",
-                                          systemImage: isDarkMode ? "sun.max.fill" : "moon.fill")
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                            }
-                        }
                     }
                 }
                 .tabItem {
@@ -176,35 +141,11 @@ struct ContentView: View {
                 }
 
                 NavigationStack {
-                    ScheduledActivityView()
-                }
-                .tabItem {
-                    Image(systemName: "clock.badge.checkmark.fill")
-                    Text("Activities")
-                }
-
-                NavigationStack {
                     OKRInsightsView()
                 }
                 .tabItem {
                     Image(systemName: "sparkles")
                     Text("OKRs")
-                }
-
-                NavigationStack {
-                    AlertManagerView()
-                }
-                .tabItem {
-                    Image(systemName: "bell.badge")
-                    Text("Alerts")
-                }
-
-                NavigationStack {
-                    RestraintListView()
-                }
-                .tabItem {
-                    Image(systemName: "hand.raised.fill")
-                    Text("Rules")
                 }
 
                 NavigationStack {
@@ -215,24 +156,8 @@ struct ContentView: View {
                     Text("Goals")
                 }
             }
-            .sheet(isPresented: $showAlertManager) {
-                AlertManagerView()
-            }
-            .sheet(isPresented: $showDailyNotes) {
-                DailyNotesView(selectedDate: selectedDate)
-            }
-            .sheet(isPresented: $showVirtueActivities) {
-                VirtueActivitiesView()
-            }
-            .sheet(isPresented: $showNewActivity) {
-                NewScheduledActivityView()
-            }
-            
-            QuickActivityButton()
-
-            // Active timer button (iOS 16.1+)
-            if #available(iOS 16.1, *) {
-                ActiveTimerButton()
+            .sheet(isPresented: $showDailyNotes, onDismiss: { openDailyNotesInFocusMode = false }) {
+                DailyNotesView(selectedDate: selectedDate, startInFocusMode: openDailyNotesInFocusMode)
             }
         }
         .onAppear {
@@ -255,27 +180,11 @@ struct ContentView: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
         }
-        .onAppear {
-            initialCompletedTaskIds = Set(completedTasks.map { $0.id })
-        }
-        .onChange(of: completedTasks) { oldTasks, newTasks in
-            let knownIds = Set(oldTasks.map { $0.id }).union(initialCompletedTaskIds)
-            let newlyCompleted = newTasks.filter { !knownIds.contains($0.id) }
-            guard !newlyCompleted.isEmpty else { return }
-            for task in newlyCompleted {
-                let pts = task.effectiveWeight
-                guard pts > 0 else { continue }
-                for activity in activeActivities {
-                    activity.addTaskPoints(pts, context: modelContext)
-                }
-            }
-            try? modelContext.save()
-        }
     }
 }
 
 
 #Preview {
     ContentView()
-        .modelContainer(for: [Task.self, Habit.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self, Restraint.self, RestraintInstance.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self, BacklogFolder.self], inMemory: true)
+        .modelContainer(for: [Task.self, Habit.self, DailyNote.self, HabitSettings.self, Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self, BacklogFolder.self], inMemory: true)
 }

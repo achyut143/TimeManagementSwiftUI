@@ -9,13 +9,7 @@ import WidgetKit
 // Wrapper view to handle migration with access to modelContext
 struct MigrationWrapper<Content: View>: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var restraints: [Restraint]
-    @Query private var virtueActivities: [VirtueActivity]
     @State private var hasMigrated = false
-    // Ticks every 30s while the app is foregrounded so an activity reminder
-    // becoming due doesn't need an app switch to be noticed — separate from
-    // the didBecomeActive check, which only covers "just returned to the app."
-    private let activityReminderTicker = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
     let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -29,23 +23,15 @@ struct MigrationWrapper<Content: View>: View {
                     TaskAttachmentMigration.migrateAttachmentsIfNeeded(modelContext: modelContext)
                     hasMigrated = true
                 }
-                RestraintMaintenance.resolveStalePending(restraints: restraints, modelContext: modelContext)
-                RestraintNotificationScheduler.rescheduleAll(from: restraints)
                 // Settles any away-time exit left pending from a force-quit
                 // while the app was backgrounded, up to right now.
                 AwayTimeTracker.shared.recordReturn()
                 // Starts (or restarts) the continuous in-app focus session.
                 FocusSessionTracker.shared.recordEnter()
-                ActivityReminderManager.shared.check(activities: virtueActivities)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                RestraintMaintenance.resolveStalePending(restraints: restraints, modelContext: modelContext)
                 AwayTimeTracker.shared.recordReturn()
                 FocusSessionTracker.shared.recordEnter()
-                ActivityReminderManager.shared.check(activities: virtueActivities)
-            }
-            .onReceive(activityReminderTicker) { _ in
-                ActivityReminderManager.shared.check(activities: virtueActivities)
             }
             // Any project timer left running when the app is backgrounded or
             // killed gets paused here, so its elapsed time never silently
@@ -73,9 +59,40 @@ struct MigrationWrapper<Content: View>: View {
     }
 }
 
+/// One-time cleanup for features removed from the app: cancels their
+/// repeating notifications, ends any activity-timer Live Activity, and
+/// deletes the separate Rules (restraints) store.
+enum RemovedFeaturesCleanup {
+    private static let key = "cleanup.removedFeatures.v1"
+
+    static func runOnce() {
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+
+        let center = UNUserNotificationCenter.current()
+        center.getPendingNotificationRequests { requests in
+            let ids = requests.map(\.identifier).filter { $0.hasPrefix("restraint-window-") || $0.hasPrefix("activity-reminder-") }
+            center.removePendingNotificationRequests(withIdentifiers: ids)
+        }
+
+        if #available(iOS 16.1, *) {
+            _Concurrency.Task {
+                for activity in Activity<ActivityTimerAttributes>.activities {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                }
+            }
+        }
+
+        let url = ModelConfiguration("restraints").url
+        let fm = FileManager.default
+        for file in [url, URL(fileURLWithPath: url.path + "-wal"), URL(fileURLWithPath: url.path + "-shm")] where fm.fileExists(atPath: file.path) {
+            try? fm.removeItem(at: file)
+        }
+    }
+}
+
 @main
 struct FocusFlowSwiftApp: App {
-    @StateObject private var alertManager = AlertManager()
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     
     init() {
@@ -88,6 +105,7 @@ struct FocusFlowSwiftApp: App {
         
         NotificationManager.shared.requestPermission()
         NotificationManager.shared.setupNotificationDelegate()
+        RemovedFeaturesCleanup.runOnce()
     }
     
     var body: some Scene {
@@ -95,13 +113,10 @@ struct FocusFlowSwiftApp: App {
             MigrationWrapper {
                 ContentView()
                     .preferredColorScheme(isDarkMode ? .dark : .light)
-                    .environmentObject(alertManager)
                     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                        alertManager.handleAppLifecycleChange(isActive: false)
                         Self.scheduleBackgroundTask()
                     }
                     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                        alertManager.handleAppLifecycleChange(isActive: true)
                         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                         NotificationCenter.default.post(name: NSNotification.Name("CheckExpiredWindows"), object: nil)
                     }
@@ -113,77 +128,32 @@ struct FocusFlowSwiftApp: App {
     private static func makeContainer() -> ModelContainer {
         let mainTypes: [any PersistentModel.Type] = [
             Task.self, Subtask.self, Habit.self, CycleConfiguration.self, CyclePhase.self,
-            AlertInstance.self, ScheduledActivity.self, ActivityUsageHistory.self, DailyNote.self,
+            DailyNote.self,
             HabitSettings.self, TaskAttachment.self, ArchivedHabit.self, EventDay.self,
             Book.self, BookQuote.self, ScheduleTemplate.self, GeneratorTemplate.self, TaskOKR.self, TaskInsight.self,
             Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self,
-            ProjectTimer.self, VirtueActivity.self, WhyGroup.self, BacklogFolder.self
+            ProjectTimer.self, BacklogFolder.self, IfThenPlan.self,
+            ImpulseType.self, ImpulseBudgetVersion.self, PeriodGoal.self, PlannerDay.self, SleepScheduleVersion.self
         ]
-        // Restraints live in a separate store so schema changes never touch existing data.
-        let restraintTypes: [any PersistentModel.Type] = [Restraint.self, RestraintInstance.self]
+        // Scheduled activities, alerts, the old Plan view and Start with a Why
+        // were removed — their tables are dropped by SwiftData's automatic
+        // migration. Rules lived in a separate store, deleted by
+        // RemovedFeaturesCleanup.
         let mainConfig = ModelConfiguration(schema: Schema(mainTypes))
-        let restraintConfig = ModelConfiguration("restraints", schema: Schema(restraintTypes))
-        let fullSchema = Schema(mainTypes + restraintTypes)
 
         do {
-            return try ModelContainer(for: fullSchema, configurations: [mainConfig, restraintConfig])
+            return try ModelContainer(for: Schema(mainTypes), configurations: [mainConfig])
         } catch {
-            print("⚠️ Combined ModelContainer init failed: \(error)")
-
-            // Don't guess which store broke — test them independently before
-            // touching any files on disk. Blindly wiping "the restraint store"
-            // on any failure (the old behavior here) would just as easily nuke
-            // restraint data over a problem that was actually in the main store,
-            // or over a transient failure that wasn't either store's fault.
-            let restraintFailure: Error? = {
-                do { _ = try ModelContainer(for: Schema(restraintTypes), configurations: [restraintConfig]); return nil }
-                catch { return error }
-            }()
-            let mainFailure: Error? = {
-                do { _ = try ModelContainer(for: Schema(mainTypes), configurations: [mainConfig]); return nil }
-                catch { return error }
-            }()
-
-            if let restraintFailure {
-                print("⚠️ Restraint store fails independently: \(restraintFailure). Backing up (not deleting) and resetting just that store.")
-                backUpStoreFiles(at: restraintConfig.url)
-            }
-            if let mainFailure {
-                // No safe automatic recovery for the main store — that risks
-                // losing tasks/projects/everything else. Surface it loudly
-                // instead of guessing, and do NOT touch its files.
-                print("🛑 Main store fails independently of restraints: \(mainFailure). Leaving its files untouched.")
-            }
-
-            // Retry now that we've only touched a store we actually confirmed was broken (if any).
-            if let recovered = try? ModelContainer(for: fullSchema, configurations: [mainConfig, restraintConfig]) {
-                return recovered
-            }
-
-            // Still failing and it wasn't cleanly isolated to restraints: fall
-            // back to in-memory so the app can launch, rather than deleting
-            // anything further. On-disk data is left exactly as it was for a
-            // future fix, instead of being silently destroyed.
-            print("🛑 Still failing after isolation — falling back to an in-memory store. On-disk data was left untouched.")
+            // No safe automatic recovery for the main store — that risks
+            // losing tasks/projects/everything else. Fall back to in-memory so
+            // the app can launch, and leave the on-disk files exactly as they
+            // were for a future fix.
+            print("🛑 ModelContainer init failed: \(error). Falling back to an in-memory store; on-disk data left untouched.")
             let fallback = ModelConfiguration(isStoredInMemoryOnly: true)
-            return try! ModelContainer(for: fullSchema, configurations: [fallback])
+            return try! ModelContainer(for: Schema(mainTypes), configurations: [fallback])
         }
     }
 
-    // Renames (not deletes) a store's files so a broken store never destroys
-    // data outright — the corrupt files stay on disk under a "-corrupt-<date>"
-    // suffix, out of SwiftData's way, in case they're ever worth recovering.
-    private static func backUpStoreFiles(at url: URL) {
-        let fm = FileManager.default
-        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        for candidate in [url, url.appendingPathExtension("wal"), url.appendingPathExtension("shm")] {
-            guard fm.fileExists(atPath: candidate.path) else { continue }
-            let backupURL = candidate.deletingLastPathComponent()
-                .appendingPathComponent(candidate.lastPathComponent + ".corrupt-\(stamp)")
-            try? fm.moveItem(at: candidate, to: backupURL)
-        }
-    }
-    
     private static func handleBackgroundRefresh(task: BGAppRefreshTask) {
         scheduleBackgroundTask()
         task.setTaskCompleted(success: true)

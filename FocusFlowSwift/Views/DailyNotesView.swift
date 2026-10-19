@@ -345,18 +345,16 @@ private struct SmartCyclesDetailView: View {
 
 private struct SmartCyclesWidgetPickerView: View {
     @Binding var showBooksWidget: Bool
-    @Binding var showRestraintsWidget: Bool
     @Binding var showProjectsWidget: Bool
     @Binding var showBeginStopWidget: Bool
 
     var body: some View {
-        // Widget selector: Books, Restraints, Projects, Begin/Stop — any
+        // Widget selector: Books, Projects, Begin/Stop — any
         // combination, they stack (and scroll) in Focus View in this order.
         Divider()
 
         HStack(spacing: 8) {
             widgetPickerChip(label: "Books", isOn: $showBooksWidget)
-            widgetPickerChip(label: "Rules", isOn: $showRestraintsWidget)
             widgetPickerChip(label: "Projects", isOn: $showProjectsWidget)
             widgetPickerChip(label: "Begin/Stop", isOn: $showBeginStopWidget)
             Spacer()
@@ -366,13 +364,10 @@ private struct SmartCyclesWidgetPickerView: View {
 
 private struct SmartCyclesWidgetContentView: View {
     let showBooksWidget: Bool
-    let showRestraintsWidget: Bool
     let showProjectsWidget: Bool
     let showBeginStopWidget: Bool
     let selectedDate: Date
     let onManageBooks: () -> Void
-    let onManageRestraints: () -> Void
-    let onSelectRestraint: (Restraint) -> Void
     let onManageProjects: () -> Void
     let onSelectProject: (Project) -> Void
     // Begin/Stop bits precomputed at the call site (DailyNotesView already
@@ -394,17 +389,6 @@ private struct SmartCyclesWidgetContentView: View {
                 }
             }
             BookQuoteDisplayView()
-        }
-        if showRestraintsWidget {
-            HStack {
-                Text("Rules").font(.caption).foregroundColor(.secondary)
-                Spacer()
-                Button(action: onManageRestraints) {
-                    Text("Manage")
-                        .font(.caption)
-                }
-            }
-            RestraintBarsView(isDark: false, onSelect: onSelectRestraint)
         }
         if showProjectsWidget {
             HStack {
@@ -895,18 +879,25 @@ struct DailyNotesView: View {
     // side-channel nag that stops itself once acknowledged.
     @State private var isPendingAcknowledgment: Bool = false
     @State private var acknowledgmentTimer: Timer?
+    // Identifies the specific task/gap occurrence the current nag loop is
+    // for — persisted via AcknowledgmentStore on acknowledge so reopening
+    // this view for the same still-in-progress occurrence doesn't re-nag.
+    @State private var currentAcknowledgmentIdentifier: String?
     @State private var cycleEndObserver: AnyCancellable?
     @State private var pausedAt: Date?
     @State private var totalPausedDuration: TimeInterval = 0
     @State private var currentTime: Date = Date() // Add this to force UI updates
-    @State private var scheduleFrom: String = ""
-    @State private var scheduleTo: String = ""
-    @State private var scheduleInterval: String = ""
-    @State private var scheduleGap: String = ""
-    @State private var scheduleTaskName: String = ""
-    @State private var scheduleInsertAfter: String = ""
-    @State private var scheduleStartNum: String = "1"
-    @State private var scheduleNoRepeat: Bool = false
+    // Schedule Generator form fields persist across tab switches/app launches;
+    // they're only reset by the manual "Clear All" button.
+    @AppStorage("scheduleGenerator.from") private var scheduleFrom: String = ""
+    @AppStorage("scheduleGenerator.to") private var scheduleTo: String = ""
+    @AppStorage("scheduleGenerator.interval") private var scheduleInterval: String = ""
+    @AppStorage("scheduleGenerator.gap") private var scheduleGap: String = ""
+    @AppStorage("scheduleGenerator.taskName") private var scheduleTaskName: String = ""
+    @AppStorage("scheduleGenerator.insertAfter") private var scheduleInsertAfter: String = ""
+    @AppStorage("scheduleGenerator.startNum") private var scheduleStartNum: String = "1"
+    @AppStorage("scheduleGenerator.noRepeat") private var scheduleNoRepeat: Bool = false
+    @State private var showClearGeneratorConfirm = false
     @State private var showFormattedSchedule: Bool = true
     @AppStorage("schedule.hideFinishedTasks") private var hideFinishedTasks: Bool = false
     @AppStorage("schedule.showOnlyIncomplete") private var showOnlyIncomplete: Bool = false
@@ -936,10 +927,7 @@ struct DailyNotesView: View {
     @State private var isFocusMode = false
     // Multiple widgets can be enabled at once (stacked, scrollable in Focus View).
     @AppStorage("display.focusShowBooks") private var showBooksWidget: Bool = true
-    @AppStorage("display.focusShowRestraints") private var showRestraintsWidget: Bool = false
     @AppStorage("display.focusShowProjects") private var showProjectsWidget: Bool = false
-    @State private var showRestraintList = false
-    @State private var restraintDetailTarget: Restraint?
     @State private var showProjectList = false
     @State private var projectDetailTarget: Project?
     @State private var showSaveTemplate = false
@@ -949,9 +937,6 @@ struct DailyNotesView: View {
     @State private var showAISchedulerSheet = false
     @State private var showGeneratorTemplates = false
     @Query private var allTasksQuery: [Task]
-    @Query(filter: #Predicate<ScheduledActivity> { $0.isActive })
-    private var activeActivities: [ScheduledActivity]
-    @State private var creditEarnedMessage: String = ""
     @State private var showInterceptSheet = false
     @State private var showSwapSheet = false
     @State private var swapSheetDefaults: (Int?, Int?) = (nil, nil)
@@ -972,7 +957,11 @@ struct DailyNotesView: View {
     @State private var pendingTaskEndMinutes: Int = 0
     @State private var totalIdleSeconds: Int = 0
     let selectedDate: Date
-    
+    // When true, jumps straight into Focus Mode on appear — lets a caller
+    // (e.g. a "Focus" shortcut button elsewhere in the app) open Daily Notes
+    // already inside Focus Mode instead of landing on the notes editor first.
+    var startInFocusMode: Bool = false
+
     private var todayNote: DailyNote? {
         let startOfDay = Calendar.current.startOfDay(for: selectedDate)
         return dailyNotes.first { Calendar.current.isDate($0.date, inSameDayAs: startOfDay) }
@@ -1141,19 +1130,15 @@ struct DailyNotesView: View {
                         }
                         SmartCyclesWidgetPickerView(
                             showBooksWidget: $showBooksWidget,
-                            showRestraintsWidget: $showRestraintsWidget,
                             showProjectsWidget: $showProjectsWidget,
                             showBeginStopWidget: $showBeginStopWidget
                         )
                         SmartCyclesWidgetContentView(
                             showBooksWidget: showBooksWidget,
-                            showRestraintsWidget: showRestraintsWidget,
                             showProjectsWidget: showProjectsWidget,
                             showBeginStopWidget: showBeginStopWidget,
                             selectedDate: selectedDate,
                             onManageBooks: { showBooksLibrary = true },
-                            onManageRestraints: { showRestraintList = true },
-                            onSelectRestraint: { r in restraintDetailTarget = r },
                             onManageProjects: { showProjectList = true },
                             onSelectProject: { p in projectDetailTarget = p },
                             beginStopActiveDescription: activeBeginStopTask?.description,
@@ -1410,6 +1395,21 @@ struct DailyNotesView: View {
                                  scheduleInterval.isEmpty || scheduleGap.isEmpty ||
                                  scheduleTaskName.isEmpty)
 
+                        Button(role: .destructive) {
+                            showClearGeneratorConfirm = true
+                        } label: {
+                            Label("Clear All", systemImage: "xmark.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isScheduleGeneratorFormEmpty)
+                        .confirmationDialog("Clear all Schedule Generator fields?",
+                                            isPresented: $showClearGeneratorConfirm,
+                                            titleVisibility: .visible) {
+                            Button("Clear All", role: .destructive) { clearScheduleGeneratorForm() }
+                            Button("Cancel", role: .cancel) {}
+                        }
+
                         Text(scheduleNoRepeat
                              ? "Generates each task once in sequence from the start time."
                              : "Generates repeating time blocks with specified intervals and gaps.")
@@ -1529,7 +1529,13 @@ struct DailyNotesView: View {
                 }
             }
             .onDisappear {
-                trackDistraction()
+                // Deliberately NOT calling trackDistraction() here — this
+                // fires every time the Daily Notes sheet is dismissed, which
+                // includes just switching to another tab (e.g. the task
+                // calendar) while the app stays foregrounded the whole time.
+                // Distraction time should only accrue while the user has
+                // actually left the app, which didEnterBackgroundNotification
+                // (below) already covers.
                 stopCountdownTimer()
                 cycleEndObserver?.cancel()
                 speechManager.stopSpeaking()
@@ -1555,11 +1561,6 @@ struct DailyNotesView: View {
             .sheet(isPresented: $showBooksLibrary) {
                 BooksView()
             }
-            .sheet(isPresented: $showRestraintList) {
-                NavigationStack {
-                    RestraintListView()
-                }
-            }
             .sheet(isPresented: $showDistractionWhitelist) {
                 DistractionWhitelistView(whitelistRaw: Binding(
                     get: { distractionTracker.whitelistRaw },
@@ -1577,11 +1578,6 @@ struct DailyNotesView: View {
             }
             .sheet(isPresented: $showDistractionTrends) {
                 DistractionTrendsView()
-            }
-            .sheet(item: $restraintDetailTarget) { r in
-                NavigationStack {
-                    RestraintInstancesView(restraint: r)
-                }
             }
             .sheet(item: $projectDetailTarget) { p in
                 NavigationStack {
@@ -1734,8 +1730,17 @@ struct DailyNotesView: View {
                         distractionTracker.recalculateFromNotes(date: selectedDate, entries: entries)
                     },
                     isPendingAcknowledgment: isPendingAcknowledgment,
-                    onAcknowledge: { acknowledgePending() }
+                    onAcknowledge: { acknowledgePending() },
+                    onPrepareLap:  { kind in prepareLap(kind: kind) },
+                    onCreateLap:   { draft, name in createLap(draft, name: name) },
+                    onExtendBeginStop: { extendBeginStopTask() },
+                    onRefreshCycles: useCycles ? { startSmartCycles() } : nil
                 )
+            }
+            .onAppear {
+                if startInFocusMode {
+                    isFocusMode = true
+                }
             }
         }
     }
@@ -1914,16 +1919,16 @@ struct DailyNotesView: View {
                 
                 // Start cycle for remaining time
                 self.startCycleWithDuration(remainingMinutes, taskName: currentEntry.description)
-                
+
             } else if let nextEntry = self.findNextTask(after: currentMinutes, in: timeEntries) {
                 // In a gap before next task - start preparation/rest/Drink Water cycle
                 let gapMinutes = nextEntry.startMinutes - currentMinutes
                 self.currentTaskName = "Rest up"
                 self.currentCycleDuration = gapMinutes
-                
+
                 // Start preparation cycle
                 self.startCycleWithDuration(gapMinutes, taskName: "Rest up")
-                
+
             } else {
                 // No more tasks today
                 self.currentTaskName = "Free time"
@@ -2003,27 +2008,42 @@ struct DailyNotesView: View {
         settings.intervalSeconds = 0
         settings.targetIntervals = 1 // Just one interval
         settings.workIntervalText = taskName
-        
+
         // Start the timer
         settings.nextAlertDate = Date().addingTimeInterval(TimeInterval(minutes * 60))
         settings.isPlaying = true
         settings.isPaused = false
         settings.scheduleIntervalTimer()
-        
-        // Announce task start — repeats (speech + vibration) every few seconds
-        // until acknowledged, rather than a single announcement that's easy
-        // to miss. Reads the live currentTaskName on every repeat (not a
-        // string captured once), so if it's still nagging you a while later
-        // it names whatever is actually active right now, self-correcting
-        // instead of parroting a name that might have gone stale.
-        beginAcknowledgmentLoop { "\(self.currentTaskName) started. Please acknowledge." }
+        settings.activeTaskName = taskName
+
+        // Derived the same way TasksCalendarView's own Focus timer indicator
+        // derives it (see AcknowledgmentStore.startEndIdentifier) — that view
+        // independently detects and acknowledges this same mechanic while
+        // Daily Notes isn't even open, so both must agree on this key for the
+        // same real occurrence.
+        let identifier = AcknowledgmentStore.startEndIdentifier(taskName: taskName, endDate: settings.nextAlertDate)
+        currentAcknowledgmentIdentifier = identifier
+        if AcknowledgmentStore.isAcknowledged(date: Date(), identifier: identifier) {
+            // Same occurrence already acknowledged in an earlier session
+            // today (e.g. the user reopened Daily Notes mid-task, or
+            // acknowledged it from the Task Calendar view) — don't nag again.
+            acknowledgePending()
+        } else {
+            // Announce task start — repeats (speech + vibration) every few seconds
+            // until acknowledged, rather than a single announcement that's easy
+            // to miss. Reads the live currentTaskName on every repeat (not a
+            // string captured once), so if it's still nagging you a while later
+            // it names whatever is actually active right now, self-correcting
+            // instead of parroting a name that might have gone stale.
+            beginAcknowledgmentLoop { "\(self.currentTaskName) started. Please acknowledge." }
+        }
 
         // Set up observer for when this cycle ends
         setupCycleEndObserver()
-        
+
         // Start reminder timer if interval is set
         startReminderTimer()
-        
+
         print("🎯 Started cycle: \(taskName) for \(minutes) minutes")
     }
 
@@ -2044,13 +2064,18 @@ struct DailyNotesView: View {
 
     // Called on any tap anywhere in this view (see the simultaneousGesture on
     // the root Form) — stops the repeating nag as soon as the user does
-    // literally anything, without needing a dedicated "OK" button.
+    // literally anything, without needing a dedicated "OK" button. Also
+    // persists the acknowledgment so reopening this view for the same
+    // still-in-progress occurrence doesn't re-nag (see AcknowledgmentStore).
     private func acknowledgePending() {
         guard isPendingAcknowledgment else { return }
         isPendingAcknowledgment = false
         acknowledgmentTimer?.invalidate()
         acknowledgmentTimer = nil
         speechManager.stopSpeaking()
+        if let id = currentAcknowledgmentIdentifier {
+            AcknowledgmentStore.acknowledge(date: Date(), identifier: id)
+        }
     }
 
     private func setupCycleEndObserver() {
@@ -3847,6 +3872,23 @@ struct DailyNotesView: View {
     
     // MARK: - Automatic Cycle Transition
     
+    private var isScheduleGeneratorFormEmpty: Bool {
+        scheduleFrom.isEmpty && scheduleTo.isEmpty && scheduleInterval.isEmpty &&
+        scheduleGap.isEmpty && scheduleTaskName.isEmpty && scheduleInsertAfter.isEmpty &&
+        (scheduleStartNum.isEmpty || scheduleStartNum == "1") && !scheduleNoRepeat
+    }
+
+    private func clearScheduleGeneratorForm() {
+        scheduleFrom = ""
+        scheduleTo = ""
+        scheduleInterval = ""
+        scheduleGap = ""
+        scheduleTaskName = ""
+        scheduleInsertAfter = ""
+        scheduleStartNum = "1"
+        scheduleNoRepeat = false
+    }
+
     private func generateSchedule() {
         print("🔧 Generate button clicked")
         print("   From: \(scheduleFrom), To: \(scheduleTo)")
@@ -4088,10 +4130,10 @@ struct DailyNotesView: View {
                     let gapMinutes = nextEntry.startMinutes - currentMinutes
                     print("📍 Found next task: \(nextEntry.description) starting at \(safeMinutesToTime(nextEntry.startMinutes))")
                     print("   Gap duration: \(gapMinutes) minutes")
-                    
+
                     currentTaskName = "Rest up"
                     currentCycleDuration = gapMinutes
-                    
+
                     if gapMinutes > 0 {
                         print("🎯 Starting preparation cycle for \(gapMinutes) minutes")
                         // Small delay to ensure clean state transition
@@ -5036,7 +5078,6 @@ struct DailyNotesView: View {
         // the same activity if both blocks happen to name it.
         if !wasStruck && kind == .main {
             let durationMinutes = endMin - startMin
-            awardDailyNoteCredits(blockDescription: desc, durationMinutes: durationMinutes)
 
             // If this task had recorded distraction time, auto-fill actual
             // worked minutes as allocated duration minus that distraction time.
@@ -5045,29 +5086,6 @@ struct DailyNotesView: View {
                 let distractionMinutes = Int((distractionSeconds / 60).rounded())
                 let actual = max(0, durationMinutes - distractionMinutes)
                 setActualMinutes(startMin: startMin, endMin: endMin, desc: desc, minutes: actual)
-            }
-        }
-    }
-
-    private func awardDailyNoteCredits(blockDescription: String, durationMinutes: Int) {
-        guard durationMinutes > 0 else { return }
-        let matches = activeActivities.filter { $0.matchesDailyNoteBlock(blockDescription) }
-        guard !matches.isEmpty else { return }
-        var totalCredits = 0
-        var names: [String] = []
-        for activity in matches {
-            let earned = activity.earnFromDailyNote(durationMinutes: durationMinutes, context: modelContext)
-            if earned > 0 {
-                totalCredits += earned
-                names.append(activity.name)
-            }
-        }
-        try? modelContext.save()
-        if totalCredits > 0 {
-            let nameList = names.joined(separator: ", ")
-            creditEarnedMessage = "+\(totalCredits) credit\(totalCredits == 1 ? "" : "s") → \(nameList)"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                creditEarnedMessage = ""
             }
         }
     }
@@ -5396,24 +5414,6 @@ struct DailyNotesView: View {
         }
 
         return VStack(alignment: .leading, spacing: 6) {
-            // Credit earned feedback banner
-            if !creditEarnedMessage.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "star.fill")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                    Text(creditEarnedMessage)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.orange)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.12))
-                .cornerRadius(8)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
             // Pre-schedule content (with the BEGIN…STOP block, if it happens to
             // fall in this range, stripped out — it gets its own formatted
             // view below instead of showing up twice)
@@ -6082,6 +6082,193 @@ struct DailyNotesView: View {
         else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
     }
 
+    // MARK: - Lap (Split Current Task at Now)
+
+    /// Captures where the running task would be split. Returns nil (and says
+    /// why) when no task is running or it hasn't run a full minute yet.
+    private func prepareLap(kind: ScheduleKind = .main) -> LapDraft? {
+        let now = Date()
+        let cal = Calendar.current
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+
+        guard let cur = findBestCurrentTask(at: nowMin, in: extractTimeEntriesFromNotes(kind: kind)) else {
+            speechManager.speak("No running task to lap")
+            return nil
+        }
+        // For midnight-crossing tasks endMinutes >= 1440; normalise nowMin
+        let splitMin = (cur.endMinutes >= 1440 && nowMin < (cur.endMinutes - 1440)) ? nowMin + 1440 : nowMin
+        guard splitMin > cur.startMinutes && splitMin < cur.endMinutes else {
+            speechManager.speak("Too early to create a lap")
+            return nil
+        }
+        return LapDraft(
+            startMinutes: cur.startMinutes,
+            splitMinutes: splitMin,
+            endMinutes: cur.endMinutes,
+            taskName: cur.description,
+            startLabel: safeMinutesToTime(cur.startMinutes),
+            splitLabel: safeMinutesToTime(splitMin),
+            endLabel: safeMinutesToTime(cur.endMinutes),
+            kind: kind
+        )
+    }
+
+    /// Splits the drafted task into "start - split - `name`" and
+    /// "split - end - original name". No times move, so the running countdown
+    /// is untouched; later numbered lines are bumped by one.
+    private func createLap(_ draft: LapDraft, name: String) {
+        if draft.kind == .main { acknowledgePending() }
+        let cleaned = name.components(separatedBy: .newlines).joined(separator: " ")
+            .replacingOccurrences(of: "~~", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let lapName = cleaned.isEmpty ? draft.taskName : cleaned
+
+        var allLines = notesText.components(separatedBy: .newlines)
+        guard let block = scheduleBlockLineRange(draft.kind, in: allLines) else { return }
+        let lines = Array(allLines[block])
+        var result: [String] = []
+        var prevEnd: Int? = nil
+        var foundCurrent = false
+        var renumber = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.contains("~~") {
+                result.append(line)
+                continue
+            }
+
+            guard let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) else {
+                result.append(line)
+                continue
+            }
+            prevEnd = entry.endMinutes
+
+            var lineNum: Int? = nil
+            var afterNum = Substring(trimmed)
+            if let pIdx = trimmed.firstIndex(of: ")"),
+               let num = Int(String(trimmed[trimmed.startIndex..<pIdx]).trimmingCharacters(in: .whitespaces)) {
+                lineNum = num
+                afterNum = trimmed[trimmed.index(after: pIdx)...]
+            }
+
+            let isCurrentTask = !foundCurrent &&
+                                entry.startMinutes == draft.startMinutes &&
+                                entry.endMinutes   == draft.endMinutes &&
+                                entry.description  == draft.taskName
+
+            if isCurrentTask {
+                foundCurrent = true
+                renumber = lineNum != nil
+                // Distraction metrics etc. logged so far belong to the finished lap
+                var suffix = ""
+                if let r = trimmed.range(of: entry.description, options: .backwards) {
+                    suffix = String(trimmed[r.upperBound...])
+                }
+                let part1Num = lineNum.map { "\($0)) " } ?? ""
+                let part2Num = lineNum.map { "\($0 + 1)) " } ?? ""
+                result.append("\(part1Num)\(safeMinutesToTime(entry.startMinutes)) - \(safeMinutesToTime(draft.splitMinutes)) - \(lapName)\(suffix)")
+                result.append("\(part2Num)\(safeMinutesToTime(draft.splitMinutes)) - \(safeMinutesToTime(entry.endMinutes)) - \(entry.description)")
+            } else if foundCurrent, renumber, let num = lineNum {
+                result.append("\(num + 1))\(afterNum)")
+            } else {
+                result.append(line)
+            }
+        }
+
+        guard foundCurrent else {
+            speechManager.speak("Couldn't create the lap")
+            return
+        }
+
+        allLines.replaceSubrange(block, with: result)
+        notesText = allLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+        speechManager.speak("Lap created")
+
+        // The Begin/Stop block is display-only — nothing in the cycle engine to update.
+        guard draft.kind == .main else { return }
+        // The running block now starts at the split — keep count-up mode's
+        // "time allocated" in step (same reason as in cancelCurrentTask).
+        if currentTaskName == draft.taskName && !isTransitioning && !isWaitingForManualStart {
+            currentCycleDuration = draft.endMinutes - draft.splitMinutes
+        }
+        if settings.isPlaying { settings.scheduleIntervalTimer() }
+        else if #available(iOS 16.1, *) { settings.refreshLiveActivity() }
+    }
+
+    /// Lines strictly between a schedule block's tag lines (tags must sit on their own lines).
+    private func scheduleBlockLineRange(_ kind: ScheduleKind, in lines: [String]) -> Range<Int>? {
+        var startIdx: Int? = nil
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == kind.startTag && startIdx == nil { startIdx = i }
+            else if t == kind.endTag, let s = startIdx { return (s + 1)..<i }
+        }
+        return nil
+    }
+
+    // MARK: - Extend Begin/Stop Task
+
+    /// +5 for the BEGIN…STOP block: same rewrite as extendCurrentTask (extend
+    /// the running entry, push later non-fixed entries back), minus the cycle
+    /// timer — that block is only ever read off the wall clock.
+    private func extendBeginStopTask(byMinutes minutes: Int = 5) {
+        let now = Date()
+        let cal = Calendar.current
+        let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+
+        guard let currentEntry = findBestCurrentTask(at: nowMin, in: extractTimeEntriesFromNotes(kind: .begin)) else {
+            speechManager.speak("No running task to extend")
+            return
+        }
+
+        var allLines = notesText.components(separatedBy: .newlines)
+        guard let block = scheduleBlockLineRange(.begin, in: allLines) else { return }
+        var result: [String] = []
+        var prevEnd: Int? = nil
+
+        for line in allLines[block] {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.contains("~~"),
+                  let entry = parseTimeEntrySequential(line, previousEndMinutes: prevEnd) else {
+                result.append(line)
+                continue
+            }
+            let isCurrentTask = entry.startMinutes == currentEntry.startMinutes &&
+                                entry.endMinutes == currentEntry.endMinutes &&
+                                entry.description == currentEntry.description
+            if isCurrentTask {
+                let extended = TimeEntry(startMinutes: entry.startMinutes,
+                                         endMinutes: entry.endMinutes + minutes,
+                                         description: entry.description,
+                                         isFixed: entry.isFixed,
+                                         originalLine: entry.originalLine)
+                result.append(extended.toLine())
+                prevEnd = extended.endMinutes
+            } else if entry.startMinutes >= currentEntry.endMinutes && !entry.isFixed {
+                let shifted = TimeEntry(startMinutes: entry.startMinutes + minutes,
+                                        endMinutes: entry.endMinutes + minutes,
+                                        description: entry.description,
+                                        isFixed: entry.isFixed,
+                                        originalLine: entry.originalLine)
+                result.append(shifted.toLine())
+                prevEnd = shifted.endMinutes
+            } else {
+                result.append(line)
+                prevEnd = entry.endMinutes
+            }
+        }
+
+        allLines.replaceSubrange(block, with: result)
+        notesText = allLines.joined(separator: "\n")
+        editorKey = UUID()
+        saveNotes()
+        speechManager.speak("Extended by \(minutes) minutes")
+    }
+
     // MARK: - Stop Current Task at Now & Skip to Next
 
     private func cancelCurrentTask() {
@@ -6401,6 +6588,19 @@ struct DailyNotesView: View {
 
 // MARK: - Focus Mode View
 
+/// The three independent timers Focus View can show.
+enum FocusTimerKind {
+    case main, beginStop, calendarTask
+
+    var color: Color {
+        switch self {
+        case .main: return .cyan
+        case .beginStop: return .green
+        case .calendarTask: return .blue
+        }
+    }
+}
+
 struct ScheduleEntry: Identifiable {
     let id = UUID()
     let raw: String
@@ -6408,6 +6608,62 @@ struct ScheduleEntry: Identifiable {
     let endMinutes: Int?
     let task: String?
     let isStruck: Bool
+
+    /// Parses a tagged block (e.g. START...END, or BEGIN...STOP) out of free-form
+    /// note text — one entry per "H:MM - H:MM - task name" line inside the block.
+    /// Shared so anything that needs to read a day's schedule (FocusModeView's
+    /// widgets, TasksCalendarView's inline timer indicator, ...) parses the
+    /// exact same way from the same source text, rather than each keeping its
+    /// own copy of this regex.
+    static func parse(from text: String, startTag: String, endTag: String) -> [ScheduleEntry] {
+        let lines = text.components(separatedBy: .newlines)
+        var inside = false
+        var result: [ScheduleEntry] = []
+        let pattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-?\s*(.+)"#
+        let regex = try? NSRegularExpression(pattern: pattern)
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == startTag { inside = true; continue }
+            if trimmed == endTag   { inside = false; continue }
+            guard inside else { continue }
+
+            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
+            let clean = trimmed
+                .replacingOccurrences(of: "~~", with: "")
+                .replacingOccurrences(of: #"^\d+\)\s*"#, with: "", options: .regularExpression)
+
+            var startMin: Int? = nil
+            var endMin: Int?   = nil
+            var task: String?  = nil
+
+            if let r = regex,
+               let m = r.firstMatch(in: clean, range: NSRange(clean.startIndex..., in: clean)),
+               let sr = Range(m.range(at: 1), in: clean),
+               let er = Range(m.range(at: 2), in: clean),
+               let tr = Range(m.range(at: 3), in: clean) {
+                startMin = timeStringToMinutes(String(clean[sr]))
+                endMin   = timeStringToMinutes(String(clean[er]))
+                task     = String(clean[tr]).trimmingCharacters(in: .whitespaces)
+            }
+
+            result.append(ScheduleEntry(raw: trimmed, startMinutes: startMin, endMinutes: endMin, task: task, isStruck: isStruck))
+        }
+        return result
+    }
+
+    static func timeStringToMinutes(_ s: String) -> Int? {
+        let clean = s.trimmingCharacters(in: .whitespaces)
+        let isPM  = clean.lowercased().contains("pm")
+        let isAM  = clean.lowercased().contains("am")
+        let timeOnly = clean.replacingOccurrences(of: #"\s*[AaPp][Mm]"#, with: "", options: .regularExpression)
+        let parts = timeOnly.components(separatedBy: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+        var hour = h
+        if isPM && hour != 12 { hour += 12 }
+        if isAM && hour == 12 { hour = 0 }
+        return hour * 60 + m
+    }
 }
 
 struct FocusModeView: View {
@@ -6446,6 +6702,17 @@ struct FocusModeView: View {
     // Form/ZStack modifier-chain complexity that caused the earlier crash.
     var isPendingAcknowledgment: Bool = false
     var onAcknowledge: () -> Void = {}
+    // Lap = split the running task at "now". onPrepareLap captures the split
+    // point (nil if there's nothing to split); onCreateLap applies it with the
+    // name chosen in LapNameSheet.
+    var onPrepareLap: (ScheduleKind) -> LapDraft? = { _ in nil }
+    var onCreateLap: (LapDraft, String) -> Void = { _, _ in }
+    var onExtendBeginStop: () -> Void = {}
+    // Re-syncs the cycle timer to the schedule (same as the refresh button
+    // beside "Auto-start cycles from schedule"). nil while that toggle is off.
+    var onRefreshCycles: (() -> Void)? = nil
+
+    @Environment(\.modelContext) private var modelContext
 
     @Query(filter: #Predicate<Book> { $0.isActive }) private var activeBooks: [Book]
     // Backs the Calendar Task widget — the task on TasksCalendarView's
@@ -6459,7 +6726,6 @@ struct FocusModeView: View {
     // Multiple widgets can be enabled at once (stacked, scrollable) — same keys as the
     // settings-form picker in DailyNotesView, so toggling there stays in sync here.
     @AppStorage("display.focusShowBooks") private var showBooksWidget: Bool = true
-    @AppStorage("display.focusShowRestraints") private var showRestraintsWidget: Bool = false
     @AppStorage("display.focusShowProjects") private var showProjectsWidget: Bool = false
     @AppStorage("display.focusShowBeginStop") private var showBeginStopWidget: Bool = false
     @AppStorage("display.focusShowCalendarTask") private var showCalendarTaskWidget: Bool = false
@@ -6468,7 +6734,6 @@ struct FocusModeView: View {
     // all keep working as-is, this only changes how the remaining time is shown.
     @AppStorage("focusMode.showCountUp") private var showCountUp: Bool = false
 
-    @State private var showVirtueActivitiesFocus = false
     @State private var quotePool: [(text: String, bookTitle: String, author: String, chapterNumber: Int?, chapterName: String?)] = []
     @State private var currentIndex: Int = 0
     @State private var showQuote: Bool = true
@@ -6493,12 +6758,14 @@ struct FocusModeView: View {
     @State private var showSwapSheetFocus = false
     @State private var focusSwapDefaults: (Int?, Int?) = (nil, nil)
     @State private var showCancelMenuFocus = false
+    @State private var lapDraftFocus: LapDraft?
+    // Which timer block the shared action row acts on — the one the user
+    // tapped, not necessarily one that's running.
+    @State private var selectedTimer: FocusTimerKind = .main
     @State private var showAdjustOptionsFocus = false
     @State private var showClearDistractionsConfirm = false
     @AppStorage("focusSidebar.showActiveOnly") private var showActiveOnly: Bool = false
     @State private var showProjectListFocus = false
-    @State private var showRestraintListFocus = false
-    @State private var restraintDetailTargetFocus: Restraint?
     @State private var projectDetailTargetFocus: Project?
     @State private var showBooksLibraryFocus = false
     // "From" persists across sessions; "To" always resets to today.
@@ -6667,6 +6934,200 @@ struct FocusModeView: View {
         return DistractionTracker.shared.badgeText(date: selectedDate, startMin: sm, desc: currentTaskName)
     }
 
+    // MARK: - Timer selection + shared action row
+
+    private var visibleTimers: [FocusTimerKind] {
+        var timers: [FocusTimerKind] = []
+        if settings.isPlaying || settings.isPaused || isWaitingForManualStart { timers.append(.main) }
+        if showBeginStopWidget { timers.append(.beginStop) }
+        if showCalendarTaskWidget { timers.append(.calendarTask) }
+        return timers
+    }
+
+    /// The selected timer, falling back to the first one on screen when the
+    /// selected block isn't showing (its widget was toggled off, cycle stopped).
+    private var effectiveTimer: FocusTimerKind? {
+        visibleTimers.contains(selectedTimer) ? selectedTimer : visibleTimers.first
+    }
+
+    private func selectTimer(_ kind: FocusTimerKind) {
+        withAnimation(.easeInOut(duration: 0.15)) { selectedTimer = kind }
+    }
+
+    // No border when there's only one timer on screen — nothing to choose between.
+    private func timerSelectionBorder(_ kind: FocusTimerKind) -> some View {
+        RoundedRectangle(cornerRadius: 16)
+            .stroke(kind.color, lineWidth: 2)
+            .opacity(visibleTimers.count > 1 && effectiveTimer == kind ? 1 : 0)
+    }
+
+    private func timerActionButton(icon: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.title)
+                .foregroundColor(color)
+        }
+        .padding(10)
+        .background(Capsule().fill(color.opacity(0.15)))
+    }
+
+    // One row of buttons for all three timers: only the actions the selected
+    // timer supports right now are shown (the rest vanish rather than sit
+    // disabled, to save space), and they act on that timer alone.
+    @ViewBuilder
+    private var timerActionRow: some View {
+        switch effectiveTimer {
+        case .main:
+            mainTimerActions
+        case .beginStop:
+            if activeBeginStopEntry != nil {
+                HStack(spacing: 12) {
+                    timerActionButton(icon: "plus.circle.fill", color: .green, action: extendBeginStopFromFocus)
+                    timerActionButton(icon: "flag.circle.fill", color: .teal) {
+                        acknowledgeBeginStopPending()
+                        lapDraftFocus = onPrepareLap(.begin)
+                    }
+                }
+            }
+        case .calendarTask:
+            HStack(spacing: 12) {
+                if activeCalendarTask != nil {
+                    timerActionButton(icon: "plus.circle.fill", color: .green) { extendCalendarTaskFromFocus() }
+                }
+                if activeCalendarTask != nil || upcomingCalendarTask != nil {
+                    timerActionButton(icon: "moon.zzz.fill", color: .indigo) { snoozeCalendarTaskFromFocus() }
+                }
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var mainTimerActions: some View {
+        HStack(spacing: 12) {
+            if isWaitingForManualStart {
+                HStack(spacing: 24) {
+                    VStack(spacing: 6) {
+                        Button(action: onStartManualNext) {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 52))
+                                .foregroundColor(.yellow)
+                        }
+                        Text("Idle")
+                            .font(.caption)
+                            .foregroundColor(.yellow)
+                    }
+                    VStack(spacing: 6) {
+                        Button(action: onExtendPrevious) {
+                            Image(systemName: "arrowshape.right.circle.fill")
+                                .font(.system(size: 52))
+                                .foregroundColor(.green)
+                        }
+                        Text("Extend")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                }
+                if totalIdleSeconds > 0 {
+                    Text("Idle: \(formatWaitCountUpFocus(totalIdleSeconds))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                }
+            } else {
+                timerActionButton(icon: isSmartPaused ? "play.circle.fill" : "pause.circle.fill",
+                                  color: isSmartPaused ? .green : .orange,
+                                  action: onSmartPause)
+
+                if !isTransitioning && !currentTaskName.isEmpty {
+                    timerActionButton(icon: "plus.circle.fill", color: .green, action: onExtendTask)
+                    timerActionButton(icon: "flag.circle.fill", color: .teal) { lapDraftFocus = onPrepareLap(.main) }
+                    timerActionButton(icon: "exclamationmark.triangle.fill", color: .red, action: onInterrupt)
+                    timerActionButton(icon: "xmark.circle.fill", color: .gray) { showCancelMenuFocus = true }
+                }
+            }
+        }
+    }
+
+    private func extendBeginStopFromFocus() {
+        acknowledgeBeginStopPending()
+        onExtendBeginStop()
+        adoptEditedBeginStopEntry()
+    }
+
+    /// +5 / lap rewrite the active BEGIN…STOP line, and the "started" nag is
+    /// keyed off that raw line — without this the edited entry would be
+    /// announced as a newly started one.
+    private func adoptEditedBeginStopEntry() {
+        guard let active = activeBeginStopEntry else { return }
+        lastAnnouncedBeginStopRaw = active.raw
+        AcknowledgmentStore.acknowledge(date: Date(), identifier: active.raw)
+    }
+
+    private func extendCalendarTaskFromFocus(byMinutes minutes: Int = 5) {
+        guard let task = activeCalendarTask else { return }
+        acknowledgeCalendarTaskPending()
+        // Stop at 11:59 PM — an end time that wraps past midnight would read as before the start.
+        let newEnd = min(taskTimeToMinutes(task.endTime) + minutes, 24 * 60 - 1)
+        task.endTime = String(format: "%d:%02d", newEnd / 60, newEnd % 60)
+        try? modelContext.save()
+        rescheduleCalendarTaskNotifications(for: task)
+        SpeechManager.shared.speak("Extended by \(minutes) minutes")
+    }
+
+    /// Pushes the whole calendar task (start and end) later — the running
+    /// one, or the next one up if nothing's running yet.
+    private func snoozeCalendarTaskFromFocus(byMinutes minutes: Int = 5) {
+        guard let task = activeCalendarTask ?? upcomingCalendarTask else { return }
+        let newStart = taskTimeToMinutes(task.startTime) + minutes
+        let newEnd = task.endTime.isEmpty ? nil : taskTimeToMinutes(task.endTime) + minutes
+        // Don't push a task across midnight — its times would wrap to the start of the same day.
+        guard max(newStart, newEnd ?? 0) < 24 * 60 else {
+            SpeechManager.shared.speak("Can't snooze past midnight")
+            return
+        }
+        // Stop the "started" nag without recording an acknowledgment, so
+        // the task is announced again when its new start time arrives.
+        isCalendarTaskPendingAcknowledgment = false
+        calendarTaskAcknowledgmentTimer?.invalidate()
+        calendarTaskAcknowledgmentTimer = nil
+
+        task.startTime = String(format: "%d:%02d", newStart / 60, newStart % 60)
+        if let newEnd { task.endTime = String(format: "%d:%02d", newEnd / 60, newEnd % 60) }
+        try? modelContext.save()
+        rescheduleCalendarTaskNotifications(for: task)
+        SpeechManager.shared.speak("Snoozed by \(minutes) minutes")
+    }
+
+    // Same identifiers TasksCalendarView schedules under, so these replace
+    // the task's existing "Task Starting" / "Task Ending" alerts.
+    private func rescheduleCalendarTaskNotifications(for task: Task) {
+        guard let taskDate = task.date else { return }
+        let stamp = taskDate.timeIntervalSince1970
+        let startInterval = beginStopDate(forMinutes: taskTimeToMinutes(task.startTime)).timeIntervalSinceNow
+        if startInterval > 0 {
+            NotificationManager.shared.scheduleNotification(
+                title: "Task Starting",
+                body: "Time to start: \(task.title)",
+                identifier: "task-start-\(task.title)-\(stamp)",
+                timeInterval: startInterval
+            )
+        }
+        guard !task.endTime.isEmpty else { return }
+        let endInterval = beginStopDate(forMinutes: taskTimeToMinutes(task.endTime)).timeIntervalSinceNow
+        if endInterval > 0 {
+            NotificationManager.shared.scheduleNotification(
+                title: "Task Ending",
+                body: "Time to end: \(task.title)",
+                identifier: "task-end-\(task.title)-\(stamp)",
+                timeInterval: endInterval
+            )
+        }
+    }
+
     // MARK: - Begin/Stop timer widget
     // Purely a live, read-only display of the BEGIN...STOP block: it doesn't
     // hook into the smart-cycle engine (pause/extend/interrupt/etc.) the way
@@ -6723,6 +7184,9 @@ struct FocusModeView: View {
         }
         guard active.raw != lastAnnouncedBeginStopRaw else { return }
         lastAnnouncedBeginStopRaw = active.raw
+        // Already acknowledged this same entry in an earlier session today
+        // (e.g. Focus View was closed and reopened mid-entry) — don't re-nag.
+        guard !AcknowledgmentStore.isAcknowledged(date: Date(), identifier: active.raw) else { return }
         beginBeginStopAcknowledgmentLoop {
             "\(self.activeBeginStopEntry?.task ?? "Session") started. Please acknowledge."
         }
@@ -6742,6 +7206,9 @@ struct FocusModeView: View {
         isBeginStopPendingAcknowledgment = false
         beginStopAcknowledgmentTimer?.invalidate()
         beginStopAcknowledgmentTimer = nil
+        if let raw = lastAnnouncedBeginStopRaw {
+            AcknowledgmentStore.acknowledge(date: Date(), identifier: raw)
+        }
     }
 
     // MARK: - Calendar Task widget
@@ -6841,6 +7308,9 @@ struct FocusModeView: View {
         }
         guard active.id != lastAnnouncedCalendarTaskID else { return }
         lastAnnouncedCalendarTaskID = active.id
+        // Already acknowledged this same task in an earlier session today —
+        // don't re-nag just because Focus View was closed and reopened.
+        guard !AcknowledgmentStore.isAcknowledged(date: Date(), identifier: active.id.uuidString) else { return }
         beginCalendarTaskAcknowledgmentLoop {
             "\(self.activeCalendarTask?.title ?? "Task") started. Please acknowledge."
         }
@@ -6860,6 +7330,9 @@ struct FocusModeView: View {
         isCalendarTaskPendingAcknowledgment = false
         calendarTaskAcknowledgmentTimer?.invalidate()
         calendarTaskAcknowledgmentTimer = nil
+        if let id = lastAnnouncedCalendarTaskID {
+            AcknowledgmentStore.acknowledge(date: Date(), identifier: id.uuidString)
+        }
     }
 
     private var dayTotalsBanner: (count: Int, durStr: String)? {
@@ -6900,40 +7373,7 @@ struct FocusModeView: View {
     }
 
     private func parseScheduleEntries(startTag: String, endTag: String) -> [ScheduleEntry] {
-        let lines = notesText.components(separatedBy: .newlines)
-        var inside = false
-        var result: [ScheduleEntry] = []
-        let pattern = #"(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[AaPp][Mm])?)\s*-?\s*(.+)"#
-        let regex = try? NSRegularExpression(pattern: pattern)
-
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed == startTag { inside = true; continue }
-            if trimmed == endTag   { inside = false; continue }
-            guard inside else { continue }
-
-            let isStruck = trimmed.hasPrefix("~~") && trimmed.hasSuffix("~~")
-            let clean = trimmed
-                .replacingOccurrences(of: "~~", with: "")
-                .replacingOccurrences(of: #"^\d+\)\s*"#, with: "", options: .regularExpression)
-
-            var startMin: Int? = nil
-            var endMin: Int?   = nil
-            var task: String?  = nil
-
-            if let r = regex,
-               let m = r.firstMatch(in: clean, range: NSRange(clean.startIndex..., in: clean)),
-               let sr = Range(m.range(at: 1), in: clean),
-               let er = Range(m.range(at: 2), in: clean),
-               let tr = Range(m.range(at: 3), in: clean) {
-                startMin = focusModeTimeToMinutes(String(clean[sr]))
-                endMin   = focusModeTimeToMinutes(String(clean[er]))
-                task     = String(clean[tr]).trimmingCharacters(in: .whitespaces)
-            }
-
-            result.append(ScheduleEntry(raw: trimmed, startMinutes: startMin, endMinutes: endMin, task: task, isStruck: isStruck))
-        }
-        return result
+        ScheduleEntry.parse(from: notesText, startTag: startTag, endTag: endTag)
     }
 
     private func deleteEntry(_ entry: ScheduleEntry) {
@@ -6961,16 +7401,7 @@ struct FocusModeView: View {
     }
 
     private func focusModeTimeToMinutes(_ s: String) -> Int? {
-        let clean = s.trimmingCharacters(in: .whitespaces)
-        let isPM  = clean.lowercased().contains("pm")
-        let isAM  = clean.lowercased().contains("am")
-        let timeOnly = clean.replacingOccurrences(of: #"\s*[AaPp][Mm]"#, with: "", options: .regularExpression)
-        let parts = timeOnly.components(separatedBy: ":")
-        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return nil }
-        var hour = h
-        if isPM && hour != 12 { hour += 12 }
-        if isAM && hour == 12 { hour = 0 }
-        return hour * 60 + m
+        ScheduleEntry.timeStringToMinutes(s)
     }
 
     var body: some View {
@@ -7026,16 +7457,6 @@ struct FocusModeView: View {
                 ProjectListView()
             }
         }
-        .sheet(isPresented: $showRestraintListFocus) {
-            NavigationStack {
-                RestraintListView()
-            }
-        }
-        .sheet(item: $restraintDetailTargetFocus) { r in
-            NavigationStack {
-                RestraintInstancesView(restraint: r)
-            }
-        }
         .sheet(item: $projectDetailTargetFocus) { p in
             NavigationStack {
                 ProjectDetailView(project: p, range: projectRange)
@@ -7044,14 +7465,18 @@ struct FocusModeView: View {
         .sheet(isPresented: $showBooksLibraryFocus) {
             BooksView()
         }
-        .sheet(isPresented: $showVirtueActivitiesFocus) {
-            VirtueActivitiesView()
-        }
         .confirmationDialog("Cancel Current Task", isPresented: $showCancelMenuFocus, titleVisibility: .visible) {
             Button("Stop & Start Next") { onCancelTask() }
             Button("Remove & Adjust Times") { onRemoveCurrentAdjust() }
             Button("Just Remove") { onRemoveCurrentOnly() }
+            Button("Create Lap") { lapDraftFocus = onPrepareLap(.main) }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(item: $lapDraftFocus) { draft in
+            LapNameSheet(draft: draft) { name in
+                onCreateLap(draft, name)
+                if draft.kind == .begin { adoptEditedBeginStopEntry() }
+            }
         }
         .confirmationDialog("Add Adjust (5 min) — start from?", isPresented: $showAdjustOptionsFocus, titleVisibility: .visible) {
             Button("Current Task") { onAdjust(false) }
@@ -7084,12 +7509,6 @@ struct FocusModeView: View {
                         .foregroundColor(.cyan)
                     Spacer()
                     HStack(spacing: 16) {
-                        // Virtue Activities
-                        Button(action: { showVirtueActivitiesFocus = true }) {
-                            Image(systemName: "leaf.fill")
-                                .font(.title2)
-                                .foregroundColor(.mint)
-                        }
                         // Strike past timeslots
                         Button(action: onStrikePast) {
                             Image(systemName: "text.badge.minus")
@@ -7297,93 +7716,47 @@ struct FocusModeView: View {
                                     .background(Capsule().fill(Color.white.opacity(0.08)))
                             }
                         }
-
-                        // Smart pause / resume + extend row
-                        HStack(spacing: 12) {
-                            if isWaitingForManualStart {
-                                HStack(spacing: 24) {
-                                    VStack(spacing: 6) {
-                                        Button(action: onStartManualNext) {
-                                            Image(systemName: "play.circle.fill")
-                                                .font(.system(size: 52))
-                                                .foregroundColor(.yellow)
-                                        }
-                                        Text("Idle")
-                                            .font(.caption)
-                                            .foregroundColor(.yellow)
-                                    }
-                                    VStack(spacing: 6) {
-                                        Button(action: onExtendPrevious) {
-                                            Image(systemName: "arrowshape.right.circle.fill")
-                                                .font(.system(size: 52))
-                                                .foregroundColor(.green)
-                                        }
-                                        Text("Extend")
-                                            .font(.caption)
-                                            .foregroundColor(.green)
-                                    }
-                                }
-                                if totalIdleSeconds > 0 {
-                                    Text("Idle: \(formatWaitCountUpFocus(totalIdleSeconds))")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                                }
-                            } else {
-                                Button(action: onSmartPause) {
-                                    Image(systemName: isSmartPaused ? "play.circle.fill" : "pause.circle.fill")
-                                        .font(.title)
-                                        .foregroundColor(isSmartPaused ? .green : .orange)
-                                }
-                                .padding(10)
-                                .background(Capsule().fill((isSmartPaused ? Color.green : Color.orange).opacity(0.15)))
-                            }
-
-                            if !isWaitingForManualStart && !isTransitioning && !currentTaskName.isEmpty {
-                                HStack(spacing: 14) {
-                                    // +5 min
-                                    Button(action: onExtendTask) {
-                                        Image(systemName: "plus.circle.fill")
-                                            .font(.title)
-                                            .foregroundColor(.green)
-                                    }
-                                    .padding(10)
-                                    .background(Capsule().fill(Color.green.opacity(0.15)))
-
-                                    // Interrupt
-                                    Button(action: onInterrupt) {
-                                        Image(systemName: "exclamationmark.triangle.fill")
-                                            .font(.title)
-                                            .foregroundColor(.red)
-                                    }
-                                    .padding(10)
-                                    .background(Capsule().fill(Color.red.opacity(0.15)))
-
-                                    // Cancel options
-                                    Button(action: { showCancelMenuFocus = true }) {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.title)
-                                            .foregroundColor(.gray)
-                                    }
-                                    .padding(10)
-                                    .background(Capsule().fill(Color.gray.opacity(0.15)))
-                                }
-                            }
-                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .overlay(timerSelectionBorder(.main))
+                    .contentShape(RoundedRectangle(cornerRadius: 16))
+                    .onTapGesture { selectTimer(.main) }
+                    .padding(.horizontal, 24)
                     .padding(.top, 8)
-                    .padding(.bottom, 28)
                 }
 
-                // Widget tabs (Books | Restraints | Projects | Begin/Stop) — toggle any
+                // The other two timers sit right under the main one so all
+                // three can be picked from one place — tap a block to select
+                // it; the shared action row below then acts on that timer.
+                if showBeginStopWidget {
+                    beginStopWidgetCard
+                        .overlay(timerSelectionBorder(.beginStop))
+                        .contentShape(RoundedRectangle(cornerRadius: 16))
+                        .onTapGesture { selectTimer(.beginStop) }
+                        .padding(.horizontal, 24)
+                        .padding(.top, 12)
+                }
+
+                if showCalendarTaskWidget {
+                    calendarTaskWidgetCard
+                        .overlay(timerSelectionBorder(.calendarTask))
+                        .contentShape(RoundedRectangle(cornerRadius: 16))
+                        .onTapGesture { selectTimer(.calendarTask) }
+                        .padding(.horizontal, 24)
+                        .padding(.top, 12)
+                }
+
+                timerActionRow
+                    .padding(.top, 16)
+                    .padding(.bottom, 28)
+
+                // Widget tabs (Books | Projects | Begin/Stop) — toggle any
                 // combination on; enabled ones stack below in this order (Focus View
                 // scrolls to fit them all).
                 HStack(spacing: 8) {
                     Spacer()
                     widgetToggleButton(icon: "books.vertical", isOn: $showBooksWidget)
-                    widgetToggleButton(icon: "hand.raised.fill", isOn: $showRestraintsWidget)
                     widgetToggleButton(icon: "folder.fill", isOn: $showProjectsWidget)
                     widgetToggleButton(icon: "hourglass", isOn: $showBeginStopWidget)
                 }
@@ -7459,12 +7832,6 @@ struct FocusModeView: View {
                         }
                     }
 
-                    if showRestraintsWidget {
-                        manageButtonRow(action: { showRestraintListFocus = true })
-                        RestraintBarsView(isDark: true, onSelect: { r in restraintDetailTargetFocus = r })
-                            .padding(.horizontal, 32)
-                    }
-
                     if showProjectsWidget {
                         HStack(spacing: 8) {
                             Spacer()
@@ -7485,16 +7852,6 @@ struct FocusModeView: View {
                             .padding(.horizontal, 32)
                         TimeInsightsView(range: projectRange, isDark: true, onSelect: { p in projectDetailTargetFocus = p })
                             .padding(.horizontal, 32)
-                    }
-
-                    if showBeginStopWidget {
-                        beginStopWidgetCard
-                            .padding(.horizontal, 24)
-                    }
-
-                    if showCalendarTaskWidget {
-                        calendarTaskWidgetCard
-                            .padding(.horizontal, 24)
                     }
                 }
 
@@ -7543,6 +7900,13 @@ struct FocusModeView: View {
                         .font(.headline)
                         .foregroundColor(.white)
                     Spacer()
+                    if let onRefreshCycles {
+                        Button(action: onRefreshCycles) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                    }
                     Button(action: {
                         focusSwapDefaults = computeSwapDefaults()
                         showSwapSheetFocus = true

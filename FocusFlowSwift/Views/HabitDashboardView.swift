@@ -18,6 +18,7 @@ struct HabitDashboardView: View {
     @State private var showDeleteConfirmation = false
     @State private var showArchiveConfirmation = false
     @State private var showArchivedHabits = false
+    @State private var showStaleHabits = false
     @State private var habitToDelete = ""
     @State private var searchText = ""
     @State private var appliedSearch = ""
@@ -133,6 +134,9 @@ struct HabitDashboardView: View {
         .sheet(isPresented: $showArchivedHabits) {
             ArchivedHabitsView()
         }
+        .sheet(isPresented: $showStaleHabits) {
+            StaleHabitsView()
+        }
         .sheet(isPresented: $showEventDetail) {
             if let selectedDate = selectedEventDate {
                 EventDetailView(date: selectedDate, eventDay: selectedEventDay)
@@ -149,13 +153,21 @@ struct HabitDashboardView: View {
             Spacer()
             
             Button {
+                showStaleHabits = true
+            } label: {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.title3)
+                    .foregroundColor(.orange)
+            }
+
+            Button {
                 showArchivedHabits = true
             } label: {
                 Image(systemName: "archivebox")
                     .font(.title3)
                     .foregroundColor(.blue)
             }
-            
+
             Picker("Filter", selection: $filterMode) {
                 Text("All").tag("all")
                 Text("Routines").tag("routines")

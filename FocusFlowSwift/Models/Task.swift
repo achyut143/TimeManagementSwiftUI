@@ -41,6 +41,16 @@ class Task: Transferable {
     // Used as extra grounding for AI virtue suggestions; optional/nil-default so
     // it's a no-op lightweight migration for existing tasks.
     var info: String?
+    // Impulse tracking (see ImpulseModels.swift). nil-default so this is a
+    // lightweight migration; a task with no impulseTypeID is a regular task.
+    var impulseTypeID: UUID?
+    // The "created" time the planned rule was last checked against — reset
+    // when the task is moved earlier or its impulse type changes.
+    var impulseCheckedAt: Date?
+    // Minutes that passed the planned rule; anything beyond is unplanned.
+    var impulsePlannedMinutes: Double?
+    // "H:mm" — logged when an impulse ran past its scheduled end.
+    var actualEndTime: String?
 
     @Relationship(deleteRule: .cascade, inverse: \Subtask.parentTask)
     var subtasks: [Subtask]? = []

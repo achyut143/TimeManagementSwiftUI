@@ -25,6 +25,9 @@ struct TaskDragPayload: Codable, Transferable {
 struct TasksCalendarView: View {
     @Environment(\.modelContext) private var modelContext
     @Binding var selectedDate: Date
+    var onOpenFocusMode: () -> Void = {}
+    @AppStorage("isDarkMode") private var isDarkMode: Bool = false
+    @State private var showTaskTable = false
     @State private var tasks: [Task] = []
     @State private var allTasks: [Task] = [] // For metrics calculation
     @State private var currentTime = Date()
@@ -54,7 +57,16 @@ struct TasksCalendarView: View {
     @State private var quickTaskInput = ""
     @State private var showUntimedTasks = false
     @State private var showMarkAllNotCompletedConfirmation = false
+    @State private var showBulkMoveTasks = false
     @State private var isUntimedDropTargeted = false
+    // Driven by FocusTimerIndicatorView.onPendingChange — a full-width
+    // acknowledge banner (matching Focus Mode's own) shown in place of the
+    // compact pill while a Start/End, Begin/Stop, or calendar task
+    // occurrence is awaiting acknowledgment.
+    @State private var focusAckPending = false
+    @State private var focusAckName = ""
+    @State private var focusAckColor: Color = .indigo
+    @State private var focusAckAction: () -> Void = {}
     @State private var showBacklogDrawer = false
     @State private var showBacklogScreen = false
     @State private var showBacklogPicker = false
@@ -64,11 +76,50 @@ struct TasksCalendarView: View {
     @Query(sort: \Goal.name) private var goals: [Goal]
     @Query private var allSubtasks: [Subtask]
     @State private var selectedGoalForNewTask: Goal?
+    @Query(sort: \ImpulseType.sortOrder) private var impulseTypes: [ImpulseType]
+    @State private var selectedImpulseTypeID: UUID?
+    @State private var showPlannerSettings = false
+    @State private var showPeriodGoals = false
+    @State private var showPlannerMetrics = false
+    @State private var showIfThenPlans = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
         VStack(spacing: 0) {
             PointsIndicatorView(tasks: getAllTasksForDate())
+                .overlay(alignment: .trailing) {
+                    HStack(spacing: 12) {
+                        selfEfficacyBadge
+                        FocusTimerIndicatorView(onOpenFocusMode: onOpenFocusMode) { pending, name, color, action in
+                            focusAckPending = pending
+                            focusAckName = name
+                            focusAckColor = color
+                            focusAckAction = action
+                        }
+                    }
+                    .padding(.trailing, 16)
+                }
+
+            if focusAckPending {
+                Button(action: focusAckAction) {
+                    HStack {
+                        Image(systemName: "bell.badge.fill")
+                        Text("\(focusAckName) started — Tap to Acknowledge")
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(focusAckColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+            }
 
             HStack {
                 Button(showTaskCreation ? "Close" : "Add Task") {
@@ -117,8 +168,10 @@ struct TasksCalendarView: View {
                 }
             }
             
-            dateHeader
-            
+            // Pinned above the calendar (not inside its scroll) — the
+            // timeline auto-scrolls to the current time, which hid it.
+            PlannerHeaderView(date: selectedDate)
+
             if showUntimedTasks {
                 untimedTasksList
             } else {
@@ -171,34 +224,80 @@ struct TasksCalendarView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: showBacklogDrawer)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                let pct = selfEfficacyPercentage
-                VStack(spacing: 0) {
-                    Text("\(pct)%")
-                        .font(.system(size: 18, weight: .black, design: .rounded))
-                        .foregroundStyle(selfEfficacyColor(pct))
-                    Text("\(metricDays)d")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
-            }
+            // One menu for every right-side action — separate icons overflow
+            // into a system "…" that doesn't respond on narrower phones.
             ToolbarItem(placement: .navigationBarTrailing) {
-                HStack {
+                Menu {
                     Button {
+                        showPeriodGoals = true
+                    } label: {
+                        Label("Goals", systemImage: "flag")
+                    }
+                    Button {
+                        showIfThenPlans = true
+                    } label: {
+                        Label("If-then Plans", systemImage: "arrow.triangle.branch")
+                    }
+                    Button {
+                        showPlannerMetrics = true
+                    } label: {
+                        Label("Planner Metrics", systemImage: "chart.bar.xaxis")
+                    }
+                    Button {
+                        showPlannerSettings = true
+                    } label: {
+                        Label("Impulses & Sleep Settings", systemImage: "slider.horizontal.3")
+                    }
+                    Divider()
+                    Button {
+                        showBulkMoveTasks = true
+                    } label: {
+                        Label("Move Tasks", systemImage: "clock.arrow.2.circlepath")
+                    }
+                    Button {
+                        showTaskTable = true
+                    } label: {
+                        Label("Task Table", systemImage: "list.bullet")
+                    }
+                    Button(role: .destructive) {
                         showMarkAllNotCompletedConfirmation = true
                     } label: {
-                        Image(systemName: "xmark.circle")
-                            .foregroundColor(.red)
+                        Label("Mark All Not Completed", systemImage: "xmark.circle")
                     }
-
-                    NavigationLink(destination: TaskTableView()) {
-                        Image(systemName: "list.bullet")
+                    Divider()
+                    Button {
+                        isDarkMode.toggle()
+                    } label: {
+                        Label(isDarkMode ? "Switch to Light" : "Switch to Dark",
+                              systemImage: isDarkMode ? "sun.max.fill" : "moon.fill")
                     }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }
+        .navigationDestination(isPresented: $showTaskTable) {
+            TaskTableView()
+        }
         .sheet(isPresented: $showBacklogScreen) {
             BacklogView(isDrawer: false, isPresented: $showBacklogScreen, targetDate: selectedDate, onSchedule: updateQuery)
+        }
+        .sheet(isPresented: $showPlannerSettings) {
+            NavigationStack { PlannerSettingsView() }
+        }
+        .sheet(isPresented: $showPeriodGoals) {
+            NavigationStack { PeriodGoalsView(date: selectedDate) }
+        }
+        .sheet(isPresented: $showPlannerMetrics) {
+            NavigationStack { PlannerMetricsView() }
+        }
+        .sheet(isPresented: $showIfThenPlans) {
+            IfThenPlansSheet()
+        }
+        .sheet(isPresented: $showBulkMoveTasks) {
+            BulkMoveTasksView(selectedDate: selectedDate, tasks: tasks, isPresented: $showBulkMoveTasks) { ids, targetTime in
+                bulkMoveTasks(ids: ids, to: targetTime)
+            }
         }
         .onAppear {
             updateQuery()
@@ -254,7 +353,6 @@ struct TasksCalendarView: View {
                 populateFromBacklog(task)
             }
         }
-        .environment(\.isTaskFormPresented, showTaskCreation)
 
     }
     
@@ -348,9 +446,11 @@ struct TasksCalendarView: View {
                                 .keyboardType(.numberPad)
                                 .frame(width: 70)
                                 .onChange(of: taskDurationMinutes) { _, newValue in
-                                    let clamped = max(5, newValue)
-                                    if clamped != newValue { taskDurationMinutes = clamped }
-                                    endTime = Calendar.current.date(byAdding: .minute, value: clamped, to: startTime) ?? startTime
+                                    // Don't clamp the live value while typing — e.g. typing
+                                    // "30" passes through "3" first, and clamping that up to
+                                    // 5 would stomp the digit before "0" ever gets typed. The
+                                    // real 5-minute floor is enforced on save instead.
+                                    endTime = Calendar.current.date(byAdding: .minute, value: max(newValue, 0), to: startTime) ?? startTime
                                 }
                         }
 
@@ -413,6 +513,22 @@ struct TasksCalendarView: View {
                         .font(.caption)
                 }
 
+                if impulseTypes.contains(where: { !$0.isArchived }) {
+                    HStack {
+                        Text("Impulse")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("Impulse", selection: $selectedImpulseTypeID) {
+                            Text("None (regular task)").tag(UUID?.none)
+                            ForEach(impulseTypes.filter { !$0.isArchived }) { type in
+                                Text(type.name).tag(Optional(type.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    .padding(.horizontal)
+                }
+
                 if !goals.isEmpty {
                     HStack {
                         Text("Goal")
@@ -431,19 +547,6 @@ struct TasksCalendarView: View {
             }
         }
         .padding()
-        .background(.ultraThinMaterial)
-    }
-    
-    private var dateHeader: some View {
-        VStack(spacing: 8) {
-            Text(selectedDate.formatted(date: .abbreviated, time: .omitted))
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            Text(showUntimedTasks ? "Untimed Tasks" : "Timed Tasks")
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-        }
-        .padding(.vertical, 8)
         .background(.ultraThinMaterial)
     }
     
@@ -968,6 +1071,7 @@ struct TasksCalendarView: View {
   }
   .padding(isStartSlot ? 0 : 0)
   .background(taskBackgroundColor(task))
+  .overlay(impulseOverlay(task))
   .overlay(
     Rectangle()
       .stroke(isCurrentTask(task) ? Color.blue : Color.clear, lineWidth: 2)
@@ -1099,8 +1203,16 @@ struct TasksCalendarView: View {
     }
 
     private var selfEfficacyPercentage: Int {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -metricDays, to: Date()) ?? Date()
-        let periodTasks = allTasks.filter { ($0.date ?? .distantPast) >= cutoff }
+        // Excludes today — a still-in-progress day full of incomplete tasks
+        // would otherwise drag the percentage down before there's been any
+        // chance to complete them. Window is the metricDays days ending
+        // yesterday.
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        let cutoff = Calendar.current.date(byAdding: .day, value: -metricDays, to: startOfToday) ?? startOfToday
+        let periodTasks = allTasks.filter { task in
+            guard let date = task.date else { return false }
+            return date >= cutoff && date < startOfToday
+        }
         let total = periodTasks.reduce(0.0) { $0 + $1.weight }
         guard total > 0 else { return 0 }
         let earned = periodTasks.filter { $0.completed }.reduce(0.0) { $0 + $1.effectiveWeight }
@@ -1196,7 +1308,34 @@ struct TasksCalendarView: View {
         return currentMinutes >= startMinutes && currentMinutes < endMinutes
     }
     
+    private func impulseType(of task: Task) -> ImpulseType? {
+        guard let id = task.impulseTypeID else { return nil }
+        return impulseTypes.first { $0.id == id }
+    }
+
+    private func isOnNoImpulseDay(_ task: Task) -> Bool {
+        guard let date = task.date else { return false }
+        return PlannerDay.fetch(for: date, context: modelContext)?.noImpulseDay ?? false
+    }
+
+    /// Planned impulse tasks are solid; unplanned ones are striped and outlined.
+    @ViewBuilder
+    private func impulseOverlay(_ task: Task) -> some View {
+        if task.impulseTypeID != nil, !ImpulseRules.isPlannedLabel(task, noImpulseDay: isOnNoImpulseDay(task)) {
+            let color = impulseType(of: task)?.color ?? .gray
+            ZStack {
+                StripeFill().stroke(color.opacity(0.45), lineWidth: 2).clipped()
+                Rectangle().strokeBorder(color, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
     private func taskBackgroundColor(_ task: Task) -> Color {
+        if let type = impulseType(of: task) {
+            if ImpulseRules.isSkipped(task) { return type.color.opacity(0.15) }
+            return ImpulseRules.isPlannedLabel(task, noImpulseDay: isOnNoImpulseDay(task)) ? type.color.opacity(0.75) : type.color.opacity(0.2)
+        }
         if task.completed { return .green.opacity(0.3) }
         if task.notCompleted { return .red.opacity(0.3) }
         if (task.timeSpent ?? 0) > 0 { return .orange.opacity(0.3) }
@@ -1228,7 +1367,22 @@ struct TasksCalendarView: View {
         }
         RunLoop.current.add(timer!, forMode: .common)
     }
-    
+
+    // Moved here from the nav bar's .principal toolbar item — with the
+    // bulk-move icon added to the trailing group, there wasn't enough room
+    // left for the nav bar to keep showing this without covering/clipping it.
+    private var selfEfficacyBadge: some View {
+        let pct = selfEfficacyPercentage
+        return VStack(spacing: 0) {
+            Text("\(pct)%")
+                .font(.system(size: 18, weight: .black, design: .rounded))
+                .foregroundStyle(selfEfficacyColor(pct))
+            Text("\(metricDays)d")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func scrollToCurrentTime(proxy: ScrollViewProxy) {
         let currentHour = Calendar.current.component(.hour, from: Date())
         let currentMinute = Calendar.current.component(.minute, from: Date())
@@ -1338,6 +1492,13 @@ struct TasksCalendarView: View {
     private func createTaskFromSeparateFields() {
         guard !taskTitle.isEmpty else { return }
 
+        // Enforce the 5-minute floor here (on submit) rather than while the
+        // user is still typing the duration — see the field's onChange for why.
+        if !isUntimedTask {
+            taskDurationMinutes = max(taskDurationMinutes, 5)
+            endTime = Calendar.current.date(byAdding: .minute, value: taskDurationMinutes, to: startTime) ?? startTime
+        }
+
         if let source = backlogSourceTask {
             // Schedule the same task in place, rather than creating a new
             // row and deleting the old one — anything the create form
@@ -1349,8 +1510,10 @@ struct TasksCalendarView: View {
             source.priority = taskPriority
             source.repeatAgain = repeatDays > 0 ? repeatDays : nil
             source.copySubtasks = copySubtasks
+            let before = ImpulseRules.Snapshot(source)
             source.goal = selectedGoalForNewTask
             source.date = selectedDate
+            source.impulseTypeID = selectedImpulseTypeID
 
             if isUntimedTask {
                 source.startTime = ""
@@ -1362,6 +1525,7 @@ struct TasksCalendarView: View {
                 source.endTime = formatter.string(from: endTime)
                 scheduleTaskNotifications(for: source)
             }
+            ImpulseRules.reconcile(source, before: before, types: impulseTypes)
 
             do {
                 try modelContext.save()
@@ -1407,6 +1571,8 @@ struct TasksCalendarView: View {
             }
 
             task.goal = selectedGoalForNewTask
+            task.impulseTypeID = selectedImpulseTypeID
+            ImpulseRules.reconcile(task, before: nil, types: impulseTypes)
             modelContext.insert(task)
 
             do {
@@ -1427,7 +1593,13 @@ struct TasksCalendarView: View {
         taskDurationMinutes = 15
         copySubtasks = false
         selectedGoalForNewTask = nil
+        selectedImpulseTypeID = nil
         backlogSourceTask = nil
+
+        // Close the create-task form now that the task has been saved —
+        // same cleanup the "Close" button does, so reopening starts fresh.
+        showTaskCreation = false
+        showQuickTaskInput = true
     }
 
     private func populateFromBacklog(_ task: Task) {
@@ -1545,6 +1717,7 @@ struct TasksCalendarView: View {
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
 
@@ -1613,6 +1786,7 @@ struct TasksCalendarView: View {
             virtues: task.virtues
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
 
@@ -1655,9 +1829,11 @@ struct TasksCalendarView: View {
         let endHour = wrappedEnd / 60
         let endMin = wrappedEnd % 60
 
+        let before = ImpulseRules.Snapshot(task)
         task.startTime = String(format: "%d:%02d", startHour, startMin)
         task.endTime = String(format: "%d:%02d", endHour, endMin)
         task.date = selectedDate
+        ImpulseRules.reconcile(task, before: before, types: impulseTypes)
 
         scheduleTaskNotifications(for: task)
         try? modelContext.save()
@@ -1667,13 +1843,52 @@ struct TasksCalendarView: View {
     /// Drops a task (typically from the Backlog) onto the selected day as an
     /// untimed task, rather than a specific time slot.
     private func scheduleAsUntimed(_ task: Task) {
+        let before = ImpulseRules.Snapshot(task)
         task.startTime = ""
         task.endTime = ""
         task.date = selectedDate
+        ImpulseRules.reconcile(task, before: before, types: impulseTypes)
         try? modelContext.save()
         updateQuery()
     }
-    
+
+    /// Shifts every selected task by the same delta — the delta that puts
+    /// the earliest-starting selected task at `targetTime` — so the whole
+    /// group moves together while keeping its internal spacing. e.g. Task A
+    /// 2:30 PM (30m) and Task B 4:30 PM (30m), both selected, moved to
+    /// 4:30 PM: delta is +2h, so A -> 4:30 PM and B -> 6:30 PM (not packed
+    /// back-to-back at 4:30/5:00).
+    private func bulkMoveTasks(ids: [UUID], to targetTime: Date) {
+        guard !ids.isEmpty else { return }
+        let idSet = Set(ids)
+        let selectedTasks = tasks.filter { idSet.contains($0.id) && !$0.startTime.isEmpty && !$0.endTime.isEmpty }
+        guard let earliest = selectedTasks.min(by: { timeToMinutes($0.startTime) < timeToMinutes($1.startTime) }) else { return }
+
+        let cal = Calendar.current
+        let rawTargetMinutes = cal.component(.hour, from: targetTime) * 60 + cal.component(.minute, from: targetTime)
+        let targetMinutes = (rawTargetMinutes / 5) * 5
+        let delta = targetMinutes - timeToMinutes(earliest.startTime)
+
+        for task in selectedTasks {
+            let originalStart = timeToMinutes(task.startTime)
+            let originalEnd = timeToMinutes(task.endTime)
+            let duration = originalEnd > originalStart ? originalEnd - originalStart : (24 * 60 - originalStart) + originalEnd
+
+            var newStart = (originalStart + delta) % (24 * 60)
+            if newStart < 0 { newStart += 24 * 60 }
+            let newEnd = (newStart + duration) % (24 * 60)
+
+            let before = ImpulseRules.Snapshot(task)
+            task.startTime = String(format: "%d:%02d", newStart / 60, newStart % 60)
+            task.endTime = String(format: "%d:%02d", newEnd / 60, newEnd % 60)
+            ImpulseRules.reconcile(task, before: before, types: impulseTypes)
+            scheduleTaskNotifications(for: task)
+        }
+
+        try? modelContext.save()
+        updateQuery()
+    }
+
     private func scheduleTaskNotifications(for task: Task) {
         guard let taskDate = task.date else { return }
         
@@ -1753,6 +1968,10 @@ struct EditTaskView: View {
     @State private var elapsedTime: Double
     @State private var copySubtasks: Bool
     @State private var selectedGoal: Goal?
+    @Query(sort: \ImpulseType.sortOrder) private var impulseTypes: [ImpulseType]
+    @State private var impulseTypeID: UUID?
+    @State private var hasActualEnd: Bool
+    @State private var actualEnd: Date
 
     init(task: Task) {
         self.task = task
@@ -1777,6 +1996,9 @@ struct EditTaskView: View {
         _elapsedTime = State(initialValue: task.elapsedTime ?? 0.0)
         _copySubtasks = State(initialValue: task.copySubtasks)
         _selectedGoal = State(initialValue: task.goal)
+        _impulseTypeID = State(initialValue: task.impulseTypeID)
+        _hasActualEnd = State(initialValue: task.actualEndTime != nil)
+        _actualEnd = State(initialValue: task.actualEndTime.flatMap { formatter.date(from: $0) } ?? initialEnd)
     }
     
     var body: some View {
@@ -1814,9 +2036,11 @@ struct EditTaskView: View {
                             .keyboardType(.numberPad)
                             .frame(width: 80)
                             .onChange(of: durationMinutes) { _, newValue in
-                                let clamped = max(5, newValue)
-                                if clamped != newValue { durationMinutes = clamped }
-                                endTime = Calendar.current.date(byAdding: .minute, value: clamped, to: startTime) ?? startTime
+                                // Don't clamp the live value while typing — e.g. typing "30"
+                                // passes through "3" first, and clamping that up to 5 would
+                                // stomp the digit before "0" ever gets typed. The real
+                                // 5-minute floor is enforced on save instead.
+                                endTime = Calendar.current.date(byAdding: .minute, value: max(newValue, 0), to: startTime) ?? startTime
                             }
                         Spacer()
                         Text("Ends at \(endTime.formatted(date: .omitted, time: .shortened))")
@@ -1883,6 +2107,30 @@ struct EditTaskView: View {
                     .pickerStyle(.segmented)
                 }
 
+                if !impulseTypes.isEmpty {
+                    Section {
+                        Picker("Impulse type", selection: $impulseTypeID) {
+                            Text("None (regular task)").tag(UUID?.none)
+                            ForEach(impulseTypes.filter { !$0.isArchived || $0.id == impulseTypeID }) { type in
+                                Text(type.name).tag(Optional(type.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        if impulseTypeID != nil && !isUntimed {
+                            Toggle("Ran longer than planned", isOn: $hasActualEnd)
+                            if hasActualEnd {
+                                DatePicker("Actually ended", selection: $actualEnd, displayedComponents: .hourAndMinute)
+                            }
+                        }
+                    } header: {
+                        Text("Impulse")
+                    } footer: {
+                        if impulseTypeID != nil {
+                            Text("Moving this earlier or changing its type re-checks planned status from now. Minutes past the planned end count as unplanned.")
+                        }
+                    }
+                }
+
                 Section("Goal") {
                     Picker("Goal", selection: $selectedGoal) {
                         Text("No Goal").tag(Optional<Goal>.none)
@@ -1912,10 +2160,11 @@ struct EditTaskView: View {
     private func saveTask() {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
-        
+
         // Capture the old effective weight before making changes
         let oldEffectiveWeight = task.effectiveWeight
-        
+        let impulseBefore = ImpulseRules.Snapshot(task)
+
         task.title = title
         task.taskDescription = description
         let trimmedInfo = info.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1928,6 +2177,10 @@ struct EditTaskView: View {
             task.repeatAgain = repeatDays > 0 ? repeatDays : nil // Allow repeat for untimed tasks
             task.elapsedTime = elapsedTime > 0 ? elapsedTime : nil // Set elapsed time for untimed tasks
         } else {
+            // Enforce the 5-minute floor here (on save) rather than while the
+            // user is still typing the duration — see the field's onChange for why.
+            durationMinutes = max(durationMinutes, 5)
+            endTime = Calendar.current.date(byAdding: .minute, value: durationMinutes, to: startTime) ?? startTime
             task.startTime = formatter.string(from: startTime)
             task.endTime = formatter.string(from: endTime)
             task.date = taskDate
@@ -1942,6 +2195,17 @@ struct EditTaskView: View {
         task.priority = priority
         task.copySubtasks = copySubtasks
         task.goal = selectedGoal
+
+        task.impulseTypeID = impulseTypeID
+        if impulseTypeID != nil && !isUntimed && hasActualEnd {
+            let actual = formatter.string(from: actualEnd)
+            let start = ImpulseRules.minutes(from: task.startTime) ?? 0
+            let overrun = ImpulseRules.span(from: start, to: ImpulseRules.minutes(from: actual) ?? start)
+            task.actualEndTime = overrun > ImpulseRules.scheduledMinutes(of: task) ? actual : nil
+        } else {
+            task.actualEndTime = nil
+        }
+        ImpulseRules.reconcile(task, before: impulseBefore, types: impulseTypes)
 
         try? modelContext.save()
         
@@ -2384,6 +2648,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
 
@@ -2453,6 +2718,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
+        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
         modelContext.insert(newTask)
 
