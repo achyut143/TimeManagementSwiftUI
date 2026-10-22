@@ -6721,6 +6721,9 @@ struct FocusModeView: View {
     // can't express "is today" against a stored Date cheaply; filtering
     // happens in `activeCalendarTask` below instead.
     @Query private var allTasksForCalendarWidget: [Task]
+    // Same goal filter as TasksCalendarView — the timer only follows tasks
+    // currently visible there.
+    @AppStorage(TaskGoalFilter.storageKey) private var goalFilterRaw: String = ""
     @AppStorage("display.quotesInterval") private var intervalSeconds: Int = 10
     @AppStorage("display.quotesVisible") private var quotesVisible: Bool = true
     // Multiple widgets can be enabled at once (stacked, scrollable) — same keys as the
@@ -7229,7 +7232,8 @@ struct FocusModeView: View {
     private var activeCalendarTask: Task? {
         allTasksForCalendarWidget.first { task in
             guard let date = task.date, Calendar.current.isDate(date, inSameDayAs: selectedDate),
-                  !task.startTime.isEmpty, !task.endTime.isEmpty else { return false }
+                  !task.startTime.isEmpty, !task.endTime.isEmpty,
+                  TaskGoalFilter.matches(task, raw: goalFilterRaw) else { return false }
             let start = beginStopDate(forMinutes: taskTimeToMinutes(task.startTime))
             let end = beginStopDate(forMinutes: taskTimeToMinutes(task.endTime))
             return currentTime >= start && currentTime < end
@@ -7240,7 +7244,8 @@ struct FocusModeView: View {
         allTasksForCalendarWidget
             .filter { task in
                 guard let date = task.date, Calendar.current.isDate(date, inSameDayAs: selectedDate),
-                      !task.startTime.isEmpty else { return false }
+                      !task.startTime.isEmpty,
+                      TaskGoalFilter.matches(task, raw: goalFilterRaw) else { return false }
                 return beginStopDate(forMinutes: taskTimeToMinutes(task.startTime)) > currentTime
             }
             .min { taskTimeToMinutes($0.startTime) < taskTimeToMinutes($1.startTime) }

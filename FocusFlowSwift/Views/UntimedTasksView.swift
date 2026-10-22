@@ -28,6 +28,7 @@ struct UntimedTasksView: View {
     @State private var showMarkAllNotCompletedConfirmation = false
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
+    @AppStorage(TaskGoalFilter.storageKey) private var goalFilterRaw: String = ""
     
     var body: some View {
         VStack(spacing: 0) {
@@ -48,7 +49,13 @@ struct UntimedTasksView: View {
                     .onChange(of: selectedDate) { _, _ in
                         updateQuery()
                     }
-                
+
+                TaskGoalFilterMenu()
+                    .buttonStyle(.bordered)
+                    .onChange(of: goalFilterRaw) { _, _ in
+                        updateQuery()
+                    }
+
                 Spacer()
             }
             .padding()
@@ -442,7 +449,8 @@ struct UntimedTasksView: View {
             tasks = allTasks.filter { task in
                 // Filter for tasks with empty start/end times (untimed) and matching date
                 guard let taskDate = task.date else { return false }
-                return task.startTime.isEmpty && task.endTime.isEmpty && 
+                guard TaskGoalFilter.matches(task, raw: goalFilterRaw) else { return false }
+                return task.startTime.isEmpty && task.endTime.isEmpty &&
                        Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
             }
             

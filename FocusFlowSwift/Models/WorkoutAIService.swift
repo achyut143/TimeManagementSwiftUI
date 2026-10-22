@@ -303,7 +303,7 @@ struct WorkoutAIService {
         - Multi-part Tabata: ONLY when the text explicitly says timed sections belong to one workout (it says "one Tabata" or "N parts", or lists "Part …:" lines under one title), return ONE tabata workout with "parts", one per section, in order, each with its own "name", timing and cycle names. Separately titled Tabatas are separate workouts, even if their titles share words (e.g. "X warm up" and "X circuit 1" are two workouts); never merge them yourself.
         - Tabata cycle names: copy each exercise exactly as written, including details in brackets, e.g. "Squat kick (right, then left, then alternating)".
         - Reps: group exercises into sets as described; "repeats" is how many times a set is done (e.g. "3 sets of" or "× 3"). "reps" is a whole number (use the first number of a range, e.g. 8-12 → 8). "weight" is a number in \(weightUnit); convert from the other unit if needed. Put tempo, cues or rep ranges in "note".
-        - Timed exercises (e.g. "plank 30 seconds"): set "reps" to the number of seconds and "note" to "30 seconds".
+        - Timed exercises (e.g. "plank 30 seconds"): set "seconds" to the number of seconds and leave out "reps", e.g. { "name": "Plank", "seconds": 30 }.
         - Extra details such as "each side", "(force set)" or "slow tempo" go in "note".
         - Keep the output compact: leave out "weight" and "note" when not given, and leave out the section that doesn't match "kind".
         - Never skip or summarize: include every workout and every set in the text, even if there are many.
@@ -398,6 +398,7 @@ struct WorkoutAIService {
         struct Exercise: Decodable {
             var name: String?
             var reps: Num?
+            var seconds: Num?
             var weight: Num?
             var note: String?
         }
@@ -446,8 +447,13 @@ struct WorkoutAIService {
                 let exercises = (set.exercises ?? []).compactMap { e -> RepExercise? in
                     let n = (e.name ?? "").trimmingCharacters(in: .whitespaces)
                     guard !n.isEmpty else { return nil }
-                    return RepExercise(name: n, reps: max(0, e.reps?.int ?? 10),
-                                       weight: (e.weight?.value ?? 0) > 0 ? e.weight?.value : nil, note: e.note ?? "")
+                    var exercise = RepExercise(name: n, reps: max(0, e.reps?.int ?? 10),
+                                               weight: (e.weight?.value ?? 0) > 0 ? e.weight?.value : nil, note: e.note ?? "")
+                    if let seconds = e.seconds?.int, seconds > 0 {
+                        exercise.seconds = seconds
+                        exercise.reps = seconds
+                    }
+                    return exercise
                 }
                 return exercises.isEmpty ? nil : RepSet(repeats: min(20, max(1, set.repeats?.int ?? 1)), exercises: exercises)
             }

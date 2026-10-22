@@ -51,14 +51,31 @@ struct EventDayConfigureView: View {
         }
         .buttonStyle(.bordered)
         .sheet(isPresented: $showingEventConfig) {
-            EventDayConfigSheet(
-                selectedDate: selectedDate,
-                eventDay: currentEventDay,
-                onSave: saveEventDay
-            )
+            EventDayEditorSheet(selectedDate: selectedDate)
         }
     }
     
+}
+
+/// Event-day editor for a date, usable from anywhere (e.g. a menu item):
+/// finds the existing EventDay for that date and saves edits back.
+struct EventDayEditorSheet: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query private var eventDays: [EventDay]
+    let selectedDate: Date
+
+    private var eventDayForSelectedDate: EventDay? {
+        eventDays.first { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) }
+    }
+
+    var body: some View {
+        EventDayConfigSheet(
+            selectedDate: selectedDate,
+            eventDay: eventDayForSelectedDate,
+            onSave: saveEventDay
+        )
+    }
+
     private func saveEventDay(_ eventDay: EventDay) {
         print("🔍 Saving EventDay:")
         print("   - Date: \(eventDay.date)")

@@ -134,7 +134,7 @@ struct FocusFlowSwiftApp: App {
             Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self,
             ProjectTimer.self, BacklogFolder.self, IfThenPlan.self,
             ImpulseType.self, ImpulseBudgetVersion.self, PeriodGoal.self, PlannerDay.self, SleepScheduleVersion.self,
-            TabataWorkout.self, RepWorkout.self, WorkoutSession.self, WorkoutPicture.self
+            TabataWorkout.self, RepWorkout.self, WorkoutSession.self, WorkoutPicture.self, WorkoutPlanEntry.self
         ]
         // Scheduled activities, alerts, the old Plan view and Start with a Why
         // were removed — their tables are dropped by SwiftData's automatic

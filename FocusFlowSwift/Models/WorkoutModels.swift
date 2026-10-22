@@ -245,6 +245,32 @@ struct RepExercise: Codable, Identifiable, Equatable, Hashable {
     var note = ""
     /// Optional WorkoutPicture shown while this exercise runs.
     var imageID: UUID? = nil
+    /// Set for a timed exercise (e.g. a 30-second plank); `reps` is ignored then.
+    var seconds: Int? = nil
+
+    /// Seconds for a timed exercise. Also recognises older AI-made exercises
+    /// saved as reps = 30 with a note starting "30 seconds".
+    var timedSeconds: Int? {
+        if let seconds, seconds > 0 { return seconds }
+        let lowered = note.lowercased().trimmingCharacters(in: .whitespaces)
+        let digits = lowered.prefix { $0.isNumber }
+        guard let n = Int(digits), n == reps else { return nil }
+        let rest = lowered.dropFirst(digits.count).trimmingCharacters(in: .whitespaces)
+        return ["s", "sec", "secs", "second", "seconds"].contains(where: { rest == $0 || rest.hasPrefix($0 + " ") || rest.hasPrefix($0 + ",") }) ? n : nil
+    }
+
+    /// "15 reps" or "30 sec".
+    var amountText: String { timedSeconds.map { "\($0) sec" } ?? "\(reps) reps" }
+
+    /// Note without the "30 seconds" part that older timed exercises carried.
+    var displayNote: String {
+        guard seconds == nil, let t = timedSeconds else { return note }
+        var rest = String(note.trimmingCharacters(in: .whitespaces).dropFirst(String(t).count))
+        for word in ["seconds", "second", "secs", "sec", "s"] where rest.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix(word) {
+            rest = String(rest.trimmingCharacters(in: .whitespaces).dropFirst(word.count)); break
+        }
+        return rest.trimmingCharacters(in: CharacterSet(charactersIn: " ,;-–"))
+    }
 }
 
 struct RepSet: Codable, Identifiable, Equatable, Hashable {
@@ -282,6 +308,7 @@ final class RepWorkout {
 
 /// One exercise occurrence while running a rep workout.
 struct RepStep: Equatable {
+    let setID: UUID
     let setIndex: Int
     let round: Int
     let rounds: Int
@@ -294,13 +321,17 @@ struct RepStep: Equatable {
         return "\(setText) · Exercise \(exerciseIndex + 1) of \(exerciseCount)"
     }
 
+    /// Identifies this exercise occurrence across edits (reorders, added or
+    /// removed exercises), so a paused or edited run keeps its progress.
+    var key: String { "\(setID.uuidString)|\(round)|\(exercise.id.uuidString)" }
+
     static func steps(for sets: [RepSet]) -> [RepStep] {
         var list: [RepStep] = []
         for (si, set) in sets.enumerated() where !set.exercises.isEmpty {
             let rounds = max(1, set.repeats)
             for round in 1...rounds {
                 for (ei, ex) in set.exercises.enumerated() {
-                    list.append(RepStep(setIndex: si, round: round, rounds: rounds, exerciseIndex: ei, exerciseCount: set.exercises.count, exercise: ex))
+                    list.append(RepStep(setID: set.id, setIndex: si, round: round, rounds: rounds, exerciseIndex: ei, exerciseCount: set.exercises.count, exercise: ex))
                 }
             }
         }
@@ -318,6 +349,25 @@ struct RepLogEntry: Codable, Identifiable, Equatable {
     var plannedWeight: Double?
     var actualReps: Int
     var actualWeight: Double?
+    /// True when reps are seconds (a timed exercise).
+    var timed: Bool? = nil
+
+    var isTimed: Bool { timed == true }
+
+    /// "12 × 135 lb", "12 reps" or "30 sec".
+    func actualText(unit: String) -> String {
+        Self.text(actualReps, actualWeight, timed: isTimed, unit: unit)
+    }
+
+    func plannedText(unit: String) -> String {
+        Self.text(plannedReps, plannedWeight, timed: isTimed, unit: unit)
+    }
+
+    static func text(_ amount: Int, _ weight: Double?, timed: Bool, unit: String) -> String {
+        let count = timed ? "\(amount) sec" : "\(amount) reps"
+        if let w = WorkoutFormat.weight(weight, unit: unit) { return timed ? "\(count) × \(w)" : "\(amount) × \(w)" }
+        return count
+    }
 }
 
 // MARK: - History
@@ -332,6 +382,14 @@ final class WorkoutSession {
     var endedAt: Date = Date()
     var completed: Bool = false
     var logData: Data = Data()
+    /// Exercises that set a personal record in this session, one per line.
+    /// Plain text with a default so older saved sessions upgrade cleanly.
+    var recordNamesText: String = ""
+
+    var prNames: [String] {
+        get { recordNamesText.split(separator: "\n").map(String.init) }
+        set { recordNamesText = newValue.joined(separator: "\n") }
+    }
 
     init(workoutID: UUID?, kind: WorkoutKind, name: String, startedAt: Date, endedAt: Date, completed: Bool, log: [RepLogEntry] = []) {
         self.id = UUID()
@@ -350,6 +408,28 @@ final class WorkoutSession {
         get { WorkoutJSON.decode([RepLogEntry].self, from: logData, fallback: []) }
         set { logData = WorkoutJSON.encode(newValue) }
     }
+}
+
+// MARK: - Weekly plan
+
+/// One workout planned on a weekday (1 = Sunday … 7 = Saturday, like Calendar).
+@Model
+final class WorkoutPlanEntry {
+    var id: UUID = UUID()
+    var weekday: Int = 2
+    var kindRaw: String = WorkoutKind.reps.rawValue
+    var workoutID: UUID = UUID()
+    var order: Int = 0
+
+    init(weekday: Int, kind: WorkoutKind, workoutID: UUID, order: Int) {
+        self.id = UUID()
+        self.weekday = weekday
+        self.kindRaw = kind.rawValue
+        self.workoutID = workoutID
+        self.order = order
+    }
+
+    var kind: WorkoutKind { WorkoutKind(rawValue: kindRaw) ?? .reps }
 }
 
 // MARK: - Previous performance
@@ -437,5 +517,54 @@ enum WorkoutPictureStore {
             context.delete(picture)
         }
         try? context.save()
+    }
+}
+
+// MARK: - Paused rep runs
+
+/// What was done so far in an unfinished rep workout, so it can be left and
+/// continued later. Kept in UserDefaults (one entry per workout), which
+/// leaves the database untouched.
+struct PausedRepRun: Codable {
+    struct Value: Codable, Equatable {
+        var reps: Int
+        var weight: Double?
+    }
+
+    var workoutID: UUID
+    /// Steps already done, by RepStep.key.
+    var doneKeys: [String] = []
+    /// Numbers entered so far, by RepStep.key.
+    var values: [String: Value] = [:]
+    /// The exercise on screen when last saved.
+    var currentKey: String?
+    /// Time spent working out, not counting time away.
+    var activeSeconds: Double = 0
+    var firstStarted = Date()
+    var savedAt = Date()
+
+    /// "Set 2 · exercise 3 of 4" style hint for the resume button.
+    func position(in steps: [RepStep]) -> String? {
+        let done = Set(doneKeys)
+        guard let next = steps.first(where: { !done.contains($0.key) }) else { return nil }
+        return next.position
+    }
+}
+
+enum PausedRunStore {
+    private static func key(_ id: UUID) -> String { "workout.pausedRun.\(id.uuidString)" }
+
+    static func load(_ workoutID: UUID) -> PausedRepRun? {
+        guard let data = UserDefaults.standard.data(forKey: key(workoutID)) else { return nil }
+        return try? JSONDecoder().decode(PausedRepRun.self, from: data)
+    }
+
+    static func save(_ run: PausedRepRun) {
+        guard let data = try? JSONEncoder().encode(run) else { return }
+        UserDefaults.standard.set(data, forKey: key(run.workoutID))
+    }
+
+    static func clear(_ workoutID: UUID) {
+        UserDefaults.standard.removeObject(forKey: key(workoutID))
     }
 }

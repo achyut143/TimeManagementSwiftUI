@@ -33,6 +33,8 @@ struct FocusTimerIndicatorView: View {
 
     @Query private var dailyNotesForFocusWidget: [DailyNote]
     @Query private var allTasksForFocusWidget: [Task]
+    // Only tasks visible under the calendar's goal filter count as "active".
+    @AppStorage(TaskGoalFilter.storageKey) private var goalFilterRaw: String = ""
     @State private var now = Date()
     @State private var tickTimer: Timer?
 
@@ -115,7 +117,8 @@ struct FocusTimerIndicatorView: View {
         let nowMin = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
         return allTasksForFocusWidget.first { t in
             guard !t.startTime.isEmpty, !t.endTime.isEmpty,
-                  let d = t.date, cal.isDateInToday(d) else { return false }
+                  let d = t.date, cal.isDateInToday(d),
+                  TaskGoalFilter.matches(t, raw: goalFilterRaw) else { return false }
             let s = timeToMinutes(t.startTime)
             let e = timeToMinutes(t.endTime)
             return nowMin >= s && nowMin < e

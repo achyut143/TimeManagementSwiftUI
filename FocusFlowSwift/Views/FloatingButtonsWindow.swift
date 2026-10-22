@@ -26,6 +26,12 @@ class FloatingButtonsWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hitView = super.hitTest(point, with: event)
 
+        // SwiftUI content reports the whole hosting view as the hit, so
+        // interactive overlay pieces (the stand timer) register their frames.
+        if OverlayHitRegions.shared.contains(point) {
+            return hitView ?? rootViewController?.view
+        }
+
         // Only intercept touches on the actual buttons, not the entire window
         if hitView == self || hitView == rootViewController?.view {
             return nil
@@ -43,6 +49,9 @@ struct FloatingButtonsOverlay: View {
                 .allowsHitTesting(false)
 
             ActiveTaskBannerView()
+
+            // Only visible while Settings → Stand Reminder is on.
+            StandTimerPill()
         }
     }
 }

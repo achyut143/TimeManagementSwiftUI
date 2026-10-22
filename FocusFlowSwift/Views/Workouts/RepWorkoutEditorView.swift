@@ -21,7 +21,20 @@ struct RepWorkoutEditorView: View {
         self.workout = workout
         self.onSaved = onSaved
         _name = State(initialValue: workout?.name ?? prefill?.name ?? "")
-        _sets = State(initialValue: workout?.sets ?? prefill?.sets ?? [RepSet(exercises: [RepExercise()])])
+        // Older timed exercises (reps = 30, note "30 seconds") become explicit seconds.
+        let startSets = (workout?.sets ?? prefill?.sets ?? [RepSet(exercises: [RepExercise()])]).map { set in
+            var s = set
+            s.exercises = set.exercises.map { e in
+                var e = e
+                if e.seconds == nil, let t = e.timedSeconds {
+                    e.note = e.displayNote
+                    e.seconds = t
+                }
+                return e
+            }
+            return s
+        }
+        _sets = State(initialValue: startSets)
         _restSeconds = State(initialValue: workout?.restBetweenSetsSeconds ?? prefill?.restSeconds ?? 0)
 
     }
@@ -152,11 +165,29 @@ private struct ExerciseEditorRow: View {
             }
             HStack(spacing: 12) {
                 HStack(spacing: 4) {
-                    TextField("10", value: $exercise.reps, format: .number)
-                        .keyboardType(.numberPad)
-                        .frame(width: 44)
-                        .multilineTextAlignment(.trailing)
-                    Text("reps").foregroundStyle(.secondary)
+                    if exercise.seconds != nil {
+                        TextField("30", value: secondsValue, format: .number)
+                            .keyboardType(.numberPad)
+                            .frame(width: 44)
+                            .multilineTextAlignment(.trailing)
+                    } else {
+                        TextField("10", value: $exercise.reps, format: .number)
+                            .keyboardType(.numberPad)
+                            .frame(width: 44)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    // Switch between a rep count and a timed exercise.
+                    Menu {
+                        Button("Reps", systemImage: "number") { exercise.seconds = nil }
+                        Button("Seconds (timed)", systemImage: "timer") {
+                            if exercise.seconds == nil { exercise.seconds = 30 }
+                        }
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text(exercise.seconds != nil ? "sec" : "reps")
+                            Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                        }
+                    }
                 }
                 HStack(spacing: 4) {
                     TextField("Weight", text: weightText)
@@ -176,6 +207,10 @@ private struct ExerciseEditorRow: View {
 
     private var weightText: Binding<String> {
         WeightText.binding($exercise.weight)
+    }
+
+    private var secondsValue: Binding<Int> {
+        Binding(get: { exercise.seconds ?? 30 }, set: { exercise.seconds = max(1, $0) })
     }
 }
 

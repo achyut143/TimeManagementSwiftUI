@@ -4,7 +4,7 @@ import SwiftData
 /// Pick, create and review workouts: Tabata, Reps and History tabs.
 struct WorkoutsView: View {
     enum WorkoutTab: String, CaseIterable, Identifiable {
-        case tabata = "Tabata", reps = "Reps", history = "History"
+        case tabata = "Tabata", reps = "Reps", history = "History", progress = "Progress"
         var id: String { rawValue }
     }
 
@@ -21,11 +21,23 @@ struct WorkoutsView: View {
     @State private var showSettings = false
     @State private var creatingWithAI = false
     @State private var searchText = ""
+    @State private var showWeekPlan = false
+    @State private var runTarget: WorkoutRunTarget?
 
     private var section: WorkoutTab { WorkoutTab(rawValue: sectionRaw) ?? .tabata }
 
     var body: some View {
         VStack(spacing: 0) {
+            if searchText.isEmpty {
+                WorkoutTodayCard(tabatas: tabatas, repWorkouts: repWorkouts, sessions: sessions) { target in
+                    runTarget = target
+                } onPlanWeek: {
+                    showWeekPlan = true
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            }
+
             Picker("Section", selection: $sectionRaw) {
                 ForEach(WorkoutTab.allCases) { Text($0.rawValue).tag($0.rawValue) }
             }
@@ -37,15 +49,18 @@ struct WorkoutsView: View {
             case .tabata: tabataList
             case .reps: repList
             case .history: historyList
+            case .progress: ExerciseProgressList(searchText: searchText)
             }
         }
         .navigationTitle("Workouts")
         .onAppear(perform: WorkoutsView.switchToPoundsOnce)
         .searchable(text: $searchText, prompt: searchPrompt)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItemGroup(placement: .topBarLeading) {
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
                     .accessibilityLabel("Workout settings")
+                Button { showWeekPlan = true } label: { Image(systemName: "calendar") }
+                    .accessibilityLabel("Week plan")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -60,6 +75,13 @@ struct WorkoutsView: View {
             }
         }
         .sheet(isPresented: $creatingTabata) { TabataEditorView(workout: nil) }
+        .sheet(isPresented: $showWeekPlan) { WeekPlanEditorView(tabatas: tabatas, repWorkouts: repWorkouts) }
+        .fullScreenCover(item: $runTarget) { target in
+            switch target {
+            case .tabata(let w): TabataRunView(workout: w) { _ in runTarget = nil }
+            case .reps(let w): RepRunView(workout: w) { _ in runTarget = nil }
+            }
+        }
         .sheet(isPresented: $creatingReps) { RepWorkoutEditorView(workout: nil) }
         .sheet(item: $editingTabata) { TabataEditorView(workout: $0) }
         .sheet(item: $editingReps) { RepWorkoutEditorView(workout: $0) }
@@ -108,7 +130,9 @@ struct WorkoutsView: View {
                     NavigationLink {
                         RepWorkoutDetailView(workout: workout)
                     } label: {
-                        WorkoutRow(name: workout.name, summary: workout.summary, icon: "dumbbell.fill")
+                        WorkoutRow(name: workout.name,
+                                   summary: workout.summary + (PausedRunStore.load(workout.id) != nil ? " · Paused" : ""),
+                                   icon: "dumbbell.fill")
                     }
                     .contextMenu {
                         Button("Edit", systemImage: "pencil") { editingReps = workout }
@@ -164,6 +188,7 @@ struct WorkoutsView: View {
         case .tabata: return "Search Tabatas or exercises"
         case .reps: return "Search workouts or exercises"
         case .history: return "Search history"
+        case .progress: return "Search exercises"
         }
     }
 
@@ -280,7 +305,15 @@ private struct HistoryRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.name).font(.headline)
+                HStack(spacing: 4) {
+                    Text(session.name).font(.headline)
+                    if !session.prNames.isEmpty {
+                        Image(systemName: "trophy.fill")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
+                            .accessibilityLabel("Personal record")
+                    }
+                }
                 Text(session.startedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -354,6 +387,8 @@ struct RepWorkoutDetailView: View {
     @AppStorage("workout.weightUnit") private var weightUnit = "lb"
     @State private var running = false
     @State private var editing = false
+    @State private var paused: PausedRepRun?
+    @State private var confirmStartOver = false
 
     var body: some View {
         List {
@@ -363,24 +398,27 @@ struct RepWorkoutDetailView: View {
             ForEach(Array(workout.sets.enumerated()), id: \.element.id) { i, set in
                 SwiftUI.Section(set.repeats > 1 ? "Set \(i + 1) (× \(set.repeats))" : "Set \(i + 1)") {
                     ForEach(set.exercises) { ex in
+                        NavigationLink {
+                            ExerciseProgressView(name: ex.name)
+                        } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 WorkoutPictureThumb(imageID: ex.imageID)
                                 Text(ex.name)
                                 Spacer()
-                                Text([ "\(ex.reps) reps", WorkoutFormat.weight(ex.weight, unit: weightUnit) ]
+                                Text([ ex.amountText, WorkoutFormat.weight(ex.weight, unit: weightUnit) ]
                                     .compactMap { $0 }.joined(separator: " · "))
                                     .foregroundStyle(.secondary)
                             }
-                            if !ex.note.isEmpty {
-                                Text(ex.note).font(.caption).foregroundStyle(.secondary)
+                            if !ex.displayNote.isEmpty {
+                                Text(ex.displayNote).font(.caption).foregroundStyle(.secondary)
                             }
                             if let last = lookup?.last(name: ex.name, setIndex: i, round: 1) {
-                                Text("Last time: " + [ "\(last.actualReps) reps", WorkoutFormat.weight(last.actualWeight, unit: weightUnit) ]
-                                    .compactMap { $0 }.joined(separator: " · "))
+                                Text("Last time: " + last.actualText(unit: weightUnit))
                                     .font(.caption)
                                     .foregroundStyle(.blue)
                             }
+                        }
                         }
                     }
                 }
@@ -388,15 +426,56 @@ struct RepWorkoutDetailView: View {
         }
         .navigationTitle(workout.name)
         .safeAreaInset(edge: .bottom) {
-            StartButton { running = true }
+            if let paused {
+                // A run was paused: continue it, or throw it away and start again.
+                VStack(spacing: 8) {
+                    if let position = paused.position(in: RepStep.steps(for: workout.sets)) {
+                        Text("Paused at \(position)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Start over") { confirmStartOver = true }
+                            .buttonStyle(.bordered)
+                            .frame(minHeight: 52)
+                        Button {
+                            running = true
+                        } label: {
+                            Label("Resume", systemImage: "play.fill")
+                                .font(.title3.bold())
+                                .frame(maxWidth: .infinity, minHeight: 52)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding()
+                .background(.bar)
+            } else {
+                StartButton { running = true }
+            }
         }
         .toolbar {
             Button("Edit") { editing = true }
         }
+        .confirmationDialog("Start over?", isPresented: $confirmStartOver, titleVisibility: .visible) {
+            Button("Start over", role: .destructive) {
+                PausedRunStore.clear(workout.id)
+                paused = nil
+                running = true
+            }
+        } message: {
+            Text("The paused run is discarded and nothing from it is saved to history.")
+        }
         .sheet(isPresented: $editing) { RepWorkoutEditorView(workout: workout) }
-        .onAppear { lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext) }
+        .onAppear {
+            lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext)
+            paused = PausedRunStore.load(workout.id)
+        }
         .onChange(of: running) { _, isRunning in
-            if !isRunning { lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext) }
+            if !isRunning {
+                lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext)
+                paused = PausedRunStore.load(workout.id)
+            }
         }
         .fullScreenCover(isPresented: $running) {
             RepRunView(workout: workout) { _ in running = false }
@@ -431,6 +510,19 @@ struct WorkoutSessionDetailView: View {
                 LabeledContent("Date", value: session.startedAt.formatted(date: .abbreviated, time: .shortened))
                 LabeledContent("Duration", value: WorkoutFormat.clock(session.durationSeconds))
                 LabeledContent("Result", value: session.completed ? "Completed" : "Stopped early")
+            }
+            if !session.prNames.isEmpty {
+                SwiftUI.Section {
+                    ForEach(session.prNames, id: \.self) { name in
+                        NavigationLink {
+                            ExerciseProgressView(name: name)
+                        } label: {
+                            Label(name, systemImage: "trophy.fill")
+                        }
+                    }
+                } header: {
+                    Text("Personal records")
+                }
             }
             if session.kind == .reps, !log.isEmpty {
                 SwiftUI.Section {
@@ -468,7 +560,8 @@ private struct HistoryEntryEditor: View {
                     .foregroundStyle(.secondary)
             }
             HStack {
-                Stepper("\(entry.actualReps) reps", value: $entry.actualReps, in: 0...500)
+                Stepper(entry.isTimed ? "\(entry.actualReps) sec" : "\(entry.actualReps) reps",
+                        value: $entry.actualReps, in: 0...3600)
                     .fixedSize()
                 Spacer()
                 TextField("–", text: WeightText.binding($entry.actualWeight))
@@ -484,10 +577,7 @@ private struct HistoryEntryEditor: View {
         .padding(.vertical, 2)
     }
 
-    private var planText: String {
-        if let w = WorkoutFormat.weight(entry.plannedWeight, unit: unit) { return "\(entry.plannedReps) × \(w)" }
-        return "\(entry.plannedReps) reps"
-    }
+    private var planText: String { entry.plannedText(unit: unit) }
 }
 
 // MARK: - Settings

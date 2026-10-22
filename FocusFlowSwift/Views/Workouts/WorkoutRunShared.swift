@@ -5,10 +5,11 @@ import PhotosUI
 /// Saves a finished or stopped workout to history.
 enum WorkoutRecorder {
     static func record(kind: WorkoutKind, workoutID: UUID, name: String, startedAt: Date?, completed: Bool,
-                       log: [RepLogEntry] = [], context: ModelContext) {
+                       log: [RepLogEntry] = [], prNames: [String] = [], context: ModelContext) {
         guard let startedAt else { return }
         let session = WorkoutSession(workoutID: workoutID, kind: kind, name: name, startedAt: startedAt,
                                      endedAt: Date(), completed: completed, log: log)
+        session.prNames = prNames
         context.insert(session)
         try? context.save()
     }

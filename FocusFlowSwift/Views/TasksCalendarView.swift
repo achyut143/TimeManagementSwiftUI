@@ -74,6 +74,7 @@ struct TasksCalendarView: View {
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
     @AppStorage("habitPercentageFilter") private var percentageFilter: String = "all"
     @Query(sort: \Goal.name) private var goals: [Goal]
+    @AppStorage(TaskGoalFilter.storageKey) private var goalFilterRaw: String = ""
     @Query private var allSubtasks: [Subtask]
     @State private var selectedGoalForNewTask: Goal?
     @Query(sort: \ImpulseType.sortOrder) private var impulseTypes: [ImpulseType]
@@ -82,6 +83,8 @@ struct TasksCalendarView: View {
     @State private var showPeriodGoals = false
     @State private var showPlannerMetrics = false
     @State private var showIfThenPlans = false
+    @State private var showEventDayConfig = false
+    @State private var showStandReminderSettings = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -154,8 +157,12 @@ struct TasksCalendarView: View {
                         updateQuery()
                     }
                 
-                EventDayConfigureView(selectedDate: $selectedDate)
-                
+                TaskGoalFilterMenu()
+                    .buttonStyle(.bordered)
+                    .onChange(of: goalFilterRaw) { _, _ in
+                        updateQuery()
+                    }
+
                 Spacer()
             }
             .padding()
@@ -229,6 +236,11 @@ struct TasksCalendarView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button {
+                        showEventDayConfig = true
+                    } label: {
+                        Label("Event Day", systemImage: "calendar.badge.plus")
+                    }
+                    Button {
                         showPeriodGoals = true
                     } label: {
                         Label("Goals", systemImage: "flag")
@@ -247,6 +259,11 @@ struct TasksCalendarView: View {
                         showPlannerSettings = true
                     } label: {
                         Label("Impulses & Sleep Settings", systemImage: "slider.horizontal.3")
+                    }
+                    Button {
+                        showStandReminderSettings = true
+                    } label: {
+                        Label("Stand & Stretch", systemImage: "figure.stand")
                     }
                     Divider()
                     Button {
@@ -293,6 +310,12 @@ struct TasksCalendarView: View {
         }
         .sheet(isPresented: $showIfThenPlans) {
             IfThenPlansSheet()
+        }
+        .sheet(isPresented: $showEventDayConfig) {
+            EventDayEditorSheet(selectedDate: selectedDate)
+        }
+        .sheet(isPresented: $showStandReminderSettings) {
+            NavigationStack { StandReminderSettingsView() }
         }
         .sheet(isPresented: $showBulkMoveTasks) {
             BulkMoveTasksView(selectedDate: selectedDate, tasks: tasks, isPresented: $showBulkMoveTasks) { ids, targetTime in
@@ -1192,8 +1215,9 @@ struct TasksCalendarView: View {
             allTasks = try modelContext.fetch(descriptor) // Load all tasks for metrics
             tasks = allTasks.filter { task in
                 guard let taskDate = task.date else { return false }
+                guard TaskGoalFilter.matches(task, raw: goalFilterRaw) else { return false }
                 let isDateMatch = Calendar.current.isDate(taskDate, inSameDayAs: selectedDate)
-                
+
                 if showUntimedTasks {
                     // Show untimed tasks (tasks with empty start/end times)
                     return task.startTime.isEmpty && task.endTime.isEmpty && isDateMatch
