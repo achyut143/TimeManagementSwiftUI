@@ -5,7 +5,7 @@ import SwiftData
 /// One workout opens straight in the editor; several open a review list.
 struct AIWorkoutCreateView: View {
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @AppStorage("workout.weightUnit") private var weightUnit = "lb"
 
     @State private var text = ""
     @State private var isWorking = false
@@ -113,7 +113,7 @@ struct AIWorkoutCreateView: View {
         """
         e.g. Insanity warm up 1: 10s prepare, 40s work, no rest, 3 rounds with 30s between. Jog, jumping jacks, heismans, 1-2-3, butt kicks, high knees, mummy kicks.
 
-        Upper body A. Set 1 × 3: bench press 10 reps 40 kg, bent-over row 10 reps 30 kg. Set 2 × 2: shoulder press 12 × 15 kg, bicep curl 12 × 10 kg.
+        Upper body A. Set 1 × 3: bench press 10 reps 90 lb, bent-over row 10 reps 65 lb. Set 2 × 2: shoulder press 12 × 35 lb, bicep curl 12 × 25 lb.
         """
     }
 

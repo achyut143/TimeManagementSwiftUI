@@ -4,7 +4,7 @@ import SwiftData
 /// Rep workout without a timer: tap Next when each exercise is done.
 struct RepRunView: View {
     @Environment(\.modelContext) private var modelContext
-    @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @AppStorage("workout.weightUnit") private var weightUnit = "lb"
 
     let workoutID: UUID
     let name: String

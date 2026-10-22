@@ -75,7 +75,7 @@ struct WorkoutAIService {
 
     REP WORKOUT (weight training)
     First line: the name, optionally followed by the rest between sets.
-    Then one line per set: "Set N: exercise R reps W kg, exercise R reps W kg."
+    Then one line per set: "Set N: exercise R reps W lb, exercise R reps W lb."
     - If a set is repeated with the same reps, write "Set N × 3:".
     - If the reps change from round to round (15, 12, 8), write each round as its own set.
     - Leave out the weight if it isn't known.
@@ -83,9 +83,9 @@ struct WorkoutAIService {
     - Extra details go in brackets after the exercise: "(each side)", "(slow tempo)", "(force set)".
     Example:
     Upper body A, 90s rest between sets.
-    Set 1 × 3: bench press 10 reps 40 kg, bent-over row 10 reps 30 kg.
-    Set 2: shoulder press 12 reps 15 kg, bicep curl 12 reps 10 kg (slow on the way down).
-    Set 3: shoulder press 8 reps 17.5 kg.
+    Set 1 × 3: bench press 10 reps 90 lb, bent-over row 10 reps 65 lb.
+    Set 2: shoulder press 12 reps 35 lb, bicep curl 12 reps 25 lb (slow on the way down).
+    Set 3: shoulder press 8 reps 40 lb.
 
     Now write these workouts:
     """

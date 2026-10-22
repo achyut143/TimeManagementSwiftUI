@@ -350,6 +350,38 @@ enum ImpulseRules {
         checkedAt < start && checkedAt <= start.addingTimeInterval(-planBeforeHours * 3600)
     }
 
+    /// `time`'s hour and minute on `day`.
+    static func combine(day: Date, time: Date) -> Date {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return Calendar.current.date(byAdding: .minute, value: (c.hour ?? 0) * 60 + (c.minute ?? 0), to: day.startOfDay)!
+    }
+
+    /// Why an impulse would count as unplanned if saved now, or nil if it would be planned.
+    /// Pass `existing` when editing a task; this mirrors `reconcile`: a planned impulse moved
+    /// later stays planned, an unplanned one left in place stays unplanned, anything else is checked fresh.
+    static func unplannedWarning(existing: Task? = nil, typeID: UUID?, start: Date?, types: [ImpulseType], noImpulseDay: Bool, now: Date = Date()) -> String? {
+        guard let typeID else { return nil }
+        if noImpulseDay { return "This is a no-impulse day, so any impulse on it counts as unplanned." }
+        if let existing, existing.impulseTypeID == typeID, existing.impulseCheckedAt != nil,
+           let oldStart = startDate(of: existing), let start {
+            let wasPlanned = (existing.impulsePlannedMinutes ?? 0) > 0
+            if wasPlanned && start >= oldStart { return nil }
+            if !wasPlanned && start == oldStart {
+                return "This impulse was scheduled too late to count as planned. Moving it to a new time re-checks it."
+            }
+        }
+        guard let start else { return "Untimed impulses always count as unplanned. Give it a start time." }
+        let type = types.first { $0.id == typeID }
+        let planBefore = type?.planBeforeHours ?? 0
+        if isPlanned(checkedAt: now, start: start, planBeforeHours: planBefore) { return nil }
+        if start <= now { return "This starts now or in the past, so it counts as unplanned." }
+        let earliest = now.addingTimeInterval(planBefore * 3600)
+        let when = Calendar.current.isDate(earliest, inSameDayAs: start)
+            ? earliest.formatted(date: .omitted, time: .shortened)
+            : earliest.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+        return "\(type?.name ?? "This impulse") needs planning \(PlannerRules.formatHours(planBefore * 60))h ahead, so this will count as unplanned. Start it at \(when) or later to make it planned."
+    }
+
     /// Re-applies the planned rule after a task is created or edited.
     /// - New task, new/changed impulse type, or moved earlier: checked from scratch with `now` as the created time.
     /// - Moved later or shortened: a planned task stays planned.
@@ -426,11 +458,35 @@ enum ImpulseRules {
 
     static func tasks(_ tasks: [Task], inMonthOf date: Date) -> [Task] {
         let start = monthStart(for: date)
-        let end = GoalPeriod.month.next(after: start)
-        return tasks.filter { t in
+        return self.tasks(tasks, from: start, to: GoalPeriod.month.next(after: start))
+    }
+
+    /// Impulse tasks dated in [start, end).
+    static func tasks(_ tasks: [Task], from start: Date, to end: Date) -> [Task] {
+        tasks.filter { t in
             guard t.impulseTypeID != nil, let d = t.date else { return false }
             return d >= start && d < end
         }
+    }
+
+    struct Split {
+        var planned = 0.0
+        var unplanned = 0.0
+        var plannedCount = 0
+        var unplannedCount = 0
+        var total: Double { planned + unplanned }
+    }
+
+    /// Planned vs unplanned time, ignoring skipped tasks. Impulses on a no-impulse day are all unplanned.
+    static func split(_ tasks: [Task], noImpulseDays: Set<Date>) -> Split {
+        var r = Split()
+        for t in tasks where !isSkipped(t) {
+            let noImpulse = t.date.map { noImpulseDays.contains($0.startOfDay) } ?? false
+            r.planned += plannedMinutes(of: t, noImpulseDay: noImpulse)
+            r.unplanned += unplannedMinutes(of: t, noImpulseDay: noImpulse)
+            if isPlannedLabel(t, noImpulseDay: noImpulse) { r.plannedCount += 1 } else { r.unplannedCount += 1 }
+        }
+        return r
     }
 
     static func budget(forMonthOf date: Date, tasks all: [Task], versions: [ImpulseBudgetVersion], now: Date = Date()) -> BudgetSummary {

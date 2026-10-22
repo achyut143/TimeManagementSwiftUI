@@ -704,6 +704,8 @@ struct UntimedTasksView: View {
     }
 
     private func createIncompleteTask(from task: Task) {
+        // Skipped impulses don't roll over — bringing one back should be a deliberate choice.
+        guard task.impulseTypeID == nil else { return }
         guard let currentDate = task.date else { return }
         
         let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate

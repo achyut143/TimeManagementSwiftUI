@@ -527,6 +527,16 @@ struct TasksCalendarView: View {
                         .pickerStyle(.menu)
                     }
                     .padding(.horizontal)
+
+                    if let warning = ImpulseRules.unplannedWarning(
+                        typeID: selectedImpulseTypeID,
+                        start: isUntimedTask ? nil : ImpulseRules.combine(day: selectedDate, time: startTime),
+                        types: impulseTypes,
+                        noImpulseDay: PlannerDay.fetch(for: selectedDate, context: modelContext)?.noImpulseDay ?? false
+                    ) {
+                        UnplannedImpulseWarning(text: warning)
+                            .padding(.horizontal)
+                    }
                 }
 
                 if !goals.isEmpty {
@@ -778,6 +788,7 @@ struct TasksCalendarView: View {
         .padding()
         .background(taskBackgroundColor(task))
         .cornerRadius(12)
+        .overlay(alignment: .topTrailing) { impulseStatusBadge(task).padding(4) }
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
     }
     
@@ -1072,6 +1083,7 @@ struct TasksCalendarView: View {
   .padding(isStartSlot ? 0 : 0)
   .background(taskBackgroundColor(task))
   .overlay(impulseOverlay(task))
+  .overlay(alignment: .topTrailing) { impulseStatusBadge(task) }
   .overlay(
     Rectangle()
       .stroke(isCurrentTask(task) ? Color.blue : Color.clear, lineWidth: 2)
@@ -1328,6 +1340,19 @@ struct TasksCalendarView: View {
                 Rectangle().strokeBorder(color, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
             }
             .allowsHitTesting(false)
+        }
+    }
+
+    /// Impulse blocks are colored by type, so their done / not-done state needs its own mark.
+    @ViewBuilder
+    private func impulseStatusBadge(_ task: Task) -> some View {
+        if task.impulseTypeID != nil, task.completed || task.notCompleted {
+            Image(systemName: task.completed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 13, weight: .bold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, task.completed ? Color.green : Color.red)
+                .padding(3)
+                .allowsHitTesting(false)
         }
     }
 
@@ -1751,6 +1776,8 @@ struct TasksCalendarView: View {
     }
     
     private func createIncompleteTask(from task: Task) {
+        // Skipped impulses don't roll over — bringing one back should be a deliberate choice.
+        guard task.impulseTypeID == nil else { return }
         guard let currentDate = task.date else { return }
         
         let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
@@ -1973,6 +2000,17 @@ struct EditTaskView: View {
     @State private var hasActualEnd: Bool
     @State private var actualEnd: Date
 
+    private var impulseWarning: String? {
+        guard impulseTypeID != nil else { return nil }
+        return ImpulseRules.unplannedWarning(
+            existing: task,
+            typeID: impulseTypeID,
+            start: isUntimed ? nil : taskDate.map { ImpulseRules.combine(day: $0, time: startTime) },
+            types: impulseTypes,
+            noImpulseDay: taskDate.flatMap { PlannerDay.fetch(for: $0, context: modelContext)?.noImpulseDay } ?? false
+        )
+    }
+
     init(task: Task) {
         self.task = task
         _title = State(initialValue: task.title)
@@ -2116,6 +2154,9 @@ struct EditTaskView: View {
                             }
                         }
                         .pickerStyle(.menu)
+                        if let warning = impulseWarning {
+                            UnplannedImpulseWarning(text: warning)
+                        }
                         if impulseTypeID != nil && !isUntimed {
                             Toggle("Ran longer than planned", isOn: $hasActualEnd)
                             if hasActualEnd {
@@ -2682,6 +2723,8 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
     }
 
         private func createIncompleteTask(from task: Task) {
+        // Skipped impulses don't roll over — bringing one back should be a deliberate choice.
+        guard task.impulseTypeID == nil else { return }
         guard let currentDate = task.date else { return }
         
         let nextDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
@@ -2822,4 +2865,16 @@ func roundToNearestFiveMinutes(_ date: Date) -> Date {
     newComponents.second = 0
     
     return calendar.date(from: newComponents) ?? date
+}
+
+/// Shown while picking an impulse's time when it would count as unplanned.
+struct UnplannedImpulseWarning: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }

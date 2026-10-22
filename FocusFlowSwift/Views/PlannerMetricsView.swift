@@ -31,15 +31,8 @@ struct PlannerMetricsView: View {
 
     private var noImpulseDays: Set<Date> { Set(days.filter(\.noImpulseDay).map(\.date)) }
 
-    private func split(_ tasks: [Task]) -> (planned: Double, unplanned: Double, plannedCount: Int, unplannedCount: Int) {
-        var r = (planned: 0.0, unplanned: 0.0, plannedCount: 0, unplannedCount: 0)
-        for t in tasks where !ImpulseRules.isSkipped(t) {
-            let noImpulse = t.date.map { noImpulseDays.contains($0.startOfDay) } ?? false
-            r.planned += ImpulseRules.plannedMinutes(of: t, noImpulseDay: noImpulse)
-            r.unplanned += ImpulseRules.unplannedMinutes(of: t, noImpulseDay: noImpulse)
-            if ImpulseRules.isPlannedLabel(t, noImpulseDay: noImpulse) { r.plannedCount += 1 } else { r.unplannedCount += 1 }
-        }
-        return r
+    private func split(_ tasks: [Task]) -> ImpulseRules.Split {
+        ImpulseRules.split(tasks, noImpulseDays: noImpulseDays)
     }
 
     private func percent(_ part: Double, of whole: Double) -> String {
@@ -85,7 +78,11 @@ struct PlannerMetricsView: View {
                                "\(PlannerRules.formatMinutes(s.planned)) / \(PlannerRules.formatMinutes(s.unplanned)) · \(percent(s.planned, of: s.planned + s.unplanned))")
                     }
                 }
-                trendChart
+                NavigationLink {
+                    ImpulseTrendView(anchor: min(today, cal.date(byAdding: .day, value: -1, to: monthEnd)!))
+                } label: {
+                    trendChart
+                }
             }
 
             budgetSection(monthTasks: monthTasks)
@@ -174,7 +171,12 @@ struct PlannerMetricsView: View {
                     TrendPoint(month: m, kind: "Unplanned", hours: s.unplanned / 60)]
         }
         return VStack(alignment: .leading, spacing: 4) {
-            Text("Last 6 months (hours)").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text("Last 6 months (hours)")
+                Spacer()
+                Text("Weekly · monthly · quarterly")
+            }
+            .font(.caption).foregroundStyle(.secondary)
             Chart(points) { p in
                 BarMark(x: .value("Month", p.month, unit: .month), y: .value("Hours", p.hours))
                     .foregroundStyle(by: .value("Kind", p.kind))

@@ -305,6 +305,15 @@ struct DayPlanDetailView: View {
             }
             TextField("Title (optional)", text: item.title)
             DatePicker("Start", selection: item.start, displayedComponents: .hourAndMinute)
+            if let warning = ImpulseRules.unplannedWarning(
+                existing: item.wrappedValue.existing,
+                typeID: item.wrappedValue.typeID,
+                start: ImpulseRules.combine(day: date, time: item.wrappedValue.start),
+                types: types,
+                noImpulseDay: draft.noImpulseDay
+            ) {
+                UnplannedImpulseWarning(text: warning)
+            }
             Stepper("Duration \(item.wrappedValue.duration) min", value: item.duration, in: 5...600, step: 5)
             Toggle("Ran longer", isOn: item.hasActualEnd)
             if item.wrappedValue.hasActualEnd {

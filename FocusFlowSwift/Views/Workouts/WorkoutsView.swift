@@ -40,6 +40,7 @@ struct WorkoutsView: View {
             }
         }
         .navigationTitle("Workouts")
+        .onAppear(perform: WorkoutsView.switchToPoundsOnce)
         .searchable(text: $searchText, prompt: searchPrompt)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -145,6 +146,15 @@ struct WorkoutsView: View {
                 }
             }
         }
+    }
+
+    /// Pounds became the default unit; moves anyone still on the old
+    /// kg default over once. Picking kg in settings afterwards still sticks.
+    static func switchToPoundsOnce() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "workout.unitSwitchedToLb") else { return }
+        defaults.set(true, forKey: "workout.unitSwitchedToLb")
+        defaults.set("lb", forKey: "workout.weightUnit")
     }
 
     // MARK: Search
@@ -341,7 +351,7 @@ struct RepWorkoutDetailView: View {
     @Bindable var workout: RepWorkout
     @Environment(\.modelContext) private var modelContext
     @State private var lookup: RepHistoryLookup?
-    @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @AppStorage("workout.weightUnit") private var weightUnit = "lb"
     @State private var running = false
     @State private var editing = false
 
@@ -412,7 +422,7 @@ private struct StartButton: View {
 struct WorkoutSessionDetailView: View {
     @Environment(\.modelContext) private var modelContext
     let session: WorkoutSession
-    @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @AppStorage("workout.weightUnit") private var weightUnit = "lb"
     @State private var log: [RepLogEntry] = []
 
     var body: some View {
@@ -486,7 +496,7 @@ struct WorkoutSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("workout.voiceOn") private var voiceOn = true
     @AppStorage("workout.beepsOn") private var beepsOn = true
-    @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @AppStorage("workout.weightUnit") private var weightUnit = "lb"
 
     var body: some View {
         NavigationStack {
@@ -494,8 +504,8 @@ struct WorkoutSettingsView: View {
                 Toggle("Voice cues", isOn: $voiceOn)
                 Toggle("3-2-1 beeps", isOn: $beepsOn)
                 Picker("Weight unit", selection: $weightUnit) {
-                    Text("kg").tag("kg")
                     Text("lb").tag("lb")
+                    Text("kg").tag("kg")
                 }
             }
             .navigationTitle("Workout settings")

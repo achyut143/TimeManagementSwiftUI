@@ -21,14 +21,23 @@ struct BulkMoveTasksView: View {
     @State private var selectedIDs: Set<UUID> = []
     @State private var targetTime: Date = roundToNearestFiveMinutes(Date())
 
+    private func isTimed(_ task: Task) -> Bool {
+        !task.startTime.isEmpty && !task.endTime.isEmpty
+    }
+
+    /// Timed tasks still to do; completed ones are done and don't need moving.
     private var sortedTimedTasks: [Task] {
         tasks
-            .filter { !$0.startTime.isEmpty && !$0.endTime.isEmpty }
+            .filter { isTimed($0) && !$0.completed }
             .sorted { timeToMinutes($0.startTime) < timeToMinutes($1.startTime) }
     }
 
     private var untimedCount: Int {
-        tasks.count - sortedTimedTasks.count
+        tasks.filter { !isTimed($0) && !$0.completed }.count
+    }
+
+    private var completedTimedCount: Int {
+        tasks.filter { isTimed($0) && $0.completed }.count
     }
 
     var body: some View {
@@ -48,7 +57,9 @@ struct BulkMoveTasksView: View {
 
                 Section {
                     if sortedTimedTasks.isEmpty {
-                        Text("No timed tasks on \(selectedDate.formatted(date: .abbreviated, time: .omitted)).")
+                        Text(completedTimedCount > 0
+                             ? "No unfinished timed tasks on \(selectedDate.formatted(date: .abbreviated, time: .omitted))."
+                             : "No timed tasks on \(selectedDate.formatted(date: .abbreviated, time: .omitted)).")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(sortedTimedTasks) { task in
@@ -72,8 +83,12 @@ struct BulkMoveTasksView: View {
                         }
                     }
                 } footer: {
-                    if untimedCount > 0 {
-                        Text("\(untimedCount) untimed task\(untimedCount == 1 ? "" : "s") not shown — untimed tasks have no start time to shift.")
+                    let notes = [
+                        completedTimedCount > 0 ? "\(completedTimedCount) completed task\(completedTimedCount == 1 ? "" : "s") hidden." : nil,
+                        untimedCount > 0 ? "\(untimedCount) untimed task\(untimedCount == 1 ? "" : "s") not shown — untimed tasks have no start time to shift." : nil
+                    ].compactMap { $0 }
+                    if !notes.isEmpty {
+                        Text(notes.joined(separator: " "))
                     }
                 }
             }

@@ -5,7 +5,7 @@ import SwiftData
 struct RepWorkoutEditorView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("workout.weightUnit") private var weightUnit = "kg"
+    @AppStorage("workout.weightUnit") private var weightUnit = "lb"
 
     let workout: RepWorkout?
     /// Called after a successful save.

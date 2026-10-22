@@ -89,7 +89,7 @@ Include:
 | --- | --- |
 | Name | Upper body A |
 | Sets and repeats | Set 1 × 3 |
-| Exercise, reps, weight | bench press 10 reps 40 kg |
+| Exercise, reps, weight | bench press 10 reps 90 lb |
 | Rest between sets (optional) | 90s rest between sets |
 | Notes (optional) | slow on the way down |
 
@@ -103,8 +103,8 @@ Core finisher: 20s work, 10s rest, 8 rounds, no prepare.
 Plank, mountain climbers.
 
 Upper body A, 90s rest between sets.
-Set 1 × 3: bench press 10 reps 40 kg, bent-over row 10 reps 30 kg.
-Set 2 × 2: shoulder press 12 reps 15 kg, bicep curl 12 reps 10 kg (slow on the way down).
+Set 1 × 3: bench press 10 reps 90 lb, bent-over row 10 reps 65 lb.
+Set 2 × 2: shoulder press 12 reps 35 lb, bicep curl 12 reps 25 lb (slow on the way down).
 ```
 
 This creates two Tabatas and one rep workout.
@@ -114,7 +114,7 @@ This creates two Tabatas and one rep workout.
 - **Times** can be written as `40s`, `0:40`, or `40 seconds`. `1:30` means 90 seconds.
 - **Unclear times:** if the text contradicts itself, e.g. "0:30 sec (40 seconds)", the number in brackets or in words is used.
 - **Rep ranges** like "8–12 reps" are saved as 8, with the full range kept in the exercise note.
-- **Weights** without a unit use your unit setting (gear icon → Weight unit). Weights in the other unit are converted.
+- **Weights** without a unit are in pounds (lb), the default. You can switch to kg under the gear icon → Weight unit; weights written in the other unit are converted.
 - **Messy text is fine.** You can copy a workout straight from a website, a video description, or a note.
 - **Pictures** can't be added by AI. Add them in the editor afterwards by tapping the photo box on a cycle or exercise.
 - **Always check before saving**, especially cycle counts and weights.
