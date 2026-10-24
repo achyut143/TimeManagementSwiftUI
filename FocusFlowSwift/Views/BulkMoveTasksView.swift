@@ -13,6 +13,7 @@ import SwiftUI
 /// `onMove`, so TasksCalendarView stays the single place that knows how to
 /// reschedule a task.
 struct BulkMoveTasksView: View {
+    @Environment(\.modelContext) private var modelContext
     let selectedDate: Date
     let tasks: [Task]
     @Binding var isPresented: Bool
@@ -51,7 +52,10 @@ struct BulkMoveTasksView: View {
                         }
                 } footer: {
                     if !selectedIDs.isEmpty, let earliest = earliestSelectedTask {
-                        Text("\(earliest.title) moves to \(targetTime.formatted(date: .omitted, time: .shortened)); everything else you've selected shifts by the same amount, keeping its spacing from \"\(earliest.title)\".")
+                        let names = followers.map(\.title)
+                        Text("\(earliest.title) moves to \(targetTime.formatted(date: .omitted, time: .shortened)); everything else you've selected shifts by the same amount, keeping its spacing from \"\(earliest.title)\"."
+                             + (names.isEmpty ? "" : "\n\nAlso moves \(names.count) task\(names.count == 1 ? "" : "s") starting within \(TaskMover.followWindowMinutes) min after a moved task: \(names.joined(separator: ", ")).")
+                             + " Repeat tasks get their next day created at the original time first.")
                     }
                 }
 
@@ -109,12 +113,20 @@ struct BulkMoveTasksView: View {
         }
     }
 
+    /// Tasks that will move along because they follow a selected task
+    /// closely (same rule as Snooze).
+    private var followers: [Task] {
+        let selected = tasks.filter { selectedIDs.contains($0.id) && isTimed($0) }
+        return TaskMover.followers(of: selected, context: modelContext)
+    }
+
     private var earliestSelectedTask: Task? {
         sortedTimedTasks.first { selectedIDs.contains($0.id) }
     }
 
     private func taskRow(_ task: Task) -> some View {
         let isSelected = selectedIDs.contains(task.id)
+        let movesAlong = !isSelected && followers.contains { $0.id == task.id }
         return Button {
             if isSelected {
                 selectedIDs.remove(task.id)
@@ -138,6 +150,15 @@ struct BulkMoveTasksView: View {
                 }
 
                 Spacer()
+
+                if movesAlong {
+                    Text("moves along")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                }
             }
             .contentShape(Rectangle())
         }

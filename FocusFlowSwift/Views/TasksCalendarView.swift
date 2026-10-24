@@ -84,7 +84,7 @@ struct TasksCalendarView: View {
     @State private var showPlannerMetrics = false
     @State private var showIfThenPlans = false
     @State private var showEventDayConfig = false
-    @State private var showStandReminderSettings = false
+    @State private var showRoutineSettings = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -261,9 +261,9 @@ struct TasksCalendarView: View {
                         Label("Impulses & Sleep Settings", systemImage: "slider.horizontal.3")
                     }
                     Button {
-                        showStandReminderSettings = true
+                        showRoutineSettings = true
                     } label: {
-                        Label("Stand & Stretch", systemImage: "figure.stand")
+                        Label("Routine Reminder", systemImage: "figure.stand")
                     }
                     Divider()
                     Button {
@@ -314,8 +314,8 @@ struct TasksCalendarView: View {
         .sheet(isPresented: $showEventDayConfig) {
             EventDayEditorSheet(selectedDate: selectedDate)
         }
-        .sheet(isPresented: $showStandReminderSettings) {
-            NavigationStack { StandReminderSettingsView() }
+        .sheet(isPresented: $showRoutineSettings) {
+            NavigationStack { RoutineReminderSettingsView() }
         }
         .sheet(isPresented: $showBulkMoveTasks) {
             BulkMoveTasksView(selectedDate: selectedDate, tasks: tasks, isPresented: $showBulkMoveTasks) { ids, targetTime in
@@ -331,6 +331,15 @@ struct TasksCalendarView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskUpdated"))) { _ in
             updateQuery()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TasksSnoozed"))) { note in
+            // Move start/end alerts to the snoozed times.
+            guard let ids = note.object as? [UUID] else { return }
+            let idSet = Set(ids)
+            let all = (try? modelContext.fetch(FetchDescriptor<Task>())) ?? []
+            for task in all where idSet.contains(task.id) {
+                scheduleTaskNotifications(for: task)
+            }
         }
         .sheet(isPresented: $showEditDialog) {
             if let task = editingTask {
@@ -1478,7 +1487,11 @@ struct TasksCalendarView: View {
         if task.completed {
             speakText("Task completed: \(task.title)")
             NotificationManager.shared.scheduleTaskCompletedNotification(task: task)
-            createRepeatTask(from: task)
+            // Red repeat icon = next occurrence already handled (same rule
+            // as the task actions sheet).
+            if !task.reassign {
+                createRepeatTask(from: task)
+            }
         }
         try? modelContext.save()
     }
@@ -1488,7 +1501,9 @@ struct TasksCalendarView: View {
         if task.notCompleted {
             speakText("Task marked as not completed: \(task.title)")
             NotificationManager.shared.scheduleTaskNotCompletedNotification(task: task)
-            createRepeatTask(from: task)
+            if !task.reassign {
+                createRepeatTask(from: task)
+            }
         }
         try? modelContext.save()
     }
@@ -1733,51 +1748,7 @@ struct TasksCalendarView: View {
     }
     
     private func createRepeatTask(from task: Task) {
-        guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
-        
-        let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
-        
-        // Check if task already exists
-        let descriptor = FetchDescriptor<Task>()
-        do {
-            let existingTasks = try modelContext.fetch(descriptor)
-            let taskExists = existingTasks.contains { existingTask in
-                guard let existingDate = existingTask.date else { return false }
-                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
-                       existingTask.startTime == task.startTime &&
-                       existingTask.endTime == task.endTime &&
-                       existingTask.title == task.title
-            }
-            if taskExists { return }
-        } catch { return }
-        
-        let newTask = Task(
-            title: task.title,
-            taskDescription: task.taskDescription,
-            startTime: task.startTime,
-            endTime: task.endTime,
-            weight: task.weight,
-            date: nextDate,
-            repeatAgain: task.repeatAgain,
-            priority: task.priority,
-            elapsedTime: task.elapsedTime,
-            copySubtasks: task.copySubtasks,
-            virtues: task.virtues
-            // timeSpent is intentionally not copied for repeat tasks
-        )
-        newTask.goal = task.goal
-        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
-
-        modelContext.insert(newTask)
-
-        // Copy subtasks if the toggle is enabled
-        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
-            for subtask in subtasks {
-                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
-            }
-        }
-
-        try? modelContext.save()
+        TaskRepeater.createNextInstance(from: task, context: modelContext)
     }
 
     private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
@@ -1919,24 +1890,16 @@ struct TasksCalendarView: View {
         let rawTargetMinutes = cal.component(.hour, from: targetTime) * 60 + cal.component(.minute, from: targetTime)
         let targetMinutes = (rawTargetMinutes / 5) * 5
         let delta = targetMinutes - timeToMinutes(earliest.startTime)
+        guard delta != 0 else { return }
 
-        for task in selectedTasks {
-            let originalStart = timeToMinutes(task.startTime)
-            let originalEnd = timeToMinutes(task.endTime)
-            let duration = originalEnd > originalStart ? originalEnd - originalStart : (24 * 60 - originalStart) + originalEnd
-
-            var newStart = (originalStart + delta) % (24 * 60)
-            if newStart < 0 { newStart += 24 * 60 }
-            let newEnd = (newStart + duration) % (24 * 60)
-
-            let before = ImpulseRules.Snapshot(task)
-            task.startTime = String(format: "%d:%02d", newStart / 60, newStart % 60)
-            task.endTime = String(format: "%d:%02d", newEnd / 60, newEnd % 60)
-            ImpulseRules.reconcile(task, before: before, types: impulseTypes)
+        // Same rules as Snooze: tasks starting within 10 min after a moved
+        // task move too (and so on), and repeat tasks get their next
+        // occurrence created at the original time first, then turn red.
+        let moved = TaskMover.move(selectedTasks, by: delta, context: modelContext, impulseTypes: impulseTypes)
+        for task in moved {
             scheduleTaskNotifications(for: task)
         }
 
-        try? modelContext.save()
         updateQuery()
     }
 
@@ -2023,6 +1986,9 @@ struct EditTaskView: View {
     @State private var impulseTypeID: UUID?
     @State private var hasActualEnd: Bool
     @State private var actualEnd: Date
+    @State private var snoozeBy: Int?
+    @State private var customSnooze = 20
+    @State private var showCustomSnooze = false
 
     private var impulseWarning: String? {
         guard impulseTypeID != nil else { return nil }
@@ -2111,6 +2077,10 @@ struct EditTaskView: View {
                     }
                 }
                 
+                if !isUntimed && !task.startTime.isEmpty && task.date != nil {
+                    snoozeSection
+                }
+
                 if isUntimed {
                     HStack {
                         Text("Elapsed Time (minutes)")
@@ -2222,6 +2192,92 @@ struct EditTaskView: View {
         }
     }
     
+    // MARK: Snooze
+
+    private var snoozeSection: some View {
+        let moving = TaskMover.tasksToMove(for: task, context: modelContext)
+        let others = moving.filter { $0.id != task.id }
+        let repeats = moving.filter { $0.repeatAgain != nil && !$0.reassign }
+
+        return Section {
+            HStack(spacing: 8) {
+                ForEach([5, 10, 15], id: \.self) { mins in
+                    snoozeChip("\(mins)m", selected: snoozeBy == mins && !showCustomSnooze) {
+                        showCustomSnooze = false
+                        snoozeBy = mins
+                    }
+                }
+                snoozeChip("Custom", selected: showCustomSnooze) {
+                    showCustomSnooze = true
+                    snoozeBy = customSnooze
+                }
+            }
+
+            if showCustomSnooze {
+                Stepper("\(customSnooze) min", value: $customSnooze, in: 1...240)
+                    .onChange(of: customSnooze) { _, v in snoozeBy = v }
+            }
+
+            if let mins = snoozeBy {
+                if !others.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Also moves \(others.count) following task\(others.count == 1 ? "" : "s"):")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(others) { t in
+                            Text("• \(t.title)  \(t.startTime) → \(TaskMover.format((TaskMover.minutes(t.startTime) ?? 0) + mins))")
+                                .font(.caption)
+                        }
+                    }
+                }
+
+                Button {
+                    applySnooze(by: mins)
+                } label: {
+                    Label("Snooze by \(mins) min", systemImage: "moon.zzz.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        } header: {
+            Text("Snooze")
+        } footer: {
+            Text(snoozeFooter(repeatCount: repeats.count))
+        }
+    }
+
+    private func snoozeFooter(repeatCount: Int) -> String {
+        var text = "Pushes this task later. Tasks starting within \(TaskMover.followWindowMinutes) min after it move by the same amount."
+        if repeatCount > 0 {
+            text += " Repeat tasks get their next day created first at the original time, and their repeat icon turns red so it isn't created again."
+        }
+        return text
+    }
+
+    private func snoozeChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(selected ? Color.indigo : Color.indigo.opacity(0.12))
+                )
+                .foregroundStyle(selected ? Color.white : Color.indigo)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Saves any edits in the form first, then moves the task and its chain.
+    private func applySnooze(by mins: Int) {
+        saveTask()
+        let moved = TaskMover.snooze(task, by: mins, context: modelContext, impulseTypes: impulseTypes)
+        NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: moved.map(\.id))
+        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
+        dismiss()
+    }
+
     private func saveTask() {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -2463,8 +2519,10 @@ struct TaskActionsView: View {
                     }
                     .padding(.top)
                     
-                    VStack(spacing: 12) {
-                        actionButton("Enjoyed it? Dedicated to God.", systemImage: "checkmark.circle", color: task.completed ? .green : .gray) {
+                    // Icon-only grid keeps every action on one screen.
+                    // Each tile still has an accessibility label.
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
+                        iconTile("checkmark.circle.fill", color: .green, label: "Enjoyed it? Dedicated to God. (Complete)", isOn: task.completed) {
                             let spentMinutes = task.timeSpent ?? 0
                             if !task.completed && spentMinutes > 0 && allottedMinutes > 0 && spentMinutes < Double(allottedMinutes) {
                                 showPartialTimeAlert = true
@@ -2488,70 +2546,62 @@ struct TaskActionsView: View {
                         } message: {
                             Text(partialTimeMessage)
                         }
-                        
-                        actionButton("Mark Not Completed", systemImage: "xmark.circle", color: task.notCompleted ? .red : .gray) {
+
+                        iconTile("xmark.circle.fill", color: .red, label: "Mark Not Completed", isOn: task.notCompleted) {
                             toggleTaskNonCompletion()
                         }
-                        
-                        Divider()
-                        
-                        actionButton("Subtasks (\(subtaskCount))", systemImage: "list.bullet", color: .indigo) {
-                            showSubtasksView = true
-                        }
-                        
-                        actionButton("Edit", systemImage: "pencil", color: .blue) {
+
+                        iconTile("pencil", color: .blue, label: "Edit") {
                             showEditDialog = true
                         }
-                        
-                        actionButton("Notes", systemImage: "note.text", color: .orange) {
+
+                        iconTile("list.bullet", color: .indigo, label: "Subtasks", badge: subtaskCount) {
+                            showSubtasksView = true
+                        }
+
+                        iconTile("note.text", color: .orange, label: "Notes") {
                             showNotesDialog = true
                         }
 
-                        actionButton("Virtues", systemImage: "star.circle", color: .yellow) {
+                        iconTile("star.circle", color: .yellow, label: "Virtues") {
                             showVirtuesDialog = true
                         }
 
-                        actionButton("Attach Files", systemImage: "paperclip", color: .brown) {
+                        iconTile("paperclip", color: .brown, label: "Attach Files") {
                             showFileAttachments = true
                         }
-                        
-                        actionButton("Time Spent", systemImage: "clock.fill", color: .cyan) {
+
+                        iconTile("clock.fill", color: .cyan, label: "Time Spent") {
                             showTimeSpentDialog = true
                         }
-                        
+
                         if task.repeatAgain != nil {
-                            actionButton("View Habit Tracker", systemImage: "chart.bar.fill", color: .purple) {
+                            iconTile("chart.bar.fill", color: .purple, label: "View Habit Tracker") {
                                 navigateToHabitTracker()
                             }
                         }
-                        
-                        Divider()
-                        
-                        actionButton("Copy", systemImage: "doc.on.doc", color: .blue) {
+
+                        iconTile("doc.on.doc", color: .blue, label: "Copy") {
                             copiedTask = task
                         }
-                        
+
                         if copiedTask != nil {
-                            actionButton("Paste", systemImage: "doc.on.clipboard", color: .green) {
+                            iconTile("doc.on.clipboard", color: .green, label: "Paste") {
                                 pasteTask()
                             }
                         }
 
-                        Divider()
-
                         if task.date != nil {
-                            actionButton("Send to Backlog", systemImage: "tray.and.arrow.down", color: .indigo) {
+                            iconTile("tray.and.arrow.down", color: .indigo, label: "Send to Backlog") {
                                 sendToBacklog()
                             }
                         } else {
-                            actionButton("Schedule for \(selectedDate.formatted(date: .abbreviated, time: .omitted))", systemImage: "calendar.badge.plus", color: .indigo) {
+                            iconTile("calendar.badge.plus", color: .indigo, label: "Schedule for \(selectedDate.formatted(date: .abbreviated, time: .omitted))") {
                                 scheduleFromBacklog()
                             }
                         }
 
-                        Divider()
-
-                        actionButton("Delete", systemImage: "trash", color: .red) {
+                        iconTile("trash", color: .red, label: "Delete") {
                             showDeleteConfirmation = true
                         }
                     }
@@ -2607,21 +2657,35 @@ struct TaskActionsView: View {
         navigateToHabits = true
     }
     
-    private func actionButton(_ title: String, systemImage: String, color: Color, action: @escaping () -> Void) -> some View {
+    /// Square icon button for the actions grid. `isOn` fills it with the
+    /// color (used for Complete / Not Completed state).
+    private func iconTile(_ systemImage: String, color: Color, label: String, isOn: Bool = false, badge: Int? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack {
-                Image(systemName: systemImage)
-                    .foregroundStyle(color)
-                Text(title)
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
-            .padding()
-            .background(.ultraThinMaterial)
-            .cornerRadius(10)
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(isOn ? Color.white : color)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isOn ? AnyShapeStyle(color) : AnyShapeStyle(.ultraThinMaterial))
+                )
+                .overlay(alignment: .topTrailing) {
+                    if let badge, badge > 0 {
+                        Text("\(badge)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(color))
+                            .offset(x: -4, y: 4)
+                    }
+                }
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
-    
+
     private func toggleTaskCompletion() {
         let wasCompleted = task.completed
         task.completed.toggle()
@@ -2678,53 +2742,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
     }
 
     private func createRepeatTask(from task: Task) {
-        guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
-        
-        let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
-        
-        // Check if task already exists
-        let descriptor = FetchDescriptor<Task>()
-        do {
-            let existingTasks = try modelContext.fetch(descriptor)
-            let taskExists = existingTasks.contains { existingTask in
-                guard let existingDate = existingTask.date else { return false }
-                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
-                       existingTask.startTime == task.startTime &&
-                       existingTask.endTime == task.endTime &&
-                       existingTask.title == task.title
-            }
-            if taskExists { return }
-        } catch { return }
-        
-        let newTask = Task(
-            title: task.title,
-            taskDescription: task.taskDescription,
-            startTime: task.startTime,
-            endTime: task.endTime,
-            weight: task.weight,
-            date: nextDate,
-            repeatAgain: task.repeatAgain,
-            priority: task.priority,
-            elapsedTime: task.elapsedTime, // Copy elapsed time to new task
-            copySubtasks: task.copySubtasks,
-            whyStatement: task.whyStatement, // Copy why statement to new task
-            whyStatementPinned: task.whyStatementPinned, // Copy pin status
-            virtues: task.virtues
-            // timeSpent is intentionally not copied for repeat tasks
-        )
-        newTask.goal = task.goal
-        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
-
-        modelContext.insert(newTask)
-
-        // Copy subtasks if the toggle is enabled
-        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
-            for subtask in subtasks {
-                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
-            }
-        }
-
-        try? modelContext.save()
+        TaskRepeater.createNextInstance(from: task, context: modelContext)
     }
 
     private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {

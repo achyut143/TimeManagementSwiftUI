@@ -55,34 +55,25 @@ struct PlannerMetricsView: View {
                 .buttonStyle(.borderless)
             }
 
-            Section("Planned vs unplanned impulse") {
-                metric("Planned", "\(PlannerRules.formatMinutes(totals.planned)) · \(totals.plannedCount) tasks")
-                metric("Unplanned", "\(PlannerRules.formatMinutes(totals.unplanned)) · \(totals.unplannedCount) tasks")
-                metric("Planned share", percent(totals.planned, of: totals.planned + totals.unplanned))
-                ForEach(types) { type in
-                    let s = split(monthTasks.filter { $0.impulseTypeID == type.id })
-                    if s.planned + s.unplanned > 0 {
-                        HStack {
-                            Circle().fill(type.color).frame(width: 8, height: 8)
-                            Text(type.name)
-                            Spacer()
-                            Text("\(PlannerRules.formatMinutes(s.planned)) planned, \(PlannerRules.formatMinutes(s.unplanned)) unplanned (\(percent(s.planned, of: s.planned + s.unplanned)))")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+            Section {
+                metric("Planned", "\(PlannerRules.formatMinutes(totals.planned)) · \(totals.plannedCount) times")
+                metric("Unplanned", "\(PlannerRules.formatMinutes(totals.unplanned)) · \(totals.unplannedCount) times")
+                metric("Planned share", percent(totals.planned, of: totals.total))
+                if totals.skippedCount > 0 {
+                    metric("Resisted", "\(totals.skippedCount) marked not done")
                 }
-                ForEach(weeksInMonth, id: \.self) { week in
-                    let s = split(monthTasks.filter { t in t.date.map { PlanDates.weekStart(for: $0) == week } ?? false })
-                    if s.planned + s.unplanned > 0 {
-                        metric("Week of \(week.formatted(.dateTime.month(.abbreviated).day()))",
-                               "\(PlannerRules.formatMinutes(s.planned)) / \(PlannerRules.formatMinutes(s.unplanned)) · \(percent(s.planned, of: s.planned + s.unplanned))")
-                    }
+                if totals.aheadCount > 0 {
+                    metric("Scheduled ahead", "\(PlannerRules.formatMinutes(totals.aheadMinutes)) · \(totals.aheadCount) not counted yet")
                 }
                 NavigationLink {
-                    ImpulseTrendView(anchor: min(today, cal.date(byAdding: .day, value: -1, to: monthEnd)!))
+                    ImpulseInsightsView(anchor: min(today, cal.date(byAdding: .day, value: -1, to: monthEnd)!))
                 } label: {
                     trendChart
                 }
+            } header: {
+                Text("Planned vs unplanned impulse")
+            } footer: {
+                Text("Counts impulses marked done or already past their end time. Tap the chart for insights by week, month, quarter and impulse type.")
             }
 
             budgetSection(monthTasks: monthTasks)
@@ -90,7 +81,7 @@ struct PlannerMetricsView: View {
             Section("No-impulse days") {
                 let marked = elapsedDays.filter { noImpulseDays.contains($0) }
                 let broken = marked.filter { d in
-                    PlannerRules.dayStatus(for: d, days: days, goals: goals, impulseTasks: impulseTasks).noImpulseBroken
+                    impulseTasks.contains { t in t.date.map { $0.startOfDay == d } == true && ImpulseRules.hasHappened(t) }
                 }
                 metric("This month", "\(marked.count) days, \(broken.count) broken")
             }
@@ -145,17 +136,6 @@ struct PlannerMetricsView: View {
         }
     }
 
-    private var weeksInMonth: [Date] {
-        var weeks: [Date] = []
-        var d = month
-        while d < monthEnd {
-            let w = PlanDates.weekStart(for: d)
-            if !weeks.contains(w) { weeks.append(w) }
-            d = PlanDates.adding(1, to: d)
-        }
-        return weeks
-    }
-
     private struct TrendPoint: Identifiable {
         let id = UUID()
         let month: Date
@@ -174,7 +154,8 @@ struct PlannerMetricsView: View {
             HStack {
                 Text("Last 6 months (hours)")
                 Spacer()
-                Text("Weekly · monthly · quarterly")
+                Text("Insights")
+                    .foregroundStyle(Color.accentColor)
             }
             .font(.caption).foregroundStyle(.secondary)
             Chart(points) { p in
@@ -200,7 +181,7 @@ struct PlannerMetricsView: View {
             if summary.budgetMinutes == nil {
                 Text("No budget set for this month").foregroundStyle(.secondary)
             } else {
-                ImpulseBudgetBar(summary: summary, types: types)
+                ImpulseBudgetBar(summary: summary, types: types, split: split(monthTasks))
                 let daysInMonth = Double(cal.range(of: .day, in: .month, for: month)?.count ?? 30)
                 let elapsed = Double(elapsedDays.count)
                 if month == ImpulseRules.monthStart(for: Date()), elapsed > 0 {

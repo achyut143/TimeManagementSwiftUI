@@ -30,6 +30,10 @@ struct PlannerHeaderView: View {
     private var budget: BudgetSummary {
         ImpulseRules.budget(forMonthOf: day, tasks: impulseTasks, versions: budgets)
     }
+    private var monthSplit: ImpulseRules.Split {
+        ImpulseRules.split(ImpulseRules.tasks(impulseTasks, inMonthOf: day),
+                           noImpulseDays: Set(days.filter(\.noImpulseDay).map(\.date)))
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -88,7 +92,7 @@ struct PlannerHeaderView: View {
                         impulsesSection
                         if budget.budgetMinutes != nil {
                             Divider()
-                            ImpulseBudgetBar(summary: budget, types: types)
+                            ImpulseBudgetBar(summary: budget, types: types, split: monthSplit)
                         }
                         Divider()
                         ifThenSection
@@ -508,6 +512,8 @@ struct ImpulseTaskRow: View {
 struct ImpulseBudgetBar: View {
     let summary: BudgetSummary
     let types: [ImpulseType]
+    /// The month's planned vs unplanned time, shown under the budget when given.
+    var split: ImpulseRules.Split? = nil
 
     var body: some View {
         let budget = summary.budgetMinutes ?? 0
@@ -538,6 +544,9 @@ struct ImpulseBudgetBar: View {
                 Text("Remaining \(PlannerRules.formatMinutes(summary.remainingMinutes))")
             }
             .font(.caption2).foregroundStyle(.secondary)
+            if let split, split.total > 0 {
+                monthSplitView(split)
+            }
             if !summary.byType.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(summary.byType.sorted { $0.value > $1.value }, id: \.key) { id, minutes in
@@ -550,6 +559,41 @@ struct ImpulseBudgetBar: View {
                     }
                 }
             }
+        }
+    }
+}
+
+extension ImpulseBudgetBar {
+    fileprivate func monthSplitView(_ split: ImpulseRules.Split) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                Label("Planned \(PlannerRules.formatMinutes(split.planned))", systemImage: "circle.fill")
+                    .foregroundStyle(.green)
+                Label("Unplanned \(PlannerRules.formatMinutes(split.unplanned))", systemImage: "circle.fill")
+                    .foregroundStyle(.red)
+                Spacer()
+                Text("\(Int(((split.plannedShare ?? 0) * 100).rounded()))% planned").foregroundStyle(.secondary)
+            }
+            .labelStyle(SmallDotLabelStyle())
+            .font(.caption2.weight(.medium))
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    Rectangle().fill(Color.green).frame(width: geo.size.width * split.planned / split.total)
+                    Rectangle().fill(Color.red)
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 5)
+        }
+        .padding(.top, 2)
+    }
+}
+
+private struct SmallDotLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.font(.system(size: 6))
+            configuration.title.foregroundStyle(.primary)
         }
     }
 }

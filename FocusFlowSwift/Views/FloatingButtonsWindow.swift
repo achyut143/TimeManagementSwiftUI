@@ -27,7 +27,7 @@ class FloatingButtonsWindow: UIWindow {
         let hitView = super.hitTest(point, with: event)
 
         // SwiftUI content reports the whole hosting view as the hit, so
-        // interactive overlay pieces (the stand timer) register their frames.
+        // interactive overlay pieces (the routine timer) register their frames.
         if OverlayHitRegions.shared.contains(point) {
             return hitView ?? rootViewController?.view
         }
@@ -50,8 +50,8 @@ struct FloatingButtonsOverlay: View {
 
             ActiveTaskBannerView()
 
-            // Only visible while Settings → Stand Reminder is on.
-            StandTimerPill()
+            // Only visible while the Routine reminder is on.
+            RoutineTimerPill()
         }
     }
 }

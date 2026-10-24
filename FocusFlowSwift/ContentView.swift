@@ -200,8 +200,8 @@ struct ContentView: View {
             UIApplication.shared.isIdleTimerDisabled = false
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // Keep the next sit/stand/stretch notifications queued up.
-            StandReminder.reschedule()
+            // Keep the next routine-step notifications queued up.
+            RoutineReminder.reschedule()
         }
     }
 }

@@ -469,21 +469,52 @@ enum ImpulseRules {
         }
     }
 
+    /// Marked complete, or past its end without being marked not completed.
+    static func hasHappened(_ task: Task, now: Date = Date()) -> Bool {
+        guard !isSkipped(task) else { return false }
+        return task.completed || (endDate(of: task).map { $0 <= now } ?? false)
+    }
+
     struct Split {
         var planned = 0.0
         var unplanned = 0.0
         var plannedCount = 0
         var unplannedCount = 0
+        /// Minutes past the scheduled end, already counted in `unplanned`.
+        var overrun = 0.0
+        /// Marked not completed — an impulse resisted.
+        var skippedCount = 0
+        /// Not yet happened; kept out of the totals above.
+        var aheadMinutes = 0.0
+        var aheadCount = 0
+
         var total: Double { planned + unplanned }
+        var count: Int { plannedCount + unplannedCount }
+        var plannedShare: Double? { total > 0 ? planned / total : nil }
+
+        mutating func add(_ o: Split) {
+            planned += o.planned; unplanned += o.unplanned
+            plannedCount += o.plannedCount; unplannedCount += o.unplannedCount
+            overrun += o.overrun; skippedCount += o.skippedCount
+            aheadMinutes += o.aheadMinutes; aheadCount += o.aheadCount
+        }
     }
 
-    /// Planned vs unplanned time, ignoring skipped tasks. Impulses on a no-impulse day are all unplanned.
-    static func split(_ tasks: [Task], noImpulseDays: Set<Date>) -> Split {
+    /// Planned vs unplanned time of impulses that have happened. Skipped ones are only counted,
+    /// future ones go to `ahead`. Impulses on a no-impulse day are all unplanned.
+    static func split(_ tasks: [Task], noImpulseDays: Set<Date>, now: Date = Date()) -> Split {
         var r = Split()
-        for t in tasks where !isSkipped(t) {
+        for t in tasks {
+            if isSkipped(t) { r.skippedCount += 1; continue }
+            guard hasHappened(t, now: now) else {
+                r.aheadMinutes += actualMinutes(of: t)
+                r.aheadCount += 1
+                continue
+            }
             let noImpulse = t.date.map { noImpulseDays.contains($0.startOfDay) } ?? false
             r.planned += plannedMinutes(of: t, noImpulseDay: noImpulse)
             r.unplanned += unplannedMinutes(of: t, noImpulseDay: noImpulse)
+            r.overrun += max(0, actualMinutes(of: t) - scheduledMinutes(of: t))
             if isPlannedLabel(t, noImpulseDay: noImpulse) { r.plannedCount += 1 } else { r.unplannedCount += 1 }
         }
         return r
