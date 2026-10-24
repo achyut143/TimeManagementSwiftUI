@@ -153,6 +153,25 @@ enum TaskMover {
         return all
     }
 
+    /// Makes a task longer by `delta` minutes (end time moves, start stays)
+    /// and pushes its followers later by the same amount. Repeat tasks get
+    /// their next occurrence created first, at the original time/length.
+    /// Returns the extended task plus everything that moved.
+    @discardableResult
+    static func extend(_ task: Task, by delta: Int, context: ModelContext, impulseTypes: [ImpulseType]) -> [Task] {
+        guard delta > 0, let end = minutes(task.endTime), minutes(task.startTime) != nil else { return [] }
+        let following = followers(of: [task], context: context)
+        prepareRepeats([task] + following, context: context)
+
+        let before = ImpulseRules.Snapshot(task)
+        task.endTime = format(end + delta)
+        ImpulseRules.reconcile(task, before: before, types: impulseTypes)
+
+        shift(following, by: delta, impulseTypes: impulseTypes)
+        try? context.save()
+        return [task] + following
+    }
+
     /// Snooze = move one task (and its followers) later.
     @discardableResult
     static func snooze(_ task: Task, by delta: Int, context: ModelContext, impulseTypes: [ImpulseType]) -> [Task] {

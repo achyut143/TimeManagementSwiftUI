@@ -6,6 +6,8 @@ struct HabitGridView: View {
     @Query private var tasks: [Task]
     @Binding var fromDate: Date
     @Binding var toDate: Date
+    /// Called with the habit name when a row is tapped.
+    var onSelectHabit: (String) -> Void = { _ in }
 
     @State private var searchText: String = ""
     @State private var appliedSearch: String = ""
@@ -325,6 +327,8 @@ struct HabitGridView: View {
                         VStack(spacing: 0) {
                             ForEach(habitNames, id: \.self) { habit in
                                 dateCellRow(habit: habit)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { onSelectHabit(habit) }
                                 Divider().padding(.leading, 4)
                             }
                         }
@@ -372,6 +376,9 @@ struct HabitGridView: View {
                 .frame(width: leftWidth, height: rowHeight, alignment: .leading)
                 .padding(.leading, 12)
                 .background(Color(.systemBackground))
+                .contentShape(Rectangle())
+                .onTapGesture { onSelectHabit(habit) }
+                .accessibilityAddTraits(.isButton)
                 Divider().padding(.leading, 4)
             }
         }

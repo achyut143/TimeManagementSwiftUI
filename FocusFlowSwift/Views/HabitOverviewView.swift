@@ -58,7 +58,7 @@ struct HabitOverviewView: View {
                         habitOverviewChartView
                     }
                 } else if selectedView == "table" {
-                    HabitGridView(fromDate: $fromDate, toDate: $toDate)
+                    HabitGridView(fromDate: $fromDate, toDate: $toDate, onSelectHabit: openHabit)
                 } else if selectedView == "time" {
                     habitOverviewTimeChartView
                 } else {
@@ -222,6 +222,12 @@ struct HabitOverviewView: View {
                 }
                 .chartForegroundStyleScale(domain: ["Completed", "Missed"], range: [Color.green, Color.red.opacity(0.55)])
                 .chartYScale(domain: overviewBarChartEntries.map(\.label))
+                // Labels are "Name\n(Nd)" — the first line is the habit name.
+                .chartOverlay { proxy in
+                    habitTapOverlay(proxy: proxy) { label in
+                        label.components(separatedBy: "\n").first ?? label
+                    }
+                }
                 .chartYAxis {
                     AxisMarks { _ in
                         AxisGridLine()
@@ -328,6 +334,10 @@ struct HabitOverviewView: View {
                     }
                     .chartForegroundStyleScale(domain: ["Spent", "Remaining"], range: [Color.green, Color.red.opacity(0.55)])
                     .chartYScale(domain: timeChartEntries.map(\.label))
+                    // Labels are the habit (task) title.
+                    .chartOverlay { proxy in
+                        habitTapOverlay(proxy: proxy) { $0 }
+                    }
                     .chartYAxis {
                         AxisMarks { _ in
                             AxisGridLine()
@@ -378,6 +388,32 @@ struct HabitOverviewView: View {
         .background(Color(.systemGroupedBackground))
     }
     
+    // MARK: - Open habit tracker
+
+    private func openHabit(_ name: String) {
+        selectedHabit = name
+        showDetailedView = true
+    }
+
+    /// Clear layer over a horizontal bar chart: a tap anywhere on a row
+    /// (bar or its label) opens that habit's tracker. Scrolling still works.
+    private func habitTapOverlay(proxy: ChartProxy, habitName: @escaping (String) -> String) -> some View {
+        GeometryReader { geo in
+            Rectangle()
+                .fill(Color.clear)
+                .contentShape(Rectangle())
+                .gesture(
+                    SpatialTapGesture().onEnded { value in
+                        guard let plot = proxy.plotFrame else { return }
+                        let y = value.location.y - geo[plot].origin.y
+                        if let label: String = proxy.value(atY: y) {
+                            openHabit(habitName(label))
+                        }
+                    }
+                )
+        }
+    }
+
     private func habitCardView(habitName: String) -> some View {
         let stats = cachedStats[habitName] ?? HabitStats(completed: 0, missed: 0, noData: 0, total: 0, percentage: 0, currentStreak: 0, maxStreak: 0, habitName: habitName)
         let pointsStats = cachedPoints[habitName] ?? (earned: 0.0, allocated: 0.0)

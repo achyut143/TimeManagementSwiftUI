@@ -4,7 +4,15 @@ import SwiftData
 struct TaskTableView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var tasks: [Task]
+    @Query(sort: \Goal.name) private var goals: [Goal]
     
+    private func resetBulkUpdate() {
+        showBulkUpdate = false
+        shouldUpdateGoal = false
+        bulkGoal = nil
+        shouldUpdateDate = false
+    }
+
     private func priorityColor(_ priority: String) -> Color {
         switch priority {
         case "P1": return .red
@@ -27,11 +35,12 @@ struct TaskTableView: View {
     @State private var showNotes = false
     @State private var taskToDelete: Task?
     @State private var showDeleteConfirmation = false
-    @State private var showTagAnalytics = false
+    @State private var showGoalAnalytics = false
     @State private var selectedTasks: Set<Task> = []
     @State private var isSelectionMode = false
     @State private var showBulkUpdate = false
-    @State private var bulkUpdateText = ""
+    @State private var shouldUpdateGoal = false
+    @State private var bulkGoal: Goal?
     @State private var bulkUpdateDate = Date()
     @State private var shouldUpdateDate = false
     @State private var showBulkDeleteConfirmation = false
@@ -177,16 +186,8 @@ struct TaskTableView: View {
             List(filteredTasks) { task in
                 HStack {
                     if isSelectionMode {
-                        Button {
-                            if selectedTasks.contains(task) {
-                                selectedTasks.remove(task)
-                            } else {
-                                selectedTasks.insert(task)
-                            }
-                        } label: {
-                            Image(systemName: selectedTasks.contains(task) ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(selectedTasks.contains(task) ? .blue : .gray)
-                        }
+                        Image(systemName: selectedTasks.contains(task) ? "checkmark.circle.fill" : "circle")
+                            .foregroundColor(selectedTasks.contains(task) ? .blue : .gray)
                     }
                     TaskRowView(task: task, allTasks: Array(tasks), metricDays: metricDays, onNotesAction: {
                         if !isSelectionMode {
@@ -199,7 +200,20 @@ struct TaskTableView: View {
                             showTaskActions = true
                         }
                     }, isSelectionMode: isSelectionMode)
+                    // In select mode the row's own buttons (time spent,
+                    // notes) step aside so a tap anywhere selects.
+                    .allowsHitTesting(!isSelectionMode)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard isSelectionMode else { return }
+                    if selectedTasks.contains(task) {
+                        selectedTasks.remove(task)
+                    } else {
+                        selectedTasks.insert(task)
+                    }
+                }
+                .accessibilityAddTraits(isSelectionMode && selectedTasks.contains(task) ? .isSelected : [])
                 .listRowBackground(taskRowBackground(task))
                 .swipeActions {
                     Button("Delete", role: .destructive) {
@@ -228,10 +242,11 @@ struct TaskTableView: View {
                             isSelectionMode = true
                         }
                         Button {
-                            showTagAnalytics = true
+                            showGoalAnalytics = true
                         } label: {
                             Image(systemName: "chart.bar")
                         }
+                        .accessibilityLabel("Goal Analytics")
                     }
                 }
             }
@@ -241,9 +256,9 @@ struct TaskTableView: View {
                 TaskNotesPagerView(task: task)
             }
         }
-        .sheet(isPresented: $showTagAnalytics) {
+        .sheet(isPresented: $showGoalAnalytics) {
             NavigationView {
-                TagAnalyticsView()
+                GoalAnalyticsView()
             }
         }
         .sheet(isPresented: $showBulkUpdate) {
@@ -254,13 +269,33 @@ struct TaskTableView: View {
                         .padding()
                     
                     VStack(spacing: 16) {
-                        TextField("New tags (comma separated)", text: $bulkUpdateText)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        Text("Leave empty to use default tags: work, personal, health, learning")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
+                        Toggle("Update Goal", isOn: $shouldUpdateGoal)
+
+                        if shouldUpdateGoal {
+                            HStack {
+                                Text("Goal")
+                                Spacer()
+                                Picker("Goal", selection: $bulkGoal) {
+                                    Text("No Goal").tag(Optional<Goal>.none)
+                                    ForEach(goals) { goal in
+                                        Text(goal.name).tag(Optional(goal))
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                            }
+                            if goals.isEmpty {
+                                Text("No goals yet — create them in the Goals tab.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text(bulkGoal == nil
+                                     ? "Removes the goal from all selected tasks."
+                                     : "Assigns \"\(bulkGoal?.name ?? "")\" to all selected tasks.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
                         Toggle("Update Date", isOn: $shouldUpdateDate)
                         
                         if shouldUpdateDate {
@@ -269,27 +304,21 @@ struct TaskTableView: View {
                         
                         Button("Update Tasks") {
                             for task in selectedTasks {
-                                // Update tags
-                                if bulkUpdateText.trimmingCharacters(in: .whitespaces).isEmpty {
-                                    // Use default tags if empty
-                                    task.taskDescription = "work, personal, health, learning"
-                                } else {
-                                    task.taskDescription = bulkUpdateText
+                                if shouldUpdateGoal {
+                                    task.goal = bulkGoal
                                 }
-                                
-                                // Update date if requested
                                 if shouldUpdateDate {
                                     task.date = bulkUpdateDate
                                 }
                             }
                             try? modelContext.save()
-                            showBulkUpdate = false
-                            bulkUpdateText = ""
-                            shouldUpdateDate = false
+                            NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
+                            resetBulkUpdate()
                             selectedTasks.removeAll()
                             isSelectionMode = false
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(!shouldUpdateGoal && !shouldUpdateDate)
                         .frame(maxWidth: .infinity)
                         
                         Button("Delete Tasks", role: .destructive) {
@@ -301,9 +330,7 @@ struct TaskTableView: View {
                     .padding()
                     
                     Button("Cancel") {
-                        showBulkUpdate = false
-                        bulkUpdateText = ""
-                        shouldUpdateDate = false
+                        resetBulkUpdate()
                     }
                     .buttonStyle(.bordered)
                     
@@ -330,9 +357,7 @@ struct TaskTableView: View {
                     modelContext.delete(task)
                 }
                 try? modelContext.save()
-                showBulkUpdate = false
-                bulkUpdateText = ""
-                shouldUpdateDate = false
+                resetBulkUpdate()
                 selectedTasks.removeAll()
                 isSelectionMode = false
             }

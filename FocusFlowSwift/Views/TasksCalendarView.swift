@@ -2363,7 +2363,51 @@ struct TaskActionsView: View {
     @State private var navigateToHabits = false
     @State private var showPartialTimeAlert = false
     @State private var subtasksAccordionExpanded = true
+    @State private var showSnoozeOptions = false
+    @State private var showCustomSnooze = false
+    @State private var customSnoozeMinutes = 20
+    @State private var showExtendOptions = false
+    /// Which action the custom-minutes sheet applies.
+    @State private var customIsExtend = false
+    @Query(sort: \ImpulseType.sortOrder) private var snoozeImpulseTypes: [ImpulseType]
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
+
+    private var canSnooze: Bool {
+        task.date != nil && !task.startTime.isEmpty && !task.endTime.isEmpty
+    }
+
+    private var snoozeMessage: String {
+        let others = TaskMover.tasksToMove(for: task, context: modelContext).count - 1
+        var text = "Pushes this task later."
+        if others > 0 {
+            text += " \(others) following task\(others == 1 ? "" : "s") (starting within \(TaskMover.followWindowMinutes) min after it) will move too."
+        }
+        return text
+    }
+
+    private func snooze(by minutes: Int) {
+        let moved = TaskMover.snooze(task, by: minutes, context: modelContext, impulseTypes: snoozeImpulseTypes)
+        NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: moved.map(\.id))
+        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
+        dismiss()
+    }
+
+    private var extendMessage: String {
+        let others = TaskMover.followers(of: [task], context: modelContext).count
+        var text = "Adds time to the end of this task."
+        if others > 0 {
+            text += " \(others) following task\(others == 1 ? "" : "s") (starting within \(TaskMover.followWindowMinutes) min after it) will be pushed later by the same amount."
+        }
+        return text
+    }
+
+    private func extend(by minutes: Int) {
+        let changed = TaskMover.extend(task, by: minutes, context: modelContext, impulseTypes: snoozeImpulseTypes)
+        // Same notification refresh as snooze (end alerts + moved tasks).
+        NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: changed.map(\.id))
+        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
+        dismiss()
+    }
 
     private var topLevelSubtasks: [Subtask] {
         allSubtasks.filter {
@@ -2555,6 +2599,40 @@ struct TaskActionsView: View {
                             showEditDialog = true
                         }
 
+                        if canSnooze {
+                            iconTile("moon.zzz.fill", color: .indigo, label: "Snooze") {
+                                showSnoozeOptions = true
+                            }
+                            .confirmationDialog("Snooze by", isPresented: $showSnoozeOptions, titleVisibility: .visible) {
+                                ForEach([5, 10, 15, 30], id: \.self) { mins in
+                                    Button("\(mins) min") { snooze(by: mins) }
+                                }
+                                Button("Custom…") {
+                                    customIsExtend = false
+                                    showCustomSnooze = true
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text(snoozeMessage)
+                            }
+
+                            iconTile("goforward.plus", color: .teal, label: "Extend task time") {
+                                showExtendOptions = true
+                            }
+                            .confirmationDialog("Extend by", isPresented: $showExtendOptions, titleVisibility: .visible) {
+                                ForEach([5, 10, 15, 30], id: \.self) { mins in
+                                    Button("\(mins) min") { extend(by: mins) }
+                                }
+                                Button("Custom…") {
+                                    customIsExtend = true
+                                    showCustomSnooze = true
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text(extendMessage)
+                            }
+                        }
+
                         iconTile("list.bullet", color: .indigo, label: "Subtasks", badge: subtaskCount) {
                             showSubtasksView = true
                         }
@@ -2578,6 +2656,18 @@ struct TaskActionsView: View {
                         if task.repeatAgain != nil {
                             iconTile("chart.bar.fill", color: .purple, label: "View Habit Tracker") {
                                 navigateToHabitTracker()
+                            }
+
+                            // Same switch as the repeat icon on the task row:
+                            // green = completing creates the next occurrence,
+                            // red = it won't (already handled).
+                            iconTile("repeat", color: task.reassign ? .red : .green,
+                                     label: task.reassign
+                                        ? "Repeat: next occurrence won't be created. Tap to turn on."
+                                        : "Repeat: next occurrence will be created. Tap to turn off.") {
+                                task.reassign.toggle()
+                                try? modelContext.save()
+                                NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
                             }
                         }
 
@@ -2645,6 +2735,38 @@ struct TaskActionsView: View {
         }
         .sheet(isPresented: $showSubtasksView) {
             SubtasksView(parentTask: task)
+        }
+        .sheet(isPresented: $showCustomSnooze) {
+            NavigationStack {
+                Form {
+                    Stepper("\(customSnoozeMinutes) min", value: $customSnoozeMinutes, in: 1...240)
+                    Section {
+                        Button {
+                            showCustomSnooze = false
+                            if customIsExtend {
+                                extend(by: customSnoozeMinutes)
+                            } else {
+                                snooze(by: customSnoozeMinutes)
+                            }
+                        } label: {
+                            Label(customIsExtend ? "Extend by \(customSnoozeMinutes) min" : "Snooze by \(customSnoozeMinutes) min",
+                                  systemImage: customIsExtend ? "goforward.plus" : "moon.zzz.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } footer: {
+                        Text(customIsExtend ? extendMessage : snoozeMessage)
+                    }
+                }
+                .navigationTitle(customIsExtend ? "Custom Extend" : "Custom Snooze")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showCustomSnooze = false }
+                    }
+                }
+            }
+            .presentationDetents([.height(260)])
         }
         .sheet(isPresented: $navigateToHabits) {
             NavigationStack {
