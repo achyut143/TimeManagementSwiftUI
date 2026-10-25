@@ -52,9 +52,9 @@ struct BulkMoveTasksView: View {
                         }
                 } footer: {
                     if !selectedIDs.isEmpty, let earliest = earliestSelectedTask {
-                        let names = followers.map(\.title)
+                        let names = pushes.map(\.task.title)
                         Text("\(earliest.title) moves to \(targetTime.formatted(date: .omitted, time: .shortened)); everything else you've selected shifts by the same amount, keeping its spacing from \"\(earliest.title)\"."
-                             + (names.isEmpty ? "" : "\n\nAlso moves \(names.count) task\(names.count == 1 ? "" : "s") starting within \(TaskMover.followWindowMinutes) min after a moved task: \(names.joined(separator: ", ")).")
+                             + (names.isEmpty ? "" : "\n\nAlso moves \(names.count) task\(names.count == 1 ? "" : "s"): \(names.joined(separator: ", ")). Tasks starting within \(TaskMover.followWindowMinutes) min after a moved task move by the same amount; later tasks it would run into are pushed just enough to not overlap.")
                              + " Repeat tasks get their next day created at the original time first.")
                     }
                 }
@@ -66,8 +66,9 @@ struct BulkMoveTasksView: View {
                              : "No timed tasks on \(selectedDate.formatted(date: .abbreviated, time: .omitted)).")
                             .foregroundStyle(.secondary)
                     } else {
+                        let pushByID = Dictionary(pushes.map { ($0.task.id, $0) }, uniquingKeysWith: { a, _ in a })
                         ForEach(sortedTimedTasks) { task in
-                            taskRow(task)
+                            taskRow(task, push: pushByID[task.id])
                         }
                     }
                 } header: {
@@ -113,20 +114,29 @@ struct BulkMoveTasksView: View {
         }
     }
 
-    /// Tasks that will move along because they follow a selected task
-    /// closely (same rule as Snooze).
-    private var followers: [Task] {
+    /// Same delta the move will use: puts the earliest selected task at the
+    /// target time (rounded down to 5 min, like TasksCalendarView does).
+    private var delta: Int {
+        guard let earliest = earliestSelectedTask else { return 0 }
+        let cal = Calendar.current
+        let raw = cal.component(.hour, from: targetTime) * 60 + cal.component(.minute, from: targetTime)
+        return (raw / 5) * 5 - timeToMinutes(earliest.startTime)
+    }
+
+    /// Other tasks that will move along (same rules as Snooze).
+    private var pushes: [TaskMover.Push] {
         let selected = tasks.filter { selectedIDs.contains($0.id) && isTimed($0) }
-        return TaskMover.followers(of: selected, context: modelContext)
+        guard delta != 0 else { return [] }
+        return TaskMover.pushes(for: selected, startDelta: delta, endDelta: delta, context: modelContext)
     }
 
     private var earliestSelectedTask: Task? {
         sortedTimedTasks.first { selectedIDs.contains($0.id) }
     }
 
-    private func taskRow(_ task: Task) -> some View {
+    private func taskRow(_ task: Task, push: TaskMover.Push?) -> some View {
         let isSelected = selectedIDs.contains(task.id)
-        let movesAlong = !isSelected && followers.contains { $0.id == task.id }
+        let push = isSelected ? nil : push
         return Button {
             if isSelected {
                 selectedIDs.remove(task.id)
@@ -151,8 +161,8 @@ struct BulkMoveTasksView: View {
 
                 Spacer()
 
-                if movesAlong {
-                    Text("moves along")
+                if let push {
+                    Text("→ \(formatTimeToAMPM(push.newStartTime))")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                         .padding(.horizontal, 6)

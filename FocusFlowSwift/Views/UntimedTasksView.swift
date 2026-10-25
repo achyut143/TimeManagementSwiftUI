@@ -661,8 +661,7 @@ struct UntimedTasksView: View {
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
-            elapsedTime: task.elapsedTime, // Copy elapsed time to new task
-            virtues: task.virtues
+            elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
@@ -700,8 +699,7 @@ struct UntimedTasksView: View {
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
-            elapsedTime: task.elapsedTime, // Copy elapsed time to new task
-            virtues: task.virtues
+            elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal
@@ -742,8 +740,7 @@ struct UntimedTasksView: View {
             date: nextDate,
             repeatAgain: task.repeatAgain,
             priority: task.priority,
-            elapsedTime: task.elapsedTime, // Copy elapsed time to new task
-            virtues: task.virtues
+            elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal

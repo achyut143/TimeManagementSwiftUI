@@ -61,7 +61,7 @@ struct BacklogView: View {
             get: { editingTask != nil },
             set: { if !$0 { editingTask = nil } }
         )) {
-            // Same actions sheet as a scheduled task gets (Notes, Virtues,
+            // Same actions sheet as a scheduled task gets (Notes,
             // Subtasks, Attach Files, Edit, etc.) — nothing about a task is
             // hidden just because it's sitting in the backlog; date/time are
             // the only fields it doesn't have yet.

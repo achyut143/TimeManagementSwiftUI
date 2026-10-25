@@ -65,9 +65,8 @@ class Project {
     @Relationship(deleteRule: .cascade, inverse: \ProjectTimer.project)
     var timer: ProjectTimer?
 
-    // Character virtues this project exercises (e.g. "Discipline", "Patience"),
-    // added manually or via AI suggestion. Default empty array so existing rows
-    // pick this up for free on a lightweight migration — nothing is lost.
+    // Legacy: virtues were removed from the app. The stored property stays
+    // so existing data stores open without a migration; nothing reads it.
     var virtues: [String] = []
 
     init(name: String, projectDescription: String = "") {

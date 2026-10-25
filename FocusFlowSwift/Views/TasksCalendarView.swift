@@ -1566,7 +1566,7 @@ struct TasksCalendarView: View {
         if let source = backlogSourceTask {
             // Schedule the same task in place, rather than creating a new
             // row and deleting the old one — anything the create form
-            // doesn't surface (notes, virtues, subtasks, attachments,
+            // doesn't surface (notes, subtasks, attachments,
             // whyStatement, timeSpent, ...) stays intact on this task.
             source.title = taskTitle
             source.taskDescription = taskTags
@@ -1804,8 +1804,7 @@ struct TasksCalendarView: View {
             elapsedTime: task.elapsedTime,
             copySubtasks: task.copySubtasks,
             whyStatement: task.whyStatement,
-            whyStatementPinned: task.whyStatementPinned,
-            virtues: task.virtues
+            whyStatementPinned: task.whyStatementPinned
         )
         newTask.goal = task.goal
         ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
@@ -2035,7 +2034,7 @@ struct EditTaskView: View {
                 TextField("Title", text: $title)
                 TextField("Description (tags, comma separated)", text: $description)
                 Section("Info") {
-                    TextField("Extra context for this task (used by AI, e.g. for virtue suggestions)", text: $info, axis: .vertical)
+                    TextField("Extra context for this task", text: $info, axis: .vertical)
                 }
 
                 Toggle("Untimed Task", isOn: $isUntimed)
@@ -2195,9 +2194,8 @@ struct EditTaskView: View {
     // MARK: Snooze
 
     private var snoozeSection: some View {
-        let moving = TaskMover.tasksToMove(for: task, context: modelContext)
-        let others = moving.filter { $0.id != task.id }
-        let repeats = moving.filter { $0.repeatAgain != nil && !$0.reassign }
+        let others = TaskMover.pushes(for: [task], startDelta: snoozeBy ?? 0, endDelta: snoozeBy ?? 0, context: modelContext)
+        let repeats = ([task] + others.map(\.task)).filter { $0.repeatAgain != nil && !$0.reassign }
 
         return Section {
             HStack(spacing: 8) {
@@ -2224,8 +2222,8 @@ struct EditTaskView: View {
                         Text("Also moves \(others.count) following task\(others.count == 1 ? "" : "s"):")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        ForEach(others) { t in
-                            Text("• \(t.title)  \(t.startTime) → \(TaskMover.format((TaskMover.minutes(t.startTime) ?? 0) + mins))")
+                        ForEach(others, id: \.task.id) { p in
+                            Text("• \(p.task.title)  \(p.task.startTime) → \(p.newStartTime)\(p.delta != mins ? " (+\(p.delta)m)" : "")")
                                 .font(.caption)
                         }
                     }
@@ -2247,7 +2245,7 @@ struct EditTaskView: View {
     }
 
     private func snoozeFooter(repeatCount: Int) -> String {
-        var text = "Pushes this task later. Tasks starting within \(TaskMover.followWindowMinutes) min after it move by the same amount."
+        var text = "Pushes this task later. Tasks starting within \(TaskMover.followWindowMinutes) min after it move by the same amount; later tasks it would run into are pushed just enough to not overlap."
         if repeatCount > 0 {
             text += " Repeat tasks get their next day created first at the original time, and their repeat icon turns red so it isn't created again."
         }
@@ -2355,7 +2353,6 @@ struct TaskActionsView: View {
     @State private var showDeleteConfirmation = false
     @State private var showEditDialog = false
     @State private var showNotesDialog = false
-    @State private var showVirtuesDialog = false
     @State private var showTimeSpentDialog = false
     @State private var showFileAttachments = false
     @State private var showSubtasksView = false
@@ -2369,6 +2366,8 @@ struct TaskActionsView: View {
     @State private var showExtendOptions = false
     /// Which action the custom-minutes sheet applies.
     @State private var customIsExtend = false
+    @State private var showSwap = false
+    @State private var didSwap = false
     @Query(sort: \ImpulseType.sortOrder) private var snoozeImpulseTypes: [ImpulseType]
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
 
@@ -2377,12 +2376,7 @@ struct TaskActionsView: View {
     }
 
     private var snoozeMessage: String {
-        let others = TaskMover.tasksToMove(for: task, context: modelContext).count - 1
-        var text = "Pushes this task later."
-        if others > 0 {
-            text += " \(others) following task\(others == 1 ? "" : "s") (starting within \(TaskMover.followWindowMinutes) min after it) will move too."
-        }
-        return text
+        "Pushes this task later. ' + rule + '"
     }
 
     private func snooze(by minutes: Int) {
@@ -2393,12 +2387,7 @@ struct TaskActionsView: View {
     }
 
     private var extendMessage: String {
-        let others = TaskMover.followers(of: [task], context: modelContext).count
-        var text = "Adds time to the end of this task."
-        if others > 0 {
-            text += " \(others) following task\(others == 1 ? "" : "s") (starting within \(TaskMover.followWindowMinutes) min after it) will be pushed later by the same amount."
-        }
-        return text
+        "Adds time to the end of this task. Tasks starting within \(TaskMover.followWindowMinutes) min after it are pushed later by the same amount; later tasks it would run into are pushed just enough to not overlap."
     }
 
     private func extend(by minutes: Int) {
@@ -2631,6 +2620,17 @@ struct TaskActionsView: View {
                             } message: {
                                 Text(extendMessage)
                             }
+
+                            if !task.completed && !task.notCompleted {
+                                iconTile("arrow.left.arrow.right", color: .purple, label: "Swap task") {
+                                    showSwap = true
+                                }
+                                .sheet(isPresented: $showSwap, onDismiss: {
+                                    if didSwap { dismiss() }
+                                }) {
+                                    SwapTaskView(task: task) { didSwap = true }
+                                }
+                            }
                         }
 
                         iconTile("list.bullet", color: .indigo, label: "Subtasks", badge: subtaskCount) {
@@ -2639,10 +2639,6 @@ struct TaskActionsView: View {
 
                         iconTile("note.text", color: .orange, label: "Notes") {
                             showNotesDialog = true
-                        }
-
-                        iconTile("star.circle", color: .yellow, label: "Virtues") {
-                            showVirtuesDialog = true
                         }
 
                         iconTile("paperclip", color: .brown, label: "Attach Files") {
@@ -2723,9 +2719,6 @@ struct TaskActionsView: View {
         }
         .sheet(isPresented: $showNotesDialog) {
             TaskNotesPagerView(task: task)
-        }
-        .sheet(isPresented: $showVirtuesDialog) {
-            TaskVirtuesView(task: task)
         }
         .sheet(isPresented: $showTimeSpentDialog) {
             TimeSpentEditorView(task: task)
@@ -2920,8 +2913,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             elapsedTime: task.elapsedTime,
             copySubtasks: task.copySubtasks,
             whyStatement: task.whyStatement, // Copy why statement to new task
-            whyStatementPinned: task.whyStatementPinned, // Copy pin status
-            virtues: task.virtues
+            whyStatementPinned: task.whyStatementPinned // Copy pin status
             // timeSpent is intentionally not copied for repeat tasks
         )
         newTask.goal = task.goal

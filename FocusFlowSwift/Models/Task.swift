@@ -32,13 +32,12 @@ class Task: Transferable {
     // filed under in the Backlog view. Left as-is once scheduled, so if the
     // task is later cleared back to the backlog it reappears in the same place.
     var backlogFolder: BacklogFolder?
-    // Character virtues this task exercises (e.g. "Self-Discipline", "Patience"),
-    // added manually or via AI suggestion. Default empty array so existing rows
-    // pick this up for free on a lightweight migration — nothing is lost.
+    // Legacy: virtues were removed from the app. The stored property stays
+    // so existing data stores open without a migration; nothing reads it.
     var virtues: [String] = []
     // Free-text context for this task, distinct from taskDescription (which the
     // UI actually uses as a comma-separated tags field, not a description).
-    // Used as extra grounding for AI virtue suggestions; optional/nil-default so
+    // Optional/nil-default so
     // it's a no-op lightweight migration for existing tasks.
     var info: String?
     // Impulse tracking (see ImpulseModels.swift). nil-default so this is a
@@ -58,7 +57,7 @@ class Task: Transferable {
     @Relationship(deleteRule: .cascade)
     var attachments: [TaskAttachment]?
 
-    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false, whyStatement: String? = nil, whyStatementPinned: Bool = true, goal: Goal? = nil, virtues: [String] = [], info: String? = nil, backlogFolder: BacklogFolder? = nil) {
+    init(title: String = "", taskDescription: String = "", startTime: String = "", endTime: String = "", completed: Bool = false, notCompleted: Bool = false, reassign: Bool = false, weight: Double = 0.0, five: Bool = false, notes: String? = nil, date: Date? = nil, repeatAgain: Int? = nil, priority: String = "P3", timeSpent: Double? = nil, elapsedTime: Double? = nil, copySubtasks: Bool = false, whyStatement: String? = nil, whyStatementPinned: Bool = true, goal: Goal? = nil, info: String? = nil, backlogFolder: BacklogFolder? = nil) {
         self.id = UUID()
         self.title = title
         self.taskDescription = taskDescription
@@ -79,7 +78,6 @@ class Task: Transferable {
         self.whyStatement = whyStatement
         self.whyStatementPinned = whyStatementPinned
         self.goal = goal
-        self.virtues = virtues
         self.info = info
         self.backlogFolder = backlogFolder
     }

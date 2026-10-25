@@ -2,32 +2,19 @@ import SwiftUI
 import SwiftData
 import Charts
 
-// Timeline chart for projects, switchable via a segmented control:
-//  - "Projects": one line per project, value = total time logged to that
-//    project within the bucket (activities + direct project time).
-//  - "Virtues": one line per project virtue (Project.virtues) — value = total
-//    time logged, summed across every project that carries that virtue, so a
-//    project's logged time counts toward each of its virtues. Unlike the
-//    Task/Habit trends chart, the value plotted here is TIME, not a count.
-// Bucketed by Day/Week/Month/Year (default Week), showing the 7 most recent
-// buckets with Previous/Next paging 7 buckets at a time. Mirrors
-// VirtueHabitTrendsView's structure.
+// Timeline chart with one line per project, value = total time logged to that
+// project within the bucket (activities + direct project time). Bucketed by
+// Day/Week/Month/Year (default Week), showing the 7 most recent buckets with
+// Previous/Next paging 7 buckets at a time. Mirrors HabitTrendsView.
 struct ProjectTrendsView: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var projects: [Project]
-
-    enum Mode: String, CaseIterable, Identifiable {
-        case projects = "Projects"
-        case virtues = "Virtues"
-        var id: String { rawValue }
-    }
 
     enum Granularity: String, CaseIterable, Identifiable {
         case day = "Day", week = "Week", month = "Month", year = "Year"
         var id: String { rawValue }
     }
 
-    @State private var mode: Mode = .projects
     @State private var granularity: Granularity = .week
     // Anchor date for the *end* of the visible 7-bucket window; paging shifts this.
     @State private var windowEndAnchor = Date()
@@ -35,10 +22,9 @@ struct ProjectTrendsView: View {
     // recent bucket, shown by default so the readout is visible immediately.
     @State private var selectedBucketIndex: Int? = 0
 
-    // Which chips are hidden, persisted per mode, same pattern as
-    // VirtueHabitTrendsView — survives leaving and reopening this view.
+    // Which chips are hidden, same pattern as HabitTrendsView — survives
+    // leaving and reopening this view.
     @AppStorage("projectTrends.hiddenProjects") private var hiddenProjectsRaw: String = ""
-    @AppStorage("projectTrends.hiddenVirtues") private var hiddenVirtuesRaw: String = ""
 
     private let calendar = Calendar.current
 
@@ -61,11 +47,6 @@ struct ProjectTrendsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Picker("Mode", selection: $mode) {
-                        ForEach(Mode.allCases) { m in Text(m.rawValue).tag(m) }
-                    }
-                    .pickerStyle(.segmented)
-
                     Picker("Granularity", selection: $granularity) {
                         ForEach(Granularity.allCases) { g in Text(g.rawValue).tag(g) }
                     }
@@ -75,9 +56,7 @@ struct ProjectTrendsView: View {
                     pagerHeader
 
                     if seriesNames.isEmpty {
-                        Text(mode == .projects
-                             ? "No projects yet."
-                             : "No virtues added to any project yet. Add some from a project's Virtues button.")
+                        Text("No projects yet.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -105,7 +84,7 @@ struct ProjectTrendsView: View {
                 }
                 .padding()
             }
-            .navigationTitle(mode == .projects ? "Project Time Trends" : "Project Virtue Trends")
+            .navigationTitle("Project Time Trends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -283,11 +262,11 @@ struct ProjectTrendsView: View {
     // MARK: - Hidden-series persistence
 
     private var hiddenSeries: Set<String> {
-        Set(decodeNames(mode == .projects ? hiddenProjectsRaw : hiddenVirtuesRaw))
+        Set(decodeNames(hiddenProjectsRaw))
     }
 
     private func toggleHidden(_ name: String) {
-        var current = decodeNames(mode == .projects ? hiddenProjectsRaw : hiddenVirtuesRaw)
+        var current = decodeNames(hiddenProjectsRaw)
         if let idx = current.firstIndex(of: name) {
             current.remove(at: idx)
         } else {
@@ -313,12 +292,7 @@ struct ProjectTrendsView: View {
     }
 
     private func setHidden(_ names: [String]) {
-        let encoded = encodeNames(names)
-        if mode == .projects {
-            hiddenProjectsRaw = encoded
-        } else {
-            hiddenVirtuesRaw = encoded
-        }
+        hiddenProjectsRaw = encodeNames(names)
     }
 
     private func decodeNames(_ raw: String) -> [String] {
@@ -336,12 +310,7 @@ struct ProjectTrendsView: View {
     // MARK: - Data
 
     private var seriesNames: [String] {
-        switch mode {
-        case .projects:
-            return projects.map { $0.name }.sorted()
-        case .virtues:
-            return Array(Set(projects.flatMap { $0.virtues })).sorted()
-        }
+        projects.map { $0.name }.sorted()
     }
 
     private var allPoints: [TrendPoint] {
@@ -351,19 +320,8 @@ struct ProjectTrendsView: View {
         var points: [TrendPoint] = []
         for bucket in buckets {
             var minutesByName: [String: Double] = [:]
-            switch mode {
-            case .projects:
-                for project in projects {
-                    minutesByName[project.name, default: 0] += project.totalMinutes(from: bucket.start, to: bucket.lastDay)
-                }
-            case .virtues:
-                for project in projects where !project.virtues.isEmpty {
-                    let projectMinutes = project.totalMinutes(from: bucket.start, to: bucket.lastDay)
-                    guard projectMinutes > 0 else { continue }
-                    for virtue in project.virtues {
-                        minutesByName[virtue, default: 0] += projectMinutes
-                    }
-                }
+            for project in projects {
+                minutesByName[project.name, default: 0] += project.totalMinutes(from: bucket.start, to: bucket.lastDay)
             }
 
             for name in names {

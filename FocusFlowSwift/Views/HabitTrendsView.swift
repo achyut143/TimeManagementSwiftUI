@@ -2,30 +2,19 @@ import SwiftUI
 import SwiftData
 import Charts
 
-// Timeline chart for two things, switchable via a segmented control:
-//  - "Virtues": one line per virtue (Task.virtues), counted across all tasks
-//    that carry it — so if two different tasks both have "Self-Discipline"
-//    on the same day, that day's count for "Self-Discipline" is 2.
-//  - "Habits": one line per repeat/routine task (grouped by title), counting
-//    completed occurrences per period.
-// Bucketed by Day/Week/Month/Year (default Week), showing the 7 most recent
-// buckets with Previous/Next paging 7 buckets at a time.
-struct VirtueHabitTrendsView: View {
+// Timeline chart with one line per repeat/routine task (grouped by title),
+// counting completed occurrences per period. Bucketed by Day/Week/Month/Year
+// (default Week), showing the 7 most recent buckets with Previous/Next paging
+// 7 buckets at a time.
+struct HabitTrendsView: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var tasks: [Task]
-
-    enum Mode: String, CaseIterable, Identifiable {
-        case virtues = "Virtues"
-        case habits = "Habits"
-        var id: String { rawValue }
-    }
 
     enum Granularity: String, CaseIterable, Identifiable {
         case day = "Day", week = "Week", month = "Month", year = "Year"
         var id: String { rawValue }
     }
 
-    @State private var mode: Mode = .virtues
     @State private var granularity: Granularity = .week
     // Anchor date for the *end* of the visible 7-bucket window; paging shifts this.
     @State private var windowEndAnchor = Date()
@@ -33,11 +22,9 @@ struct VirtueHabitTrendsView: View {
     // recent bucket, shown by default so the readout is visible immediately.
     @State private var selectedBucketIndex: Int? = 0
 
-    // Which chips are hidden, persisted per mode (as JSON-encoded arrays) so the
-    // selection you leave with is exactly what you see when you come back to
-    // this view — survives dismissing the sheet and relaunching the app.
-    // Anything NOT in here is shown, so new virtues/habits default to visible.
-    @AppStorage("virtueHabitTrends.hiddenVirtues") private var hiddenVirtuesRaw: String = ""
+    // Which chips are hidden (JSON-encoded array), so the selection you leave
+    // with is what you see when you come back. Anything NOT in here is shown,
+    // so new habits default to visible. Key kept for existing installs.
     @AppStorage("virtueHabitTrends.hiddenHabits") private var hiddenHabitsRaw: String = ""
 
     private let calendar = Calendar.current
@@ -61,11 +48,6 @@ struct VirtueHabitTrendsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Picker("Mode", selection: $mode) {
-                        ForEach(Mode.allCases) { m in Text(m.rawValue).tag(m) }
-                    }
-                    .pickerStyle(.segmented)
-
                     Picker("Granularity", selection: $granularity) {
                         ForEach(Granularity.allCases) { g in Text(g.rawValue).tag(g) }
                     }
@@ -75,9 +57,7 @@ struct VirtueHabitTrendsView: View {
                     pagerHeader
 
                     if seriesNames.isEmpty {
-                        Text(mode == .virtues
-                             ? "No virtues added to any tasks yet. Add some from a task's Actions → Virtues."
-                             : "No routine (repeat) tasks yet.")
+                        Text("No routine (repeat) tasks yet.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -105,7 +85,7 @@ struct VirtueHabitTrendsView: View {
                 }
                 .padding()
             }
-            .navigationTitle(mode == .virtues ? "Virtue Trends" : "Habit Trends")
+            .navigationTitle("Habit Trends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -240,11 +220,11 @@ struct VirtueHabitTrendsView: View {
     // MARK: - Hidden-series persistence
 
     private var hiddenSeries: Set<String> {
-        Set(decodeNames(mode == .virtues ? hiddenVirtuesRaw : hiddenHabitsRaw))
+        Set(decodeNames(hiddenHabitsRaw))
     }
 
     private func toggleHidden(_ name: String) {
-        var current = decodeNames(mode == .virtues ? hiddenVirtuesRaw : hiddenHabitsRaw)
+        var current = decodeNames(hiddenHabitsRaw)
         if let idx = current.firstIndex(of: name) {
             current.remove(at: idx)
         } else {
@@ -270,12 +250,7 @@ struct VirtueHabitTrendsView: View {
     }
 
     private func setHidden(_ names: [String]) {
-        let encoded = encodeNames(names)
-        if mode == .virtues {
-            hiddenVirtuesRaw = encoded
-        } else {
-            hiddenHabitsRaw = encoded
-        }
+        hiddenHabitsRaw = encodeNames(names)
     }
 
     private func decodeNames(_ raw: String) -> [String] {
@@ -326,12 +301,7 @@ struct VirtueHabitTrendsView: View {
     // MARK: - Data
 
     private var seriesNames: [String] {
-        switch mode {
-        case .virtues:
-            return Array(Set(tasks.flatMap { $0.virtues })).sorted()
-        case .habits:
-            return Array(Set(tasks.filter { $0.repeatAgain != nil }.map { $0.title })).sorted()
-        }
+        Array(Set(tasks.filter { $0.repeatAgain != nil }.map { $0.title })).sorted()
     }
 
     private var allPoints: [TrendPoint] {
@@ -346,15 +316,8 @@ struct VirtueHabitTrendsView: View {
             }
 
             var counts: [String: Int] = [:]
-            switch mode {
-            case .virtues:
-                for t in inBucket {
-                    for v in t.virtues { counts[v, default: 0] += 1 }
-                }
-            case .habits:
-                for t in inBucket where t.repeatAgain != nil {
-                    counts[t.title, default: 0] += 1
-                }
+            for t in inBucket where t.repeatAgain != nil {
+                counts[t.title, default: 0] += 1
             }
 
             for name in names {

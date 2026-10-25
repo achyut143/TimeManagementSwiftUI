@@ -5074,7 +5074,7 @@ struct DailyNotesView: View {
 
         // Award credits when marking as done (not when un-striking). Only for
         // the main schedule — the Begin/Stop block is a separate, parallel
-        // timeline and awarding virtue credits from it too could double-count
+        // timeline and awarding credits from it too could double-count
         // the same activity if both blocks happen to name it.
         if !wasStruck && kind == .main {
             let durationMinutes = endMin - startMin
@@ -5506,7 +5506,7 @@ struct DailyNotesView: View {
     // Mirrors scheduleFormattedView's task-row rendering for the second,
     // independent BEGIN...STOP block. Deliberately lighter than the main
     // view: tap-to-strike only (no reward/not-completed/actual-minutes/delete/
-    // edit-sheet), since those are tied to the main schedule's virtue-credit
+    // edit-sheet), since those are tied to the main schedule's credit
     // and task-editing machinery, which this parallel block doesn't plug into.
     @ViewBuilder
     private var beginStopFormattedView: some View {

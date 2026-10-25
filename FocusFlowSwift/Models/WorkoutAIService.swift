@@ -1,7 +1,7 @@
 import Foundation
 
 /// Turns a pasted workout description into a Tabata or rep workout draft.
-/// Same OpenAI plumbing as VirtueSuggestionService / AISchedulerService.
+/// Same OpenAI plumbing as AISchedulerService.
 struct WorkoutAIService {
     enum Result {
         case tabata(TabataDraft)
