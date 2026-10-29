@@ -6,6 +6,8 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showDailyNotes = false
     @State private var showWorkouts = false
+    @State private var showVocabulary = false
+    @State private var showFood = false
     @State private var openDailyNotesInFocusMode = false
     @State private var showMetricsSettings = false
     @State private var selectedDate = Date()
@@ -38,6 +40,22 @@ struct ContentView: View {
                                         .foregroundColor(.red)
                                 }
                                 .accessibilityLabel("Workouts")
+
+                                Button {
+                                    showVocabulary = true
+                                } label: {
+                                    Image(systemName: "character.book.closed.fill")
+                                        .foregroundColor(.purple)
+                                }
+                                .accessibilityLabel("Vocabulary")
+
+                                Button {
+                                    showFood = true
+                                } label: {
+                                    Image(systemName: "fork.knife.circle.fill")
+                                        .foregroundColor(.teal)
+                                }
+                                .accessibilityLabel("Food")
 
                                 Button {
                                     showMetricsSettings = true
@@ -171,6 +189,26 @@ struct ContentView: View {
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Done") { showWorkouts = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showFood) {
+                NavigationStack {
+                    FoodHomeView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showFood = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $showVocabulary) {
+                NavigationStack {
+                    VocabularyHomeView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showVocabulary = false }
                             }
                         }
                 }

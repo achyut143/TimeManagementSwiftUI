@@ -161,6 +161,9 @@ private struct AIWorkoutReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var items: [Item]
     @State private var editingID: UUID?
+    /// Folder and tags for everything saved from this screen.
+    @State private var saveFolderID: UUID?
+    @State private var saveTags: [String] = []
     let parts: Int
     let skippedParts: Int
     let skipReason: String?
@@ -224,6 +227,8 @@ private struct AIWorkoutReviewView: View {
                     Text("Tap a workout to check or change it before saving.")
                 }
 
+                WorkoutFolderAndTagsSection(folderID: $saveFolderID, tags: $saveTags)
+
                 if combinableTabatas.count >= 2 {
                     Section {
                         Button {
@@ -284,9 +289,9 @@ private struct AIWorkoutReviewView: View {
         }
         switch item.result {
         case .tabata(let draft):
-            TabataEditorView(workout: nil, prefill: draft, onSaved: markSaved)
+            TabataEditorView(workout: nil, prefill: draft, folderID: saveFolderID, tags: saveTags, onSaved: markSaved)
         case .reps(let name, let sets, let rest):
-            RepWorkoutEditorView(workout: nil, prefill: (name, sets, rest), onSaved: markSaved)
+            RepWorkoutEditorView(workout: nil, prefill: (name, sets, rest), folderID: saveFolderID, tags: saveTags, onSaved: markSaved)
         }
     }
 
@@ -345,12 +350,16 @@ private struct AIWorkoutReviewView: View {
                 let workout = TabataWorkout(name: "")
                 workout.apply(draft)
                 if workout.name.isEmpty { workout.name = fallbackName }
+                workout.folderID = saveFolderID
+                workout.tags = WorkoutTags.clean(saveTags)
                 modelContext.insert(workout)
             case .reps(let name, let sets, let rest):
                 let trimmed = name.trimmingCharacters(in: .whitespaces)
                 let workout = RepWorkout(name: trimmed.isEmpty ? fallbackName : trimmed)
                 workout.sets = sets
                 workout.restBetweenSetsSeconds = rest
+                workout.folderID = saveFolderID
+                workout.tags = WorkoutTags.clean(saveTags)
                 modelContext.insert(workout)
             }
         }

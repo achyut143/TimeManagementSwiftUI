@@ -13,11 +13,16 @@ struct TabataEditorView: View {
     /// Called after a successful save.
     var onSaved: (() -> Void)? = nil
     @State private var draft: TabataDraft
+    @State private var folderID: UUID?
+    @State private var tags: [String]
 
     /// `prefill` starts a new Tabata from given values (e.g. built by AI).
-    init(workout: TabataWorkout?, prefill: TabataDraft? = nil, onSaved: (() -> Void)? = nil) {
+    /// `folderID` puts a new Tabata straight into a folder.
+    init(workout: TabataWorkout?, prefill: TabataDraft? = nil, folderID: UUID? = nil, tags: [String] = [], onSaved: (() -> Void)? = nil) {
         self.workout = workout
         self.onSaved = onSaved
+        _folderID = State(initialValue: workout?.folderID ?? folderID)
+        _tags = State(initialValue: workout?.tags ?? tags)
         var d = workout?.draft ?? prefill ?? TabataDraft()
         if d.parts.isEmpty { d.parts = [TabataPart()] }
         d.parts = d.parts.map { $0.padded() }
@@ -32,6 +37,8 @@ struct TabataEditorView: View {
                 Section {
                     TextField("Name, e.g. Insanity warm up 1", text: $draft.name)
                 }
+
+                WorkoutFolderAndTagsSection(folderID: $folderID, tags: $tags)
 
                 ForEach($draft.parts) { $part in
                     let index = draft.parts.firstIndex(where: { $0.id == part.id }) ?? 0
@@ -216,6 +223,8 @@ struct TabataEditorView: View {
             return new
         }()
         target.apply(draft)
+        target.folderID = folderID
+        target.tags = WorkoutTags.clean(tags)
         try? modelContext.save()
         WorkoutPictureStore.removeUnused(context: modelContext)
         onSaved?()

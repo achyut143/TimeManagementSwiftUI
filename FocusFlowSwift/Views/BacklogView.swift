@@ -31,14 +31,27 @@ struct BacklogView: View {
     @State private var newFolderName = ""
     @State private var editingTask: Task?
     @State private var folderPendingDeletion: BacklogFolder?
+    /// Set while creating a folder inside another one.
+    @State private var newFolderParent: BacklogFolder?
+    @State private var renamingFolder: BacklogFolder?
+    @State private var renameText = ""
 
+    /// A folder shows its own tasks plus those in every folder inside it.
     private var filteredTasks: [Task] {
         if showUnfiledOnly {
             return backlogTasks.filter { $0.backlogFolder == nil }
         }
         guard let folder = selectedFolder else { return backlogTasks }
-        return backlogTasks.filter { $0.backlogFolder?.persistentModelID == folder.persistentModelID }
+        let ids = FolderTree.descendants(of: folder.id, in: folders).union([folder.id])
+        return backlogTasks.filter { $0.backlogFolder.map { ids.contains($0.id) } ?? false }
     }
+
+    /// Sub-folders in the user's order (then by name).
+    private func children(of id: UUID?) -> [BacklogFolder] {
+        FolderTree.children(of: id, in: folders).sorted { ($0.sortOrder, $0.name) < ($1.sortOrder, $1.name) }
+    }
+
+    private func path(_ folder: BacklogFolder) -> String { FolderTree.path(folder, in: folders) }
 
     var body: some View {
         Group {
@@ -70,10 +83,22 @@ struct BacklogView: View {
                     .presentationDetents([.medium, .large])
             }
         }
-        .alert("New Folder", isPresented: $showAddFolder) {
+        .alert(newFolderParent.map { "New folder in \($0.name)" } ?? "New Folder", isPresented: $showAddFolder) {
             TextField("Folder name", text: $newFolderName)
-            Button("Cancel", role: .cancel) { newFolderName = "" }
+            Button("Cancel", role: .cancel) { newFolderName = ""; newFolderParent = nil }
             Button("Create") { createFolder() }
+        }
+        .alert("Rename Folder", isPresented: Binding(
+            get: { renamingFolder != nil },
+            set: { if !$0 { renamingFolder = nil } }
+        )) {
+            TextField("Folder name", text: $renameText)
+            Button("Cancel", role: .cancel) { renamingFolder = nil }
+            Button("Save") {
+                let name = renameText.trimmingCharacters(in: .whitespaces)
+                if let folder = renamingFolder, !name.isEmpty { folder.name = name; try? modelContext.save() }
+                renamingFolder = nil
+            }
         }
         .alert("Delete Folder?", isPresented: Binding(
             get: { folderPendingDeletion != nil },
@@ -82,7 +107,9 @@ struct BacklogView: View {
             Button("Cancel", role: .cancel) { folderPendingDeletion = nil }
             Button("Delete", role: .destructive) { deleteFolder() }
         } message: {
-            Text("Tasks inside move back to Unfiled — they aren't deleted.")
+            Text(folderPendingDeletion?.parentID == nil
+                 ? "Tasks and folders inside move back to the top level (tasks to Unfiled) — nothing is deleted."
+                 : "Tasks and folders inside move up into the folder above — nothing is deleted.")
         }
     }
 
@@ -203,31 +230,50 @@ struct BacklogView: View {
         .padding(.horizontal)
     }
 
+    /// Top level: All · Unfiled · top folders. Inside a folder: ‹ back,
+    /// the folder itself, then the folders inside it.
     private var folderChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                folderChip(title: "All", isSelected: selectedFolder == nil && !showUnfiledOnly) {
-                    selectedFolder = nil
-                    showUnfiledOnly = false
-                }
-                folderChip(title: "Unfiled", isSelected: showUnfiledOnly) {
-                    selectedFolder = nil
-                    showUnfiledOnly = true
-                }
-                ForEach(folders) { folder in
-                    folderChip(title: folder.name, isSelected: !showUnfiledOnly && selectedFolder?.persistentModelID == folder.persistentModelID) {
-                        selectedFolder = folder
+                if let current = selectedFolder {
+                    Button {
+                        selectedFolder = FolderTree.chain(from: current.parentID, in: folders).first
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.secondary.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back to \(current.parentID == nil ? "all folders" : "parent folder")")
+
+                    folderChip(title: path(current), isSelected: true) {}
+                        .contextMenu { folderMenu(current) }
+                    ForEach(children(of: current.id)) { sub in
+                        folderChip(title: sub.name, isSelected: false, hasChildren: !children(of: sub.id).isEmpty) {
+                            selectedFolder = sub
+                        }
+                        .contextMenu { folderMenu(sub) }
+                    }
+                } else {
+                    folderChip(title: "All", isSelected: !showUnfiledOnly) {
                         showUnfiledOnly = false
                     }
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            folderPendingDeletion = folder
-                        } label: {
-                            Label("Delete Folder", systemImage: "trash")
+                    folderChip(title: "Unfiled", isSelected: showUnfiledOnly) {
+                        showUnfiledOnly = true
+                    }
+                    ForEach(children(of: nil)) { folder in
+                        folderChip(title: folder.name, isSelected: false, hasChildren: !children(of: folder.id).isEmpty) {
+                            selectedFolder = folder
+                            showUnfiledOnly = false
                         }
+                        .contextMenu { folderMenu(folder) }
                     }
                 }
                 Button {
+                    newFolderParent = selectedFolder
                     showAddFolder = true
                 } label: {
                     Image(systemName: "folder.badge.plus")
@@ -237,14 +283,52 @@ struct BacklogView: View {
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(selectedFolder == nil ? "New folder" : "New folder inside")
             }
             .padding(.horizontal)
         }
     }
 
-    private func folderChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    /// Long-press menu on a folder chip.
+    @ViewBuilder
+    private func folderMenu(_ folder: BacklogFolder) -> some View {
+        Button {
+            newFolderParent = folder
+            showAddFolder = true
+        } label: {
+            Label("New Folder Inside", systemImage: "folder.badge.plus")
+        }
+        Button {
+            renameText = folder.name
+            renamingFolder = folder
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        Menu {
+            if folder.parentID != nil {
+                Button("Top Level") { move(folder, into: nil) }
+            }
+            ForEach(FolderTree.sortedByPath(FolderTree.moveTargets(for: folder, in: folders)), id: \.folder.id) { entry in
+                if entry.folder.id != folder.parentID {
+                    Button(entry.path) { move(folder, into: entry.folder) }
+                }
+            }
+        } label: {
+            Label("Move Folder", systemImage: "folder")
+        }
+        Button(role: .destructive) {
+            folderPendingDeletion = folder
+        } label: {
+            Label("Delete Folder", systemImage: "trash")
+        }
+    }
+
+    private func folderChip(title: String, isSelected: Bool, hasChildren: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
+            HStack(spacing: 3) {
+                Text(title)
+                if hasChildren { Image(systemName: "chevron.right").font(.caption2) }
+            }
                 .font(.caption)
                 .fontWeight(.medium)
                 .padding(.horizontal, 12)
@@ -272,6 +356,16 @@ struct BacklogView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                // Where it's filed, when that isn't obvious from the chips.
+                if let folder = task.backlogFolder, folder.id != selectedFolder?.id {
+                    HStack(spacing: 3) {
+                        Image(systemName: "folder")
+                        Text(path(folder))
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
             }
 
             Spacer()
@@ -296,8 +390,8 @@ struct BacklogView: View {
                 }
                 Menu("Move to Folder") {
                     Button("Unfiled") { task.backlogFolder = nil; try? modelContext.save() }
-                    ForEach(folders) { folder in
-                        Button(folder.name) { task.backlogFolder = folder; try? modelContext.save() }
+                    ForEach(FolderTree.sortedByPath(folders), id: \.folder.id) { entry in
+                        Button(entry.path) { task.backlogFolder = entry.folder; try? modelContext.save() }
                     }
                 }
                 Button(role: .destructive) {
@@ -359,20 +453,35 @@ struct BacklogView: View {
     private func createFolder() {
         let name = newFolderName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { newFolderName = ""; return }
-        let folder = BacklogFolder(name: name, sortOrder: (folders.map(\.sortOrder).max() ?? 0) + 1)
+        let folder = BacklogFolder(name: name, sortOrder: (folders.map(\.sortOrder).max() ?? 0) + 1,
+                                   parentID: newFolderParent?.id)
         modelContext.insert(folder)
         try? modelContext.save()
         newFolderName = ""
+        newFolderParent = nil
     }
 
+    /// Deletes only the folder: its tasks and sub-folders move up one level.
     private func deleteFolder() {
         guard let folder = folderPendingDeletion else { return }
-        if selectedFolder?.persistentModelID == folder.persistentModelID {
-            selectedFolder = nil
+        let parent = FolderTree.chain(from: folder.parentID, in: folders).first
+        for task in backlogTasks where task.backlogFolder?.id == folder.id { task.backlogFolder = parent }
+        for child in folders where child.parentID == folder.id { child.parentID = folder.parentID }
+        if let selected = selectedFolder,
+           selected.id == folder.id || FolderTree.descendants(of: folder.id, in: folders).contains(selected.id) {
+            selectedFolder = parent
         }
         modelContext.delete(folder)
         try? modelContext.save()
         folderPendingDeletion = nil
+    }
+
+    /// Moves a folder (with everything inside) into another folder, or to the top level.
+    private func move(_ folder: BacklogFolder, into parent: BacklogFolder?) {
+        // Never inside itself or its own sub-folders.
+        if let parent, parent.id == folder.id || FolderTree.descendants(of: folder.id, in: folders).contains(parent.id) { return }
+        folder.parentID = parent?.id
+        try? modelContext.save()
     }
 
     private func deleteTask(_ task: Task) {
@@ -426,7 +535,7 @@ struct BacklogPickerView: View {
                                     Text(task.title)
                                         .foregroundStyle(.primary)
                                     if let folder = task.backlogFolder {
-                                        Text(folder.name)
+                                        Text(FolderTree.path(folder, in: folders))
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }

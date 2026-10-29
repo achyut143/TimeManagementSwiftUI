@@ -539,14 +539,16 @@ enum ImpulseRules {
 
 struct PlannerDayStatus {
     let dayGoals: [PeriodGoal]
+    /// Food breaks with food written down, out of the day's planned breaks.
     let mealsPlanned: Int
+    let mealsTotal: Int
     let impulseTasks: [Task]
     let noImpulseDay: Bool
     let workoutPlanned: Bool
     let restDay: Bool
 
     var goalsDone: Bool { dayGoals.count >= 3 }
-    var mealsDone: Bool { mealsPlanned == 3 }
+    var mealsDone: Bool { mealsTotal > 0 && mealsPlanned == mealsTotal }
     var impulsesDone: Bool { noImpulseDay || !impulseTasks.isEmpty }
     var workoutSet: Bool { restDay || workoutPlanned }
     var isPlanned: Bool { goalsDone && mealsDone && impulsesDone && workoutSet }
@@ -559,12 +561,14 @@ struct PlannerDayStatus {
 }
 
 enum PlannerRules {
-    static func dayStatus(for date: Date, days: [PlannerDay], goals: [PeriodGoal], impulseTasks: [Task]) -> PlannerDayStatus {
+    static func dayStatus(for date: Date, days: [PlannerDay], goals: [PeriodGoal], impulseTasks: [Task], food: [FoodEntry]) -> PlannerDayStatus {
         let day = date.startOfDay
         let planner = days.first { $0.date == day }
+        let meals = FoodRules.plannedCount(day, entries: food)
         return PlannerDayStatus(
             dayGoals: goals.filter { $0.periodRaw == GoalPeriod.day.rawValue && $0.periodStart == day && $0.status != .carried },
-            mealsPlanned: planner?.mealsPlanned ?? 0,
+            mealsPlanned: meals.planned,
+            mealsTotal: meals.total,
             impulseTasks: impulseTasks.filter { $0.date.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false },
             noImpulseDay: planner?.noImpulseDay ?? false,
             workoutPlanned: planner?.workoutPlanned ?? false,

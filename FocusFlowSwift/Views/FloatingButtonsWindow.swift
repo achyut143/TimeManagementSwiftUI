@@ -14,7 +14,8 @@ class FloatingButtonsWindow: UIWindow {
         self.isUserInteractionEnabled = true
         self.backgroundColor = .clear
 
-        let hostingController = UIHostingController(rootView: FloatingButtonsOverlay())
+        let hostingController = UIHostingController(
+            rootView: FloatingButtonsOverlay().modelContainer(FocusFlowSwiftApp.sharedContainer))
         hostingController.view.backgroundColor = .clear
         self.rootViewController = hostingController
     }
@@ -52,6 +53,9 @@ struct FloatingButtonsOverlay: View {
 
             // Only visible while the Routine reminder is on.
             RoutineTimerPill()
+
+            // Countdown to the next food break (turned off in Food settings).
+            FoodPill()
         }
     }
 }

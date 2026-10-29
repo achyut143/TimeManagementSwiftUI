@@ -13,6 +13,8 @@ struct PlannerHeaderView: View {
     @Query private var schedules: [SleepScheduleVersion]
     @Query(filter: #Predicate<Task> { $0.impulseTypeID != nil }) private var impulseTasks: [Task]
     @Query(sort: \IfThenPlan.sortOrder) private var ifThenPlans: [IfThenPlan]
+    @Query private var foodEntries: [FoodEntry]
+    @Query private var foodBreaks: [FoodBreak]
 
     // Collapsed by default so the pinned header leaves room for the calendar.
     @AppStorage("plannerOverviewExpanded") private var overviewExpanded = false
@@ -25,7 +27,7 @@ struct PlannerHeaderView: View {
     private var day: Date { date.startOfDay }
     private var planner: PlannerDay? { days.first { $0.date == day } }
     private var status: PlannerDayStatus {
-        PlannerRules.dayStatus(for: day, days: days, goals: goals, impulseTasks: impulseTasks)
+        PlannerRules.dayStatus(for: day, days: days, goals: goals, impulseTasks: impulseTasks, food: foodEntries)
     }
     private var budget: BudgetSummary {
         ImpulseRules.budget(forMonthOf: day, tasks: impulseTasks, versions: budgets)
@@ -221,10 +223,12 @@ struct PlannerHeaderView: View {
 
     private var mealsSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Meals").font(.caption.weight(.semibold))
-            mealRow("Breakfast", text: planner?.breakfast, time: planner?.breakfastTime, eaten: planner?.breakfastEaten ?? false) { planner?.breakfastEaten.toggle() }
-            mealRow("Lunch", text: planner?.lunch, time: planner?.lunchTime, eaten: planner?.lunchEaten ?? false) { planner?.lunchEaten.toggle() }
-            mealRow("Dinner", text: planner?.dinner, time: planner?.dinnerTime, eaten: planner?.dinnerEaten ?? false) { planner?.dinnerEaten.toggle() }
+            Text("Food").font(.caption.weight(.semibold))
+            ForEach(FoodRules.slots(on: day, entries: foodEntries, breaks: foodBreaks)) { slot in
+                mealRow(slot.name, text: slot.food, time: slot.time, eaten: slot.status == .eaten) {
+                    FoodRules.mark(slot, slot.status == .eaten ? .pending : .eaten, day: day, breaks: foodBreaks, context: modelContext)
+                }
+            }
         }
     }
 
@@ -326,7 +330,7 @@ struct PlannerHeaderView: View {
                               value: "\(status.dayGoals.filter(\.isDone).count) / \(status.dayGoals.count)",
                               color: status.goalsDone ? .indigo : .secondary)
                     StripChip(title: "Meals",
-                              value: status.mealsPlanned == 0 ? "?" : "\(status.mealsPlanned) / 3",
+                              value: status.mealsTotal == 0 ? "?" : "\(status.mealsPlanned) / \(status.mealsTotal)",
                               color: status.mealsDone ? .teal : .secondary)
                     StripChip(title: "Workout", value: workoutChipText,
                               color: status.workoutSet ? .teal : .secondary)

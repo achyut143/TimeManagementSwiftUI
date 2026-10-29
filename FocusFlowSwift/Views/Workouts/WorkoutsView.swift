@@ -12,6 +12,7 @@ struct WorkoutsView: View {
     @Query(sort: \TabataWorkout.createdAt, order: .reverse) private var tabatas: [TabataWorkout]
     @Query(sort: \RepWorkout.createdAt, order: .reverse) private var repWorkouts: [RepWorkout]
     @Query(sort: \WorkoutSession.startedAt, order: .reverse) private var sessions: [WorkoutSession]
+    @Query(sort: \WorkoutFolder.name) private var folders: [WorkoutFolder]
     @AppStorage("workout.lastTab") private var sectionRaw = WorkoutTab.tabata.rawValue
 
     @State private var editingTabata: TabataWorkout?
@@ -23,12 +24,18 @@ struct WorkoutsView: View {
     @State private var searchText = ""
     @State private var showWeekPlan = false
     @State private var runTarget: WorkoutRunTarget?
+    @State private var tagFilter: Set<String> = []
+    @State private var taggingItem: WorkoutItem?
+    @State private var newFolderFor: WorkoutItem?
+    @State private var creatingFolder = false
+    @State private var editingFolder: WorkoutFolder?
+    @State private var folderToDelete: WorkoutFolder?
 
     private var section: WorkoutTab { WorkoutTab(rawValue: sectionRaw) ?? .tabata }
 
     var body: some View {
         VStack(spacing: 0) {
-            if searchText.isEmpty {
+            if searchText.isEmpty && tagFilter.isEmpty {
                 WorkoutTodayCard(tabatas: tabatas, repWorkouts: repWorkouts, sessions: sessions) { target in
                     runTarget = target
                 } onPlanWeek: {
@@ -46,8 +53,8 @@ struct WorkoutsView: View {
             .padding(.bottom, 8)
 
             switch section {
-            case .tabata: tabataList
-            case .reps: repList
+            case .tabata: library(.tabata)
+            case .reps: library(.reps)
             case .history: historyList
             case .progress: ExerciseProgressList(searchText: searchText)
             }
@@ -68,6 +75,7 @@ struct WorkoutsView: View {
                     Divider()
                     Button("New Tabata", systemImage: "timer") { creatingTabata = true }
                     Button("New rep workout", systemImage: "dumbbell.fill") { creatingReps = true }
+                    Button("New folder", systemImage: "folder.badge.plus") { creatingFolder = true }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -87,65 +95,112 @@ struct WorkoutsView: View {
         .sheet(item: $editingReps) { RepWorkoutEditorView(workout: $0) }
         .sheet(isPresented: $showSettings) { WorkoutSettingsView() }
         .sheet(isPresented: $creatingWithAI) { AIWorkoutCreateView() }
+        .sheet(isPresented: $creatingFolder) { WorkoutFolderEditor(folder: nil) }
+        .sheet(item: $editingFolder) { WorkoutFolderEditor(folder: $0) }
+        .confirmationDialog("Delete \(folderToDelete?.name ?? "folder")?",
+                            isPresented: Binding(get: { folderToDelete != nil }, set: { if !$0 { folderToDelete = nil } }),
+                            titleVisibility: .visible, presenting: folderToDelete) { folder in
+            Button("Delete folder", role: .destructive) {
+                WorkoutActions.deleteFolder(folder, items: allItems, folders: folders, context: modelContext)
+            }
+        } message: { _ in
+            Text("Its workouts and folders are kept and move up one level.")
+        }
+        .sheet(item: $taggingItem) { WorkoutTagsSheet(item: $0) }
+        .sheet(item: $newFolderFor) { item in
+            WorkoutFolderEditor(folder: nil) { new in item.setFolder(new.id) }
+        }
     }
 
     // MARK: Lists
 
-    @ViewBuilder private var tabataList: some View {
-        if tabatas.isEmpty {
-            emptyState("No Tabatas yet", icon: "timer", action: "New Tabata") { creatingTabata = true }
-        } else if filteredTabatas.isEmpty {
-            ContentUnavailableView.search(text: searchText)
+    private var allItems: [WorkoutItem] { WorkoutItem.all(tabatas, repWorkouts) }
+
+    private var filter: WorkoutFilter { WorkoutFilter(text: searchText, tags: tagFilter) }
+
+    /// Folders first, then workouts not in a folder. While searching or
+    /// filtering by tag: matching folders and every matching workout.
+    @ViewBuilder private func library(_ kind: WorkoutKind) -> some View {
+        let items = allItems.filter { $0.kind == kind }
+        if items.isEmpty && folders.isEmpty {
+            if kind == .tabata {
+                emptyState("No Tabatas yet", icon: "timer", action: "New Tabata") { creatingTabata = true }
+            } else {
+                emptyState("No rep workouts yet", icon: "dumbbell", action: "New rep workout") { creatingReps = true }
+            }
         } else {
-            List {
-                ForEach(filteredTabatas) { workout in
-                    NavigationLink {
-                        TabataDetailView(workout: workout)
-                    } label: {
-                        WorkoutRow(name: workout.name, summary: workout.summary, icon: "timer")
-                    }
-                    .contextMenu {
-                        Button("Edit", systemImage: "pencil") { editingTabata = workout }
-                        Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(workout) }
-                        Button("Delete", systemImage: "trash", role: .destructive) { delete(workout) }
-                    }
-                    .swipeActions {
-                        Button("Delete", systemImage: "trash", role: .destructive) { delete(workout) }
-                        Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(workout) }.tint(.indigo)
-                        Button("Edit", systemImage: "pencil") { editingTabata = workout }.tint(.orange)
+            VStack(spacing: 0) {
+                WorkoutTagFilterBar(tags: WorkoutTags.used(items: allItems, folders: folders), selected: $tagFilter)
+                List {
+                    if filter.isActive {
+                        let matchingFolders = folders.filter { filter.matches($0, folders: folders) }
+                        let matchingItems = items.filter { filter.matches($0, folders: folders) }
+                        if matchingFolders.isEmpty && matchingItems.isEmpty {
+                            ContentUnavailableView.search(text: searchText.isEmpty ? tagFilter.sorted().joined(separator: ", ") : searchText)
+                        }
+                        if !matchingFolders.isEmpty {
+                            Section("Folders") { ForEach(matchingFolders) { folderLink($0) } }
+                        }
+                        if !matchingItems.isEmpty {
+                            Section(kind == .tabata ? "Tabatas" : "Rep workouts") {
+                                ForEach(matchingItems) { row($0) }
+                            }
+                        }
+                    } else {
+                        let topLevel = WorkoutFolderTree.children(of: nil, in: folders)
+                        if !topLevel.isEmpty {
+                            Section("Folders") { ForEach(topLevel) { folderLink($0) } }
+                        }
+                        let loose = items.filter { $0.folder(in: folders) == nil }
+                        if !loose.isEmpty {
+                            Section {
+                                ForEach(loose) { row($0) }
+                            } header: {
+                                if !folders.isEmpty { Text("Not in a folder") }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    @ViewBuilder private var repList: some View {
-        if repWorkouts.isEmpty {
-            emptyState("No rep workouts yet", icon: "dumbbell", action: "New rep workout") { creatingReps = true }
-        } else if filteredReps.isEmpty {
-            ContentUnavailableView.search(text: searchText)
-        } else {
-            List {
-                ForEach(filteredReps) { workout in
-                    NavigationLink {
-                        RepWorkoutDetailView(workout: workout)
-                    } label: {
-                        WorkoutRow(name: workout.name,
-                                   summary: workout.summary + (PausedRunStore.load(workout.id) != nil ? " · Paused" : ""),
-                                   icon: "dumbbell.fill")
-                    }
-                    .contextMenu {
-                        Button("Edit", systemImage: "pencil") { editingReps = workout }
-                        Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(workout) }
-                        Button("Delete", systemImage: "trash", role: .destructive) { delete(workout) }
-                    }
-                    .swipeActions {
-                        Button("Delete", systemImage: "trash", role: .destructive) { delete(workout) }
-                        Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(workout) }.tint(.indigo)
-                        Button("Edit", systemImage: "pencil") { editingReps = workout }.tint(.orange)
-                    }
-                }
-            }
+    private func folderLink(_ folder: WorkoutFolder) -> some View {
+        NavigationLink {
+            WorkoutFolderView(folder: folder)
+        } label: {
+            WorkoutFolderRow(folder: folder, items: allItems, folders: folders, showPath: filter.isActive)
+        }
+        .contextMenu {
+            Button("Edit or move folder", systemImage: "pencil") { editingFolder = folder }
+            Button("Delete folder", systemImage: "trash", role: .destructive) { folderToDelete = folder }
+        }
+    }
+
+    private func row(_ item: WorkoutItem) -> some View {
+        NavigationLink {
+            WorkoutItemDetail(item: item)
+        } label: {
+            WorkoutItemRow(item: item, folders: folders)
+        }
+        .contextMenu {
+            Button("Edit", systemImage: "pencil") { edit(item) }
+            Button("Tags…", systemImage: "tag") { taggingItem = item }
+            WorkoutMoveMenu(item: item, folders: folders) { newFolderFor = item }
+            Button("Duplicate", systemImage: "plus.square.on.square") { WorkoutActions.duplicate(item, context: modelContext) }
+            Button("Delete", systemImage: "trash", role: .destructive) { WorkoutActions.delete(item, context: modelContext) }
+        }
+        .swipeActions {
+            Button("Delete", systemImage: "trash", role: .destructive) { WorkoutActions.delete(item, context: modelContext) }
+            Button("Duplicate", systemImage: "plus.square.on.square") { WorkoutActions.duplicate(item, context: modelContext) }.tint(.indigo)
+            Button("Edit", systemImage: "pencil") { edit(item) }.tint(.orange)
+        }
+    }
+
+    private func edit(_ item: WorkoutItem) {
+        switch item {
+        case .tabata(let w): editingTabata = w
+        case .reps(let w): editingReps = w
         }
     }
 
@@ -185,8 +240,8 @@ struct WorkoutsView: View {
 
     private var searchPrompt: String {
         switch section {
-        case .tabata: return "Search Tabatas or exercises"
-        case .reps: return "Search workouts or exercises"
+        case .tabata: return "Search Tabatas, folders, tags, exercises"
+        case .reps: return "Search workouts, folders, tags, exercises"
         case .history: return "Search history"
         case .progress: return "Search exercises"
         }
@@ -202,24 +257,6 @@ struct WorkoutsView: View {
         guard !terms.isEmpty else { return true }
         let haystack = fields.joined(separator: " ").lowercased()
         return terms.allSatisfy { haystack.contains($0) }
-    }
-
-    /// Matches the name, part names and exercise names.
-    private var filteredTabatas: [TabataWorkout] {
-        guard !searchTerms.isEmpty else { return tabatas }
-        return tabatas.filter { w in
-            let draft = w.draft
-            return matches([w.name] + draft.parts.map(\.name) + draft.parts.flatMap(\.cycleNames))
-        }
-    }
-
-    /// Matches the name, exercise names and notes.
-    private var filteredReps: [RepWorkout] {
-        guard !searchTerms.isEmpty else { return repWorkouts }
-        return repWorkouts.filter { w in
-            let exercises = w.sets.flatMap(\.exercises)
-            return matches([w.name] + exercises.map(\.name) + exercises.map(\.note))
-        }
     }
 
     /// Matches the name, date (e.g. "Oct 19"), result, and logged exercises.
@@ -240,61 +277,9 @@ struct WorkoutsView: View {
             Button(action, action: perform).buttonStyle(.borderedProminent)
         }
     }
-
-    // MARK: Actions
-
-    private func duplicate(_ w: TabataWorkout) {
-        let copy = TabataWorkout(name: w.name + " copy")
-        copy.apply(w.draft)
-        copy.name = w.name + " copy"
-        modelContext.insert(copy)
-        try? modelContext.save()
-    }
-
-    private func duplicate(_ w: RepWorkout) {
-        let copy = RepWorkout(name: w.name + " copy")
-        copy.sets = w.sets.map { set in
-            var s = set
-            s.id = UUID()
-            s.exercises = set.exercises.map { var e = $0; e.id = UUID(); return e }
-            return s
-        }
-        copy.restBetweenSetsSeconds = w.restBetweenSetsSeconds
-        modelContext.insert(copy)
-        try? modelContext.save()
-    }
-
-    private func delete(_ model: any PersistentModel) {
-        modelContext.delete(model)
-        try? modelContext.save()
-        WorkoutPictureStore.removeUnused(context: modelContext)
-    }
 }
 
 // MARK: - Rows
-
-private struct WorkoutRow: View {
-    let name: String
-    let summary: String
-    let icon: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(.tint)
-                .frame(width: 48, height: 48)
-                .background(Color.accentColor.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.headline)
-                Text(summary).font(.subheadline).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-}
 
 private struct HistoryRow: View {
     let session: WorkoutSession

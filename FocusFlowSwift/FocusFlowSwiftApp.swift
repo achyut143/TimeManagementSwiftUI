@@ -21,6 +21,7 @@ struct MigrationWrapper<Content: View>: View {
             .onAppear {
                 if !hasMigrated {
                     TaskAttachmentMigration.migrateAttachmentsIfNeeded(modelContext: modelContext)
+                    FoodSetup.runOnce(context: modelContext)
                     hasMigrated = true
                 }
                 // Settles any away-time exit left pending from a force-quit
@@ -32,6 +33,7 @@ struct MigrationWrapper<Content: View>: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 AwayTimeTracker.shared.recordReturn()
                 FocusSessionTracker.shared.recordEnter()
+                FoodNotifications.reschedule(context: modelContext)
             }
             // Any project timer left running when the app is backgrounded or
             // killed gets paused here, so its elapsed time never silently
@@ -122,8 +124,11 @@ struct FocusFlowSwiftApp: App {
                     }
             }
         }
-        .modelContainer(Self.makeContainer())
+        .modelContainer(Self.sharedContainer)
     }
+
+    /// One container for the whole app, also used by the floating overlay window.
+    static let sharedContainer: ModelContainer = makeContainer()
 
     private static func makeContainer() -> ModelContainer {
         let mainTypes: [any PersistentModel.Type] = [
@@ -134,7 +139,10 @@ struct FocusFlowSwiftApp: App {
             Goal.self, DayBlock.self, Project.self, ProjectActivity.self, ProjectTimeEntry.self,
             ProjectTimer.self, BacklogFolder.self, IfThenPlan.self,
             ImpulseType.self, ImpulseBudgetVersion.self, PeriodGoal.self, PlannerDay.self, SleepScheduleVersion.self,
-            TabataWorkout.self, RepWorkout.self, WorkoutSession.self, WorkoutPicture.self, WorkoutPlanEntry.self
+            TabataWorkout.self, RepWorkout.self, WorkoutSession.self, WorkoutPicture.self, WorkoutPlanEntry.self,
+            VocabWord.self, VocabTestResult.self,
+            FoodBreak.self, FoodEntry.self, FoodCraving.self,
+            WorkoutFolder.self
         ]
         // Scheduled activities, alerts, the old Plan view and Start with a Why
         // were removed — their tables are dropped by SwiftData's automatic

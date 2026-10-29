@@ -11,6 +11,7 @@ struct PlannerMetricsView: View {
     @Query private var budgets: [ImpulseBudgetVersion]
     @Query(sort: \SleepScheduleVersion.effectiveFrom, order: .reverse) private var schedules: [SleepScheduleVersion]
     @Query(filter: #Predicate<Task> { $0.impulseTypeID != nil }) private var impulseTasks: [Task]
+    @Query private var foodEntries: [FoodEntry]
 
     @State private var month = ImpulseRules.monthStart(for: Date())
 
@@ -116,9 +117,9 @@ struct PlannerMetricsView: View {
                 metric("Days with a workout or rest day", percent(Double(planned.count + rest), of: Double(elapsedDays.count)))
             }
 
-            Section("Meals") {
-                let full = elapsedDays.filter { d in (days.first { $0.date == d }?.mealsPlanned ?? 0) == 3 }
-                metric("All 3 meals planned", "\(percent(Double(full.count), of: Double(elapsedDays.count))) of days")
+            Section("Food") {
+                let full = elapsedDays.filter { FoodRules.isDayPlanned($0, entries: foodEntries) }
+                metric("Every food break planned", "\(percent(Double(full.count), of: Double(elapsedDays.count))) of days")
             }
         }
         .navigationTitle("Planner Metrics")
@@ -193,7 +194,7 @@ struct PlannerMetricsView: View {
     }
 
     private func isPlanned(_ day: Date) -> Bool {
-        PlannerRules.dayStatus(for: day, days: days, goals: goals, impulseTasks: impulseTasks).isPlanned
+        PlannerRules.dayStatus(for: day, days: days, goals: goals, impulseTasks: impulseTasks, food: foodEntries).isPlanned
     }
 
     /// Consecutive planned days ending today (or yesterday while today is still pending).

@@ -17,8 +17,11 @@ struct DayPlanDetailView: View {
     @Query private var schedules: [SleepScheduleVersion]
     @Query(filter: #Predicate<Task> { $0.impulseTypeID != nil }) private var impulseTasks: [Task]
     @Query(sort: \IfThenPlan.sortOrder) private var ifThenPlans: [IfThenPlan]
+    @Query private var foodEntries: [FoodEntry]
+    @Query private var foodBreaks: [FoodBreak]
 
     @State private var draft = Draft()
+    @State private var showFoodPlan = false
 
     init(date: Date, startInEdit: Bool) {
         self.date = date.startOfDay
@@ -27,7 +30,7 @@ struct DayPlanDetailView: View {
 
     private var planner: PlannerDay? { days.first { $0.date == date } }
     private var status: PlannerDayStatus {
-        PlannerRules.dayStatus(for: date, days: days, goals: goals, impulseTasks: impulseTasks)
+        PlannerRules.dayStatus(for: date, days: days, goals: goals, impulseTasks: impulseTasks, food: foodEntries)
     }
     private var activeTypes: [ImpulseType] { types.filter { !$0.isArchived } }
 
@@ -58,6 +61,9 @@ struct DayPlanDetailView: View {
                 }
             }
             .onAppear(perform: loadDraft)
+            .sheet(isPresented: $showFoodPlan) {
+                NavigationStack { FoodPlanEditorView(date: date) }
+            }
         }
     }
 
@@ -105,11 +111,7 @@ struct DayPlanDetailView: View {
             }
         }
 
-        Section("Meals") {
-            readMeal("Breakfast", planner?.breakfast, planner?.breakfastTime, planner?.breakfastEaten)
-            readMeal("Lunch", planner?.lunch, planner?.lunchTime, planner?.lunchEaten)
-            readMeal("Dinner", planner?.dinner, planner?.dinnerTime, planner?.dinnerEaten)
-        }
+        foodSection
 
         Section("Workout") {
             if planner?.restDay == true {
@@ -165,13 +167,28 @@ struct DayPlanDetailView: View {
         }
     }
 
-    private func readMeal(_ name: String, _ text: String?, _ time: Date?, _ eaten: Bool?) -> some View {
-        HStack {
-            Text(name)
-            Spacer()
-            Text((text ?? "").isEmpty ? "Not planned" : text!).foregroundStyle(.secondary)
-            if let time { Text(time.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
-            if eaten == true { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+    /// The day's food breaks from the Food module (read-only here; edited in the food plan).
+    private var foodSection: some View {
+        Section {
+            ForEach(FoodRules.slots(on: date, entries: foodEntries, breaks: foodBreaks)) { slot in
+                HStack {
+                    Image(systemName: slot.icon).foregroundStyle(.teal).frame(width: 20)
+                    Text(slot.name)
+                    Spacer()
+                    Text(slot.food.isEmpty ? "Not planned" : slot.food).foregroundStyle(.secondary).lineLimit(1)
+                    Text(slot.time.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                    if slot.status == .eaten { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                    if slot.status == .swapped { Image(systemName: "arrow.triangle.swap").foregroundStyle(.red) }
+                }
+            }
+            let unplanned = FoodRules.entries(on: date, foodEntries).filter(\.isUnplanned)
+            if !unplanned.isEmpty {
+                Label("\(unplanned.count) unplanned", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.red)
+            }
+            Button { showFoodPlan = true } label: { Label("Plan food", systemImage: "square.and.pencil") }
+        } header: {
+            Text("Food")
         }
     }
 
@@ -182,7 +199,7 @@ struct DayPlanDetailView: View {
         if !status.isPlanned {
             Section {
                 checklistRow("3 or more goals", done: draft.goals.filter { !$0.title.trimmed.isEmpty }.count >= 3)
-                checklistRow("Breakfast, lunch and dinner", done: draft.meals.allSatisfy { !$0.text.trimmed.isEmpty })
+                checklistRow("Food planned for every break", done: status.mealsDone)
                 checklistRow("Workout or rest day", done: draft.restDay || !draft.workout.trimmed.isEmpty)
                 checklistRow("Impulse time or no-impulse day", done: draft.noImpulseDay || draft.impulses.contains { !$0.deleted })
             } header: {
@@ -222,21 +239,7 @@ struct DayPlanDetailView: View {
             }
         }
 
-        Section("Meals") {
-            ForEach($draft.meals) { $meal in
-                VStack(alignment: .leading) {
-                    HStack {
-                        Text(meal.name).frame(width: 80, alignment: .leading)
-                        TextField("What I'll eat", text: $meal.text)
-                        Toggle("Eaten", isOn: $meal.eaten).labelsHidden()
-                    }
-                    Toggle("Set a time", isOn: $meal.hasTime).font(.caption)
-                    if meal.hasTime {
-                        DatePicker("Time", selection: $meal.time, displayedComponents: .hourAndMinute).font(.caption)
-                    }
-                }
-            }
-        }
+        foodSection
 
         Section("Workout") {
             Toggle("Rest day", isOn: $draft.restDay)
@@ -330,11 +333,6 @@ struct DayPlanDetailView: View {
         d.goals = status.dayGoals.map { GoalDraft(existing: $0) }
         while d.goals.count < 3 { d.goals.append(GoalDraft()) }
         let p = planner
-        d.meals = [
-            MealDraft(name: "Breakfast", text: p?.breakfast ?? "", time: p?.breakfastTime, eaten: p?.breakfastEaten ?? false, day: date, defaultHour: 8),
-            MealDraft(name: "Lunch", text: p?.lunch ?? "", time: p?.lunchTime, eaten: p?.lunchEaten ?? false, day: date, defaultHour: 13),
-            MealDraft(name: "Dinner", text: p?.dinner ?? "", time: p?.dinnerTime, eaten: p?.dinnerEaten ?? false, day: date, defaultHour: 19)
-        ]
         d.noImpulseDay = p?.noImpulseDay ?? false
         d.restDay = p?.restDay ?? false
         d.workout = p?.workout ?? ""
@@ -371,11 +369,7 @@ struct DayPlanDetailView: View {
             }
         }
 
-        // Meals
-        let m = draft.meals
-        p.breakfast = m[0].text.trimmed; p.breakfastTime = m[0].hasTime ? m[0].time : nil; p.breakfastEaten = m[0].eaten
-        p.lunch = m[1].text.trimmed; p.lunchTime = m[1].hasTime ? m[1].time : nil; p.lunchEaten = m[1].eaten
-        p.dinner = m[2].text.trimmed; p.dinnerTime = m[2].hasTime ? m[2].time : nil; p.dinnerEaten = m[2].eaten
+        // Meals live in the Food module now (saved from its plan editor).
 
         p.noImpulseDay = draft.noImpulseDay
 
@@ -444,7 +438,6 @@ struct DayPlanDetailView: View {
 
 private struct Draft {
     var goals: [GoalDraft] = []
-    var meals: [MealDraft] = []
     var noImpulseDay = false
     var restDay = false
     var workout = ""
@@ -472,23 +465,6 @@ private struct GoalDraft: Identifiable {
         title = existing.title
         done = existing.isDone
         parentID = existing.parentGoalID
-    }
-}
-
-private struct MealDraft: Identifiable {
-    let id = UUID()
-    let name: String
-    var text: String
-    var hasTime: Bool
-    var time: Date
-    var eaten: Bool
-
-    init(name: String, text: String, time: Date?, eaten: Bool, day: Date, defaultHour: Int) {
-        self.name = name
-        self.text = text
-        self.hasTime = time != nil
-        self.time = time ?? Calendar.current.date(byAdding: .hour, value: defaultHour, to: day)!
-        self.eaten = eaten
     }
 }
 

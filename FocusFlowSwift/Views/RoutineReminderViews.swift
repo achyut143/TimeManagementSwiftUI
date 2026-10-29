@@ -325,6 +325,8 @@ struct RoutineTimerPill: View {
     // Position as a fraction of the screen, so it survives rotation.
     @AppStorage("standReminder.pillX") private var pillX: Double = 0.82
     @AppStorage("standReminder.pillY") private var pillY: Double = 0.72
+    /// Last custom snooze length, offered as a quick button.
+    @AppStorage("routine.lastSnoozeMinutes") private var lastSnooze = 20
 
     @State private var now = Date()
     @State private var expanded = false
@@ -384,6 +386,7 @@ struct RoutineTimerPill: View {
                 .font(.caption)
                 Text("Tap to acknowledge · \(format(status.secondsRemaining))")
                     .font(.caption2.monospacedDigit())
+                snoozeRow(stepName: step.name, from: now, onDark: true)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: step.icon)
@@ -397,11 +400,20 @@ struct RoutineTimerPill: View {
                 }
                 .font(.caption)
 
+                if let snooze = RoutineReminder.activeSnooze(at: now) {
+                    Text("\(snooze.step) snoozed until \(snooze.until.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 if expanded {
                     let next = RoutineReminder.nextStep(after: status.index)
                     Text("Next: \(next.name) \(next.minutes) min")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+
+                    snoozeRow(stepName: next.name,
+                              from: now.addingTimeInterval(Double(status.secondsRemaining)), onDark: false)
 
                     HStack(spacing: 8) {
                         Button("\(next.name) now") {
@@ -450,6 +462,48 @@ struct RoutineTimerPill: View {
         }
         .animation(.snappy, value: pendingAck)
         .animation(.snappy, value: step.id)
+    }
+
+    // MARK: Snooze
+
+    /// Quick snooze lengths plus "Custom". Snoozing delays the named step
+    /// from `from` (now, or when it was due to start).
+    private func snoozeRow(stepName: String, from: Date, onDark: Bool) -> some View {
+        let quick = Array(Set([5, 10, lastSnooze])).sorted()
+        return HStack(spacing: 6) {
+            Image(systemName: "zzz").font(.caption2)
+            ForEach(quick, id: \.self) { minutes in
+                Button("\(minutes)m") { snooze(minutes) }
+                    .font(.caption2.bold())
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(onDark ? .white : .gray)
+            }
+            Button("Custom") {
+                expanded = false
+                FoodPresenter.present { close in
+                    NavigationStack {
+                        RoutineSnoozeSheet(stepName: stepName, from: from, initial: lastSnooze) { minutes in
+                            lastSnooze = minutes
+                            snooze(minutes)
+                            close()
+                        } onCancel: { close() }
+                    }
+                }
+            }
+            .font(.caption2.bold())
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .tint(onDark ? .white : .gray)
+        }
+        .accessibilityLabel("Snooze \(stepName)")
+    }
+
+    private func snooze(_ minutes: Int) {
+        RoutineReminder.snooze(minutes: minutes)
+        stopNag()
+        expanded = false
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
     // MARK: Acknowledgment nag
@@ -515,5 +569,40 @@ final class OverlayHitRegions {
     func contains(_ point: CGPoint) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return rects.values.contains { $0.insetBy(dx: -6, dy: -6).contains(point) }
+    }
+}
+
+// MARK: - Custom snooze
+
+/// Pick any snooze length for the next routine step.
+struct RoutineSnoozeSheet: View {
+    let stepName: String
+    /// When the step would start without the snooze.
+    let from: Date
+    let initial: Int
+    let onSnooze: (Int) -> Void
+    let onCancel: () -> Void
+
+    @State private var minutes = 20
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Minutes", selection: $minutes) {
+                    ForEach(1...180, id: \.self) { Text("\($0) min").tag($0) }
+                }
+                .pickerStyle(.wheel)
+            } footer: {
+                Text("\(stepName) will start at \(from.addingTimeInterval(Double(minutes) * 60).formatted(date: .omitted, time: .shortened)). Later steps move back by the same amount.")
+            }
+        }
+        .navigationTitle("Snooze \(stepName)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+            ToolbarItem(placement: .confirmationAction) { Button("Snooze") { onSnooze(minutes) } }
+        }
+        .onAppear { minutes = initial }
+        .presentationDetents([.medium])
     }
 }

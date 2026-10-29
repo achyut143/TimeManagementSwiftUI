@@ -64,6 +64,9 @@ final class TabataWorkout {
     /// WorkoutPicture id per cycle as a string; "" means no picture.
     var cycleImageIDs: [String] = []
     var createdAt: Date = Date()
+    /// Folder it's in; nil = not in a folder. (Added later; older Tabatas have none.)
+    var folderID: UUID? = nil
+    var tags: [String] = []
 
     init(name: String) {
         self.id = UUID()
@@ -287,6 +290,9 @@ final class RepWorkout {
     /// Optional rest between rounds and sets; 0 means none.
     var restBetweenSetsSeconds: Int = 0
     var createdAt: Date = Date()
+    /// Folder it's in; nil = not in a folder. (Added later; older workouts have none.)
+    var folderID: UUID? = nil
+    var tags: [String] = []
 
     init(name: String) {
         self.id = UUID()

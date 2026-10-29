@@ -15,11 +15,17 @@ struct RepWorkoutEditorView: View {
     @State private var restSeconds: Int
     @State private var editMode: EditMode = .inactive
     @State private var showReorderSets = false
+    @State private var folderID: UUID?
+    @State private var tags: [String]
 
     /// `prefill` starts a new workout from given values (e.g. built by AI).
-    init(workout: RepWorkout?, prefill: (name: String, sets: [RepSet], restSeconds: Int)? = nil, onSaved: (() -> Void)? = nil) {
+    /// `folderID` puts a new workout straight into a folder.
+    init(workout: RepWorkout?, prefill: (name: String, sets: [RepSet], restSeconds: Int)? = nil,
+         folderID: UUID? = nil, tags: [String] = [], onSaved: (() -> Void)? = nil) {
         self.workout = workout
         self.onSaved = onSaved
+        _folderID = State(initialValue: workout?.folderID ?? folderID)
+        _tags = State(initialValue: workout?.tags ?? tags)
         _name = State(initialValue: workout?.name ?? prefill?.name ?? "")
         // Older timed exercises (reps = 30, note "30 seconds") become explicit seconds.
         let startSets = (workout?.sets ?? prefill?.sets ?? [RepSet(exercises: [RepExercise()])]).map { set in
@@ -48,6 +54,8 @@ struct RepWorkoutEditorView: View {
                 } footer: {
                     Text("Rest runs after each round of a set. You can always skip it.")
                 }
+
+                WorkoutFolderAndTagsSection(folderID: $folderID, tags: $tags)
 
                 ForEach($sets) { $set in
                     let setNumber = (sets.firstIndex(where: { $0.id == set.id }) ?? 0) + 1
@@ -145,6 +153,8 @@ struct RepWorkoutEditorView: View {
         target.name = name.trimmingCharacters(in: .whitespaces)
         target.sets = cleaned
         target.restBetweenSetsSeconds = restSeconds
+        target.folderID = folderID
+        target.tags = WorkoutTags.clean(tags)
         try? modelContext.save()
         WorkoutPictureStore.removeUnused(context: modelContext)
         onSaved?()
