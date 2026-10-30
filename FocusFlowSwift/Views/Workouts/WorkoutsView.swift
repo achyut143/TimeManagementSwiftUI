@@ -13,6 +13,7 @@ struct WorkoutsView: View {
     @Query(sort: \RepWorkout.createdAt, order: .reverse) private var repWorkouts: [RepWorkout]
     @Query(sort: \WorkoutSession.startedAt, order: .reverse) private var sessions: [WorkoutSession]
     @Query(sort: \WorkoutFolder.name) private var folders: [WorkoutFolder]
+    @Query private var guides: [ExerciseGuide]
     @AppStorage("workout.lastTab") private var sectionRaw = WorkoutTab.tabata.rawValue
 
     @State private var editingTabata: TabataWorkout?
@@ -169,7 +170,7 @@ struct WorkoutsView: View {
         NavigationLink {
             WorkoutFolderView(folder: folder)
         } label: {
-            WorkoutFolderRow(folder: folder, items: allItems, folders: folders, showPath: filter.isActive)
+            WorkoutFolderRow(folder: folder, items: allItems, folders: folders, showPath: filter.isActive, guides: guides)
         }
         .contextMenu {
             Button("Edit or move folder", systemImage: "pencil") { editingFolder = folder }
@@ -181,7 +182,7 @@ struct WorkoutsView: View {
         NavigationLink {
             WorkoutItemDetail(item: item)
         } label: {
-            WorkoutItemRow(item: item, folders: folders)
+            WorkoutItemRow(item: item, folders: folders, guides: guides)
         }
         .contextMenu {
             Button("Edit", systemImage: "pencil") { edit(item) }
@@ -318,8 +319,10 @@ private struct HistoryRow: View {
 
 struct TabataDetailView: View {
     @Bindable var workout: TabataWorkout
+    @Query private var folders: [WorkoutFolder]
     @State private var running = false
     @State private var editing = false
+    @State private var showGuides = false
 
     var body: some View {
         let draft = workout.draft
@@ -346,6 +349,11 @@ struct TabataDetailView: View {
                             Text(part.exerciseName(cycle: i))
                             Spacer()
                             WorkoutPictureThumb(imageID: part.imageID(cycle: i))
+                            ExerciseGuideButton(exerciseName: part.exerciseName(cycle: i),
+                                                guideContext: ExerciseGuideContext.make(workout, folders: folders),
+                                                tint: .accentColor)
+                                .buttonStyle(.borderless)
+                                .font(.body)
                         }
                     }
                 }
@@ -356,7 +364,12 @@ struct TabataDetailView: View {
             StartButton { running = true }
         }
         .toolbar {
+            Button { showGuides = true } label: { Image(systemName: "book") }
+                .accessibilityLabel("How to do these exercises")
             Button("Edit") { editing = true }
+        }
+        .sheet(isPresented: $showGuides) {
+            WorkoutGuideListView(guideContext: ExerciseGuideContext.make(workout, folders: folders))
         }
         .sheet(isPresented: $editing) { TabataEditorView(workout: workout) }
         .fullScreenCover(isPresented: $running) {
@@ -367,6 +380,8 @@ struct TabataDetailView: View {
 
 struct RepWorkoutDetailView: View {
     @Bindable var workout: RepWorkout
+    @Query private var folders: [WorkoutFolder]
+    @State private var showGuides = false
     @Environment(\.modelContext) private var modelContext
     @State private var lookup: RepHistoryLookup?
     @AppStorage("workout.weightUnit") private var weightUnit = "lb"
@@ -440,7 +455,12 @@ struct RepWorkoutDetailView: View {
             }
         }
         .toolbar {
+            Button { showGuides = true } label: { Image(systemName: "book") }
+                .accessibilityLabel("How to do these exercises")
             Button("Edit") { editing = true }
+        }
+        .sheet(isPresented: $showGuides) {
+            WorkoutGuideListView(guideContext: ExerciseGuideContext.make(workout, folders: folders))
         }
         .confirmationDialog("Start over?", isPresented: $confirmStartOver, titleVisibility: .visible) {
             Button("Start over", role: .destructive) {

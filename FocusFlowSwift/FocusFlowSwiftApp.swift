@@ -142,7 +142,7 @@ struct FocusFlowSwiftApp: App {
             TabataWorkout.self, RepWorkout.self, WorkoutSession.self, WorkoutPicture.self, WorkoutPlanEntry.self,
             VocabWord.self, VocabTestResult.self,
             FoodBreak.self, FoodEntry.self, FoodCraving.self,
-            WorkoutFolder.self
+            WorkoutFolder.self, ExerciseGuide.self
         ]
         // Scheduled activities, alerts, the old Plan view and Start with a Why
         // were removed — their tables are dropped by SwiftData's automatic

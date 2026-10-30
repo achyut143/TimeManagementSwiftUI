@@ -136,6 +136,14 @@ enum WorkoutItem: Identifiable, Hashable {
         }
     }
 
+    /// Each exercise once, in order (for how-to guides).
+    var exerciseNames: [String] {
+        switch self {
+        case .tabata(let w): return w.exerciseNames
+        case .reps(let w): return w.exerciseNames
+        }
+    }
+
     func setTags(_ tags: [String]) {
         switch self {
         case .tabata(let w): w.tags = WorkoutTags.clean(tags)

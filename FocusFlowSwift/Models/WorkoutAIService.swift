@@ -93,6 +93,158 @@ struct WorkoutAIService {
     private let apiKey: String
     private let baseURL = "https://api.openai.com/v1/chat/completions"
 
+    enum NamedKind: String, CaseIterable, Identifiable {
+        case auto = "Auto", reps = "Reps", tabata = "Tabata"
+        var id: String { rawValue }
+    }
+
+    /// What came back with a workout written from a name.
+    struct WrittenInfo: Equatable {
+        /// The AI's warning when it wasn't sure of the exact routine.
+        var note: String?
+        /// Web pages it used, when it searched.
+        var sources: [String] = []
+        var usedWeb = false
+        /// Web search was asked for but wasn't available.
+        var webFailed = false
+
+        var hasSomethingToShow: Bool { note != nil || !sources.isEmpty || usedWeb || webFailed }
+    }
+
+    /// Step 1 of "create from a name": the AI writes the named workout (e.g.
+    /// "Body Beast Total Body") in the plain-text format this app reads.
+    /// With `useWeb`, it looks the program up on the web first (OpenAI's
+    /// search model); if that isn't available it falls back to what it knows.
+    func writeWorkout(named name: String, kind: NamedKind, details: String, weightUnit: String, useWeb: Bool)
+        async throws -> (text: String, info: WrittenInfo) {
+        guard !apiKey.isEmpty else { throw WorkoutAIError.missingKey }
+
+        let kindRule: String
+        switch kind {
+        case .auto: kindRule = "Choose the type the program really uses: weight / rep training as REP WORKOUT, timed intervals as TABATA."
+        case .reps: kindRule = "Write it as a REP WORKOUT."
+        case .tabata: kindRule = "Write it as a TABATA (timed intervals)."
+        }
+        let systemPrompt = """
+        You are an expert fitness coach who knows commercial home workout programs move by move \
+        (Body Beast, Insanity, Insanity Max:30, P90X, P90X3, T25, 21 Day Fix, LIIFT4, Les Mills and others), \
+        as well as classic gym and HIIT workouts.
+        The user names a workout. Write that exact workout so it can be run in a workout app.
+
+        Accuracy rules:
+        - If it's a known program's workout, reproduce the program's real routine: its exercises, their order, \
+        sets, rep schemes (e.g. Body Beast single, super, giant, progressive 15-12-8 and force sets), \
+        or its interval timing and rounds. Use the program's own exercise names.
+        - Don't invent a routine and present it as the real one. If you don't know the workout exactly, \
+        write the closest faithful version and put ONE line at the very top starting with "NOTE:" that says \
+        what you weren't sure of. If you are confident, write no NOTE line.
+        - Leave out weights (the person picks their own). Weights, if any, are in \(weightUnit).
+        - \(kindRule)
+        - A program day with a warm up and cool down can be written as one Tabata with several parts, \
+        or the warm up as its own workout, as the format allows.
+        - If you looked anything up, put no links or citations inside the workout text. Instead add ONE line \
+        at the very end starting with "SOURCES:" followed by the page URLs separated by spaces.
+
+        Follow this format exactly (it is what the app reads):
+
+        \(Self.formatInstructions)
+        """
+        var userMessage = "Workout: \(name)"
+        let extra = details.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !extra.isEmpty { userMessage += "\nDetails: \(extra)" }
+
+        var info = WrittenInfo()
+        var content: String
+        if useWeb {
+            do {
+                content = try await send(systemPrompt, userMessage, web: true)
+                info.usedWeb = true
+            } catch WorkoutAIError.missingKey {
+                throw WorkoutAIError.missingKey
+            } catch {
+                // Search model not available on this account: use what the AI knows.
+                content = try await send(systemPrompt, userMessage, web: false)
+                info.webFailed = true
+            }
+        } else {
+            content = try await send(systemPrompt, userMessage, web: false)
+        }
+        // Collect any links the search model put in, then strip them out.
+        let urlPattern = #"https?://[^\s)\]]+"#
+        if let regex = try? NSRegularExpression(pattern: urlPattern) {
+            let range = NSRange(content.startIndex..., in: content)
+            for match in regex.matches(in: content, range: range) {
+                if let r = Range(match.range, in: content) {
+                    let url = String(content[r]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;"))
+                    if !info.sources.contains(url) { info.sources.append(url) }
+                }
+            }
+        }
+        // "[text](url)" → "text"; drop bare "(url)" citations.
+        content = content.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+        content = content.replacingOccurrences(of: #"\(\s*https?://[^)]+\)"#, with: "", options: .regularExpression)
+
+        // Pull out the NOTE and SOURCES lines; the rest is the workout text.
+        let lines = content.components(separatedBy: "\n").filter { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.uppercased().hasPrefix("NOTE:") {
+                info.note = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                return false
+            }
+            if t.uppercased().hasPrefix("SOURCES:") { return false }
+            return true
+        }
+        let text = lines.joined(separator: "\n")
+            .replacingOccurrences(of: "```", with: "")
+            .replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw WorkoutAIError.badFormat }
+        return (text, info)
+    }
+
+    /// One chat request. `web` uses OpenAI's search model, which looks
+    /// things up before answering (it doesn't take a temperature).
+    private func send(_ system: String, _ user: String, web: Bool) async throws -> String {
+        var body: [String: Any] = [
+            "messages": [
+                ["role": "system", "content": system],
+                ["role": "user", "content": user]
+            ],
+            "max_tokens": 3000
+        ]
+        if web {
+            body["model"] = "gpt-4o-search-preview"
+            body["web_search_options"] = [String: Any]()
+        } else {
+            body["model"] = "gpt-4o"
+            body["temperature"] = 0.2
+        }
+        guard let url = URL(string: baseURL) else { throw WorkoutAIError.noResponse }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 150
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let text = String(data: data, encoding: .utf8) ?? "no body"
+            throw NSError(domain: "WorkoutAI", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode): \(text)"])
+        }
+        struct Choice: Decodable {
+            struct Message: Decodable { let content: String? }
+            let message: Message
+        }
+        struct Response: Decodable { let choices: [Choice] }
+        guard let content = try JSONDecoder().decode(Response.self, from: data).choices.first?.message.content,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw WorkoutAIError.noResponse
+        }
+        return content
+    }
+
     /// Uses the app's OpenAI key unless one is passed (for testing).
     init(apiKey: String? = nil) {
         self.apiKey = apiKey ?? Bundle.main.infoDictionary?["OPENAI_API_KEY"] as? String ?? ""

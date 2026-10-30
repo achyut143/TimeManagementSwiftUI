@@ -23,6 +23,7 @@ struct RepRunView: View {
     /// What was done last time for each step, by RepStep.key.
     @State private var lastTime: [String: RepLogEntry] = [:]
     @State private var images: [UUID: UIImage] = [:]
+    @State private var guideContext: ExerciseGuideContext?
 
     @State private var firstStarted: Date?
     @State private var activeBefore: Double = 0
@@ -67,7 +68,10 @@ struct RepRunView: View {
                 runner
             }
         }
-        .onAppear(perform: start)
+        .onAppear {
+            start()
+            guideContext = ExerciseGuideContext.load(workoutID: workout.id, kind: .reps, context: modelContext)
+        }
         .onDisappear {
             if result == nil {
                 saveProgress()
@@ -116,6 +120,7 @@ struct RepRunView: View {
                 .accessibilityLabel("Workout options")
                 Text(workout.name).font(.headline).lineLimit(1)
                 Spacer()
+                ExerciseGuideButton(exerciseName: step.exercise.name, guideContext: guideContext, tint: .accentColor)
                 WorkoutSoundToggles(showBeeps: true)
             }
 

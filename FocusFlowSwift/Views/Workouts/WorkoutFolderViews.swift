@@ -61,6 +61,7 @@ struct WorkoutItemRow: View {
     let item: WorkoutItem
     let folders: [WorkoutFolder]
     var showFolder = true
+    var guides: [ExerciseGuide] = []
 
     var body: some View {
         HStack(spacing: 12) {
@@ -72,7 +73,10 @@ struct WorkoutItemRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.name).font(.headline)
+                HStack(spacing: 6) {
+                    Text(item.name).font(.headline)
+                    GuideCoverageBadge(coverage: GuideCoverage.of(item, folders: folders, guides: guides))
+                }
                 Text(item.summary).font(.subheadline).foregroundStyle(.secondary)
                 if showFolder, let folder = item.folder(in: folders) {
                     HStack(spacing: 3) {
@@ -95,6 +99,7 @@ struct WorkoutFolderRow: View {
     let folders: [WorkoutFolder]
     /// Show where the folder lives (for search results).
     var showPath = false
+    var guides: [ExerciseGuide] = []
 
     var body: some View {
         // Counts include everything in subfolders too.
@@ -111,7 +116,10 @@ struct WorkoutFolderRow: View {
                 .background(Color.orange.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 3) {
-                Text(folder.name).font(.headline)
+                HStack(spacing: 6) {
+                    Text(folder.name).font(.headline)
+                    GuideCoverageBadge(coverage: GuideCoverage.of(folder, items: items, folders: folders, guides: guides))
+                }
                 if showPath, folder.parentID != nil {
                     Text(WorkoutFolderTree.path(folder, in: folders)).font(.caption).foregroundStyle(.secondary)
                 }
@@ -521,6 +529,7 @@ struct WorkoutFolderView: View {
     @Query(sort: \TabataWorkout.createdAt, order: .reverse) private var tabatas: [TabataWorkout]
     @Query(sort: \RepWorkout.createdAt, order: .reverse) private var reps: [RepWorkout]
     @Query private var folders: [WorkoutFolder]
+    @Query private var guides: [ExerciseGuide]
 
     @State private var search = ""
     @State private var tagFilter: Set<String> = []
@@ -594,7 +603,7 @@ struct WorkoutFolderView: View {
                             NavigationLink {
                                 WorkoutFolderView(folder: sub)
                             } label: {
-                                WorkoutFolderRow(folder: sub, items: allItems, folders: folders, showPath: filter.isActive)
+                                WorkoutFolderRow(folder: sub, items: allItems, folders: folders, showPath: filter.isActive, guides: guides)
                             }
                             .contextMenu {
                                 Button("Edit or move folder", systemImage: "pencil") { editingSubfolder = sub }
@@ -671,7 +680,7 @@ struct WorkoutFolderView: View {
         NavigationLink {
             WorkoutItemDetail(item: item)
         } label: {
-            WorkoutItemRow(item: item, folders: folders, showFolder: item.folderID != folder.id)
+            WorkoutItemRow(item: item, folders: folders, showFolder: item.folderID != folder.id, guides: guides)
         }
         .contextMenu {
             Button("Edit", systemImage: "pencil") { edit(item) }
@@ -709,4 +718,27 @@ struct WorkoutItemDetail: View {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// 📖 badge: green when every exercise has a saved how-to guide,
+/// orange with a count when only some do, nothing when none do.
+struct GuideCoverageBadge: View {
+    let coverage: GuideCoverage
+
+    var body: some View {
+        if coverage.isComplete {
+            Image(systemName: "book.closed.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+                .accessibilityLabel("How-to guides saved for every exercise")
+        } else if !coverage.isEmpty {
+            HStack(spacing: 2) {
+                Image(systemName: "book.closed")
+                Text("\(coverage.saved)/\(coverage.total)").monospacedDigit()
+            }
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .accessibilityLabel("How-to guides saved for \(coverage.saved) of \(coverage.total) exercises")
+        }
+    }
 }

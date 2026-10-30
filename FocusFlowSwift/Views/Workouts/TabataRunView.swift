@@ -8,6 +8,7 @@ struct TabataRunView: View {
     @State private var showStopConfirm = false
     @State private var result: (completed: Bool, seconds: Int)?
     @State private var images: [UUID: UIImage] = [:]
+    @State private var guideContext: ExerciseGuideContext?
 
     let workoutID: UUID
     let name: String
@@ -36,6 +37,7 @@ struct TabataRunView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             images = WorkoutPictureStore.images(timer.intervals.map(\.imageID), context: modelContext)
+            guideContext = ExerciseGuideContext.load(workoutID: workoutID, kind: .tabata, context: modelContext)
             timer.onFinish = { finish(completed: true) }
             timer.start()
         }
@@ -54,6 +56,8 @@ struct TabataRunView: View {
                 HStack {
                     Text(name).font(.headline).lineLimit(1)
                     Spacer()
+                    // During prepare and rest this is the exercise coming next.
+                    ExerciseGuideButton(exerciseName: interval?.exercise ?? "", guideContext: guideContext, tint: .white)
                     WorkoutSoundToggles()
                 }
 

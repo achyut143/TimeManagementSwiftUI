@@ -315,7 +315,7 @@ struct VocabFlowLayout: Layout {
         for row in arrange(width: bounds.width, subviews: subviews) {
             var x = bounds.minX
             for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
+                let size = itemSize(subviews[index], maxWidth: bounds.width)
                 subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
@@ -325,10 +325,18 @@ struct VocabFlowLayout: Layout {
 
     private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
 
+    /// Natural size, but an item wider than the row gets the row's width
+    /// (so long text wraps onto more lines instead of being cut).
+    private func itemSize(_ view: LayoutSubview, maxWidth: CGFloat) -> CGSize {
+        let ideal = view.sizeThatFits(.unspecified)
+        guard maxWidth.isFinite, ideal.width > maxWidth else { return ideal }
+        return view.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+    }
+
     private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
         var rows: [Row] = [Row()]
         for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
+            let size = itemSize(subviews[index], maxWidth: width)
             let extra = rows[rows.count - 1].indices.isEmpty ? size.width : size.width + spacing
             if rows[rows.count - 1].width + extra > width, !rows[rows.count - 1].indices.isEmpty {
                 rows.append(Row())

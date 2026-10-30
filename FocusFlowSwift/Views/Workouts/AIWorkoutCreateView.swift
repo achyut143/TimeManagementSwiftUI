@@ -17,8 +17,23 @@ struct AIWorkoutCreateView: View {
     @State private var skipReason: String?
     @State private var partCount = 1
 
+    enum Mode: String, CaseIterable, Identifiable {
+        case name = "From a name", describe = "Paste a description"
+        var id: String { rawValue }
+    }
+    @AppStorage("workout.aiCreateMode") private var modeRaw = Mode.name.rawValue
+    @State private var workoutName = ""
+    @State private var namedKind: WorkoutAIService.NamedKind = .auto
+    @State private var details = ""
+    @State private var stage = ""
+    /// The AI's note and web sources when built from a name.
+    @State private var aiInfo: WorkoutAIService.WrittenInfo?
+    @AppStorage("workout.aiCreateUseWeb") private var useWeb = true
+
+    private var mode: Mode { Mode(rawValue: modeRaw) ?? .name }
+
     var body: some View {
-        if let results, results.count == 1 {
+        if let results, results.count == 1, !(aiInfo?.hasSomethingToShow ?? false) {
             // The editor's Save/Cancel close this whole sheet.
             switch results[0] {
             case .tabata(let draft):
@@ -27,7 +42,7 @@ struct AIWorkoutCreateView: View {
                 RepWorkoutEditorView(workout: nil, prefill: (name, sets, rest))
             }
         } else if let results {
-            AIWorkoutReviewView(results: results, parts: partCount, skippedParts: skippedParts, skipReason: skipReason)
+            AIWorkoutReviewView(results: results, parts: partCount, skippedParts: skippedParts, skipReason: skipReason, aiInfo: aiInfo)
         } else {
             input
         }
@@ -36,6 +51,16 @@ struct AIWorkoutCreateView: View {
     private var input: some View {
         NavigationStack {
             Form {
+                Section {
+                    Picker("Create", selection: $modeRaw) {
+                        ForEach(Mode.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if mode == .name {
+                    nameSections
+                } else {
                 Section {
                     TextEditor(text: $text)
                         .frame(minHeight: 220)
@@ -52,6 +77,13 @@ struct AIWorkoutCreateView: View {
                     Text("Workout description")
                 } footer: {
                     Text("Describe one workout or several, Tabata and rep workouts mixed. You can check each one before saving.\n\nTip: tap \"Copy format for AI\" and paste it into ChatGPT or Claude along with your workout plan. It will write the workouts in the format this app reads best.")
+                }
+                }
+
+                if isWorking && !stage.isEmpty {
+                    Section {
+                        HStack { ProgressView(); Text(stage).font(.subheadline) }
+                    }
                 }
 
                 if isWorking, let progress, progress.total > 1 {
@@ -80,11 +112,12 @@ struct AIWorkoutCreateView: View {
                     if isWorking {
                         ProgressView()
                     } else {
-                        Button("Create", action: create)
-                            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Create", action: mode == .name ? createFromName : create)
+                            .disabled((mode == .name ? workoutName : text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
+                    if mode == .describe {
                     Button {
                         UIPasteboard.general.string = WorkoutAIService.formatInstructions
                         withAnimation { showCopied = true }
@@ -103,6 +136,7 @@ struct AIWorkoutCreateView: View {
                         Label("Paste", systemImage: "doc.on.clipboard")
                             .labelStyle(.titleAndIcon)
                     }
+                    }
                 }
             }
             .disabled(isWorking)
@@ -117,8 +151,72 @@ struct AIWorkoutCreateView: View {
         """
     }
 
+    @ViewBuilder
+    private var nameSections: some View {
+        Section {
+            TextField("e.g. Body Beast Total Body", text: $workoutName)
+                .textInputAutocapitalization(.words)
+                .submitLabel(.go)
+                .onSubmit { if !workoutName.isEmpty { createFromName() } }
+            Picker("Type", selection: $namedKind) {
+                ForEach(WorkoutAIService.NamedKind.allCases) { Text($0.rawValue).tag($0) }
+            }
+            TextField("Anything else? (optional) e.g. beginner, no jumping", text: $details, axis: .vertical)
+            Toggle("Look it up on the web", isOn: $useWeb)
+        } header: {
+            Text("Workout or program day")
+        } footer: {
+            Text("Type a workout's name, like \"Body Beast Total Body\", \"Insanity Plyometric Cardio Circuit\" or \"P90X Chest and Back\". The AI writes it as a real rep or Tabata workout you can run. You check every exercise before saving.\n\nWith \"Look it up on the web\" on, the AI searches for the program's routine first and lists the pages it used. It tells you when it isn't sure, so compare it with the program if exact moves matter.")
+        }
+    }
+
+    /// Name → AI writes the workout as text → the usual reader builds it.
+    private func createFromName() {
+        errorMessage = nil
+        aiInfo = nil
+        isWorking = true
+        stage = useWeb ? "Looking up \(workoutName.trimmingCharacters(in: .whitespaces)) on the web…"
+                       : "Writing \(workoutName.trimmingCharacters(in: .whitespaces))…"
+        let web = useWeb
+        let name = workoutName.trimmingCharacters(in: .whitespaces)
+        let kind = namedKind
+        let extra = details
+        let unit = weightUnit
+        _Concurrency.Task {
+            do {
+                let written = try await WorkoutAIService().writeWorkout(named: name, kind: kind, details: extra,
+                                                                        weightUnit: unit, useWeb: web)
+                await MainActor.run {
+                    text = written.text
+                    aiInfo = written.info
+                    stage = "Building the workout…"
+                }
+                let built = try await WorkoutAIService().createWorkouts(from: written.text, weightUnit: unit) { done, total in
+                    progress = (done, total)
+                }
+                await MainActor.run {
+                    isWorking = false
+                    stage = ""
+                    progress = nil
+                    skippedParts = built.skippedParts
+                    skipReason = built.firstError
+                    partCount = built.parts
+                    results = built.workouts
+                }
+            } catch {
+                await MainActor.run {
+                    isWorking = false
+                    stage = ""
+                    progress = nil
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     private func create() {
         errorMessage = nil
+        aiInfo = nil
         isWorking = true
         let description = text
         let unit = weightUnit
@@ -167,9 +265,12 @@ private struct AIWorkoutReviewView: View {
     let parts: Int
     let skippedParts: Int
     let skipReason: String?
+    let aiInfo: WorkoutAIService.WrittenInfo?
 
-    init(results: [WorkoutAIService.Result], parts: Int = 1, skippedParts: Int = 0, skipReason: String? = nil) {
+    init(results: [WorkoutAIService.Result], parts: Int = 1, skippedParts: Int = 0, skipReason: String? = nil,
+         aiInfo: WorkoutAIService.WrittenInfo? = nil) {
         self.parts = parts
+        self.aiInfo = aiInfo
         _items = State(initialValue: results.map { Item(result: $0) })
         self.skippedParts = skippedParts
         self.skipReason = skipReason
@@ -180,6 +281,38 @@ private struct AIWorkoutReviewView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let aiInfo, aiInfo.hasSomethingToShow {
+                    Section {
+                        if let note = aiInfo.note {
+                            Label(note, systemImage: "questionmark.diamond.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                        }
+                        if aiInfo.webFailed {
+                            Label("Web search wasn't available, so this was written from what the AI already knows. Check it against the program.",
+                                  systemImage: "wifi.exclamationmark")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                        } else if aiInfo.usedWeb && aiInfo.sources.isEmpty {
+                            Label("Looked up on the web.", systemImage: "globe").font(.subheadline)
+                        }
+                        ForEach(aiInfo.sources, id: \.self) { source in
+                            if let url = URL(string: source) {
+                                Link(destination: url) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "link")
+                                        Text(url.host() ?? source).lineLimit(1)
+                                    }
+                                    .font(.subheadline)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text(aiInfo.sources.isEmpty ? "About this workout" : "Sources")
+                    } footer: {
+                        Text("Check the exercises, sets and reps before saving.")
+                    }
+                }
                 Section {
                     ForEach($items) { $item in
                         HStack(spacing: 12) {
