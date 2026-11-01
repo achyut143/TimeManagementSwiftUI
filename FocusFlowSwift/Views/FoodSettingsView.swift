@@ -78,7 +78,7 @@ struct FoodSettingsView: View {
                 Toggle("Notify at each break", isOn: $notify)
                 Toggle("Ask me to acknowledge each break", isOn: $acknowledge)
                 DatePicker("Remind me to plan tomorrow at", selection: Binding(
-                    get: { Calendar.current.date(byAdding: .minute, value: planReminder, to: Date().startOfDay)! },
+                    get: { Date().atClock(minutes: planReminder) },
                     set: {
                         let c = Calendar.current.dateComponents([.hour, .minute], from: $0)
                         planReminder = (c.hour ?? 21) * 60 + (c.minute ?? 0)
@@ -164,7 +164,7 @@ struct FoodBreakEditor: View {
             if let b = existing {
                 name = b.name
                 icon = b.icon
-                time = Calendar.current.date(byAdding: .minute, value: b.minutes, to: Date().startOfDay)!
+                time = Date().atClock(minutes: b.minutes)
                 weekdays = Set(b.weekdays)
             } else {
                 time = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!

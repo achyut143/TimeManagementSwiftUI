@@ -151,7 +151,7 @@ struct PlannerSettingsView: View {
     }
 
     private func date(for minutes: Int) -> Date {
-        Calendar.current.date(byAdding: .minute, value: minutes, to: Date().startOfDay)!
+        Date().atClock(minutes: minutes)
     }
 }
 

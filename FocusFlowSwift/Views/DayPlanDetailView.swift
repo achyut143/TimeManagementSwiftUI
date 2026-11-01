@@ -337,13 +337,13 @@ struct DayPlanDetailView: View {
         d.restDay = p?.restDay ?? false
         d.workout = p?.workout ?? ""
         d.hasWorkoutTime = p?.workoutTime != nil
-        d.workoutTime = p?.workoutTime ?? Calendar.current.date(byAdding: .hour, value: 7, to: date)!
+        d.workoutTime = p?.workoutTime ?? date.atClock(hour: 7)
         d.workoutDone = p?.workoutDone ?? false
         d.impulses = status.impulseTasks.map { ImpulseDraft(task: $0, day: date) }
         d.hasWake = p?.wakeActual != nil
-        d.wake = p?.wakeActual ?? Calendar.current.date(byAdding: .hour, value: 7, to: date)!
+        d.wake = p?.wakeActual ?? date.atClock(hour: 7)
         d.hasSleep = p?.sleepActual != nil
-        d.sleep = p?.sleepActual ?? Calendar.current.date(byAdding: .hour, value: 22, to: date)!
+        d.sleep = p?.sleepActual ?? date.atClock(hour: 22)
         draft = d
     }
 
@@ -425,7 +425,7 @@ struct DayPlanDetailView: View {
     private func place(_ time: Date, on day: Date) -> Date {
         let cal = Calendar.current
         let c = cal.dateComponents([.hour, .minute], from: time)
-        return cal.date(byAdding: DateComponents(hour: c.hour, minute: c.minute), to: day.startOfDay)!
+        return day.atClock(hour: c.hour ?? 0, minute: c.minute ?? 0)
     }
 
     static func hm(_ date: Date) -> String {
@@ -481,7 +481,7 @@ private struct ImpulseDraft: Identifiable {
 
     init(type: ImpulseType, day: Date) {
         typeID = type.id
-        start = Calendar.current.date(byAdding: .hour, value: 20, to: day)!
+        start = day.atClock(hour: 20)
         duration = 30
         actualEnd = start.addingTimeInterval(30 * 60)
     }
@@ -490,11 +490,11 @@ private struct ImpulseDraft: Identifiable {
         existing = task
         typeID = task.impulseTypeID ?? UUID()
         title = task.title
-        start = ImpulseRules.startDate(of: task) ?? Calendar.current.date(byAdding: .hour, value: 20, to: day)!
+        start = ImpulseRules.startDate(of: task) ?? day.atClock(hour: 20)
         duration = max(5, Int(ImpulseRules.scheduledMinutes(of: task)))
         hasActualEnd = task.actualEndTime != nil
         if let actual = task.actualEndTime, let mins = ImpulseRules.minutes(from: actual) {
-            actualEnd = Calendar.current.date(byAdding: .minute, value: mins, to: day)!
+            actualEnd = day.atClock(minutes: mins)
         } else {
             actualEnd = start.addingTimeInterval(Double(duration) * 60)
         }

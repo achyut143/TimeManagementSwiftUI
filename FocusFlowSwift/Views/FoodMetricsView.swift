@@ -15,6 +15,9 @@ struct FoodMetricsView: View {
     @State private var period: GoalPeriod = .week
     @State private var back = 0
     @State private var calorieView: CalorieView = .day
+    /// Bar tapped in the calorie charts (shows its number when labels are hidden).
+    @State private var selectedCalorieDate: Date?
+    @State private var selectedBalanceDate: Date?
 
     enum CalorieView: String, CaseIterable, Identifiable {
         case day = "Per day", week = "Per week"
@@ -35,6 +38,61 @@ struct FoodMetricsView: View {
         let total = list.reduce(0) { $0 + $1.eatenCalories }
         return [CalorieBar(start: start, kind: "Planned", kcal: total - cheat),
                 CalorieBar(start: start, kind: "Cheats", kcal: cheat)]
+    }
+
+    /// One period's calories against its target. Positive = excess, negative = deficit.
+    private struct BalanceBar: Identifiable {
+        let start: Date
+        let eaten: Double
+        let target: Double
+        var balance: Double { eaten - target }
+        var id: Date { start }
+    }
+
+    /// Days that have food logged, with their totals.
+    private func loggedDays(_ start: Date, _ end: Date) -> [(Date, Double)] {
+        let cal = Calendar.current
+        var result: [(Date, Double)] = []
+        var d = start
+        while d < end {
+            let kcal = FoodRules.entries(on: d, entries).reduce(0) { $0 + $1.eatenCalories }
+            if kcal > 0 { result.append((d, kcal)) }
+            d = cal.date(byAdding: .day, value: 1, to: d)!
+        }
+        return result
+    }
+
+    /// Bars to show, per day or per week, matching the calorie chart's choice.
+    /// Days with nothing logged are skipped so they don't count as a deficit;
+    /// a week's target counts only the days that were logged.
+    private var balanceBars: [BalanceBar] {
+        let target = Double(dailyCalories)
+        switch calorieView {
+        case .day:
+            guard let first = elapsedDays.first, let last = elapsedDays.last else { return [] }
+            return loggedDays(first, Calendar.current.date(byAdding: .day, value: 1, to: last)!)
+                .map { BalanceBar(start: $0.0, eaten: $0.1, target: target) }
+        case .week:
+            return weekStarts.compactMap { start in
+                let days = loggedDays(start, min(GoalPeriod.week.next(after: start), Date().startOfDay.addingTimeInterval(86_400)))
+                guard !days.isEmpty else { return nil }
+                return BalanceBar(start: start, eaten: days.map(\.1).reduce(0, +), target: target * Double(days.count))
+            }
+        }
+    }
+
+    /// The last 8 weeks, ending with the week this period ends in.
+    private var weekStarts: [Date] {
+        let last = GoalPeriod.week.start(for: min(Date(), windowEnd.addingTimeInterval(-1)))
+        return (0..<8).reversed().map { Calendar.current.date(byAdding: .weekOfYear, value: -$0, to: last)! }
+    }
+
+    /// "1,850", or "1.9k" when space is tight.
+    private static func kcalText(_ value: Double, compact: Bool, signed: Bool = false) -> String {
+        let sign = signed && value > 0 ? "+" : (value < 0 ? "−" : "")
+        let v = abs(value)
+        if compact && v >= 1000 { return sign + String(format: "%.1fk", v / 1000) }
+        return sign + Int(v.rounded()).formatted()
     }
 
     private static let periods: [GoalPeriod] = [.week, .month, .quarter]
@@ -181,6 +239,7 @@ struct FoodMetricsView: View {
             }
             .pickerStyle(.segmented)
             calorieChart
+            balanceChart
         }
     }
 
@@ -192,13 +251,11 @@ struct FoodMetricsView: View {
             // Each day of the selected period, up to today.
             let bars = elapsedDays.flatMap { calorieBars($0, cal.date(byAdding: .day, value: 1, to: $0)!) }
             chart(bars, unit: .day, target: Double(dailyCalories), targetLabel: "Daily target")
-            Text("Each day of this \(period.title.lowercased()). Red is calories from cheats.")
+            Text("Each day of this \(period.title.lowercased()). Red is calories from cheats. Tap a bar for its number.")
                 .font(.caption).foregroundStyle(.secondary)
         case .week:
             // The last 8 weeks, ending with the week this period ends in.
-            let last = GoalPeriod.week.start(for: min(Date(), windowEnd.addingTimeInterval(-1)))
-            let starts = (0..<8).reversed().map { cal.date(byAdding: .weekOfYear, value: -$0, to: last)! }
-            let bars = starts.flatMap { calorieBars($0, GoalPeriod.week.next(after: $0)) }
+            let bars = weekStarts.flatMap { calorieBars($0, GoalPeriod.week.next(after: $0)) }
             chart(bars, unit: .weekOfYear, target: Double(dailyCalories * 7), targetLabel: "Weekly target")
             Text("Total per week for the last 8 weeks. The newest week may still be in progress.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -206,10 +263,31 @@ struct FoodMetricsView: View {
     }
 
     private func chart(_ bars: [CalorieBar], unit: Calendar.Component, target: Double, targetLabel: String) -> some View {
-        Chart {
+        // Totals per bar (planned + cheats), for the numbers on top.
+        var totals: [Date: Double] = [:]
+        for bar in bars { totals[bar.start, default: 0] += bar.kcal }
+        let count = totals.count
+        let showLabels = count <= 31
+        let compact = count > 10
+        let selected = selectedCalorieDate.flatMap { date in
+            totals.keys.first { Calendar.current.isDate($0, equalTo: date, toGranularity: unit) }
+        }
+
+        return Chart {
             ForEach(bars) { bar in
                 BarMark(x: .value("Date", bar.start, unit: unit), y: .value("kcal", bar.kcal))
                     .foregroundStyle(by: .value("From", bar.kind))
+                    .opacity(selected == nil || selected == bar.start ? 1 : 0.4)
+                    // The cheats part sits on top, so its annotation lands above the whole bar.
+                    .annotation(position: .top, spacing: 2) {
+                        if bar.kind == "Cheats", let total = totals[bar.start], total > 0,
+                           showLabels || selected == bar.start {
+                            Text(Self.kcalText(total, compact: compact && selected != bar.start))
+                                .font(.system(size: compact ? 8 : 10, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .fixedSize()
+                        }
+                    }
             }
             RuleMark(y: .value(targetLabel, target))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
@@ -225,6 +303,80 @@ struct FoodMetricsView: View {
                 AxisValueLabel(format: unit == .day ? .dateTime.day() : .dateTime.month(.abbreviated).day())
             }
         }
+        .chartXSelection(value: $selectedCalorieDate)
+        .frame(height: 200)
+    }
+
+    // MARK: Excess / deficit
+
+    @ViewBuilder
+    private var balanceChart: some View {
+        let bars = balanceBars
+        let unit: Calendar.Component = calorieView == .day ? .day : .weekOfYear
+        let net = bars.map(\.balance).reduce(0, +)
+        let excessCount = bars.filter { $0.balance > 0 }.count
+        let deficitCount = bars.filter { $0.balance < 0 }.count
+        let what = calorieView == .day ? "days" : "weeks"
+
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Excess / deficit").font(.subheadline.weight(.semibold))
+            if bars.isEmpty {
+                Text("Log some food to see how you compare with your target.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Text("Net").foregroundStyle(.secondary)
+                    Text("\(Self.kcalText(net, compact: false, signed: true)) kcal")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(net > 0 ? .red : .green)
+                    Spacer()
+                    Text("\(excessCount) over · \(deficitCount) under").foregroundStyle(.secondary)
+                }
+                .font(.caption)
+                balancePlot(bars, unit: unit)
+            }
+        }
+        .padding(.vertical, 4)
+
+        if !bars.isEmpty {
+            Text("Red is over your target, green is under. Only \(what) with food logged count\(calorieView == .week ? ", and each week's target covers just those days" : "").")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func balancePlot(_ bars: [BalanceBar], unit: Calendar.Component) -> some View {
+        let showLabels = bars.count <= 31
+        let compact = bars.count > 10
+        let selected = selectedBalanceDate.flatMap { date in
+            bars.first { Calendar.current.isDate($0.start, equalTo: date, toGranularity: unit) }?.start
+        }
+
+        return Chart {
+            ForEach(bars) { bar in
+                BarMark(x: .value("Date", bar.start, unit: unit), y: .value("kcal", bar.balance))
+                    .foregroundStyle(bar.balance > 0 ? Color.red : Color.green)
+                    .opacity(selected == nil || selected == bar.start ? 1 : 0.4)
+                    .annotation(position: bar.balance >= 0 ? .top : .bottom, spacing: 2) {
+                        if showLabels || selected == bar.start {
+                            Text(Self.kcalText(bar.balance, compact: compact && selected != bar.start, signed: true))
+                                .font(.system(size: compact ? 8 : 10, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(bar.balance > 0 ? .red : .green)
+                                .fixedSize()
+                        }
+                    }
+            }
+            RuleMark(y: .value("Target", 0))
+                .lineStyle(StrokeStyle(lineWidth: 1))
+                .foregroundStyle(.secondary)
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                AxisGridLine()
+                AxisValueLabel(format: unit == .day ? .dateTime.day() : .dateTime.month(.abbreviated).day())
+            }
+        }
+        .chartYScale(domain: .automatic(includesZero: true))
+        .chartXSelection(value: $selectedBalanceDate)
         .frame(height: 180)
     }
 

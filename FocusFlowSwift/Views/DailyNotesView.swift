@@ -7143,9 +7143,7 @@ struct FocusModeView: View {
     /// being viewed, so comparisons against `currentTime` need no separate
     /// wraparound math.
     private func beginStopDate(forMinutes minutes: Int) -> Date {
-        let cal = Calendar.current
-        let base = cal.startOfDay(for: selectedDate)
-        return cal.date(byAdding: .minute, value: minutes, to: base) ?? base
+        selectedDate.atClock(minutes: minutes)
     }
 
     private var activeBeginStopEntry: ScheduleEntry? {

@@ -146,8 +146,8 @@ struct FoodPlanEditorView: View {
     }
 
     private func addBreak(icon: String) {
-        let last = rows.map(\.time).max() ?? Calendar.current.date(byAdding: .hour, value: 12, to: date)!
-        let time = min(last.addingTimeInterval(2 * 3600), Calendar.current.date(byAdding: .minute, value: 23 * 60 + 30, to: date)!)
+        let last = rows.map(\.time).max() ?? date.atClock(hour: 12)
+        let time = min(last.addingTimeInterval(2 * 3600), date.atClock(minutes: 23 * 60 + 30))
         rows.append(Row(name: name(for: icon), icon: icon, time: time, food: "", calories: "", cost: ""))
     }
 
@@ -220,6 +220,6 @@ struct FoodPlanEditorView: View {
 
     private func place(_ time: Date) -> Date {
         let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-        return Calendar.current.date(byAdding: .minute, value: (c.hour ?? 0) * 60 + (c.minute ?? 0), to: date)!
+        return date.atClock(minutes: (c.hour ?? 0) * 60 + (c.minute ?? 0))
     }
 }

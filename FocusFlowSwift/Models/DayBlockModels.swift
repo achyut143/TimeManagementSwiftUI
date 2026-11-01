@@ -194,6 +194,25 @@ struct BattleMetrics: Equatable {
 
 extension Date {
     var startOfDay: Date { Calendar.current.startOfDay(for: self) }
+
+    /// The clock time `minutes` after midnight on this date's day, e.g. 360 → 6:00 AM.
+    /// Unlike adding minutes to midnight, this stays right on daylight-saving days
+    /// (when midnight + 6 hours is 5 AM or 7 AM on the clock). 1440 or more rolls
+    /// into the next day(s).
+    func atClock(minutes: Int, calendar: Calendar = .current) -> Date {
+        let dayOffset = Int((Double(minutes) / 1440).rounded(.down))
+        let minuteOfDay = minutes - dayOffset * 1440
+        let day = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: self)) ?? self
+        var c = calendar.dateComponents([.year, .month, .day], from: day)
+        c.hour = minuteOfDay / 60
+        c.minute = minuteOfDay % 60
+        return calendar.date(from: c) ?? day
+    }
+
+    /// Same as `atClock(minutes:)` with hours and minutes.
+    func atClock(hour: Int, minute: Int = 0, calendar: Calendar = .current) -> Date {
+        atClock(minutes: hour * 60 + minute, calendar: calendar)
+    }
     var isToday: Bool { Calendar.current.isDateInToday(self) }
 
     var weekdayName: String {

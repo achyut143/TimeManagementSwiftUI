@@ -1541,8 +1541,7 @@ struct TasksCalendarView: View {
     
     private func startTaskCreation(atHour hour: Int, minute: Int) {
         let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: selectedDate)
-        let tappedStart = calendar.date(byAdding: DateComponents(hour: hour, minute: minute), to: dayStart) ?? dayStart
+        let tappedStart = selectedDate.atClock(hour: hour, minute: minute)
 
         startTime = tappedStart
         taskDurationMinutes = 15
@@ -1751,24 +1750,6 @@ struct TasksCalendarView: View {
         TaskRepeater.createNextInstance(from: task, context: modelContext)
     }
 
-    private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
-        let newSubtask = Subtask(
-            name: subtask.name,
-            notes: subtask.notes,
-            parentTask: task,
-            parentSubtask: parentSubtask,
-            completed: false // Reset completion status for new task
-        )
-        
-        modelContext.insert(newSubtask)
-        
-        // Recursively copy child subtasks
-        if let childSubtasks = subtask.childSubtasks {
-            for childSubtask in childSubtasks {
-                copySubtaskRecursively(childSubtask, to: task, parentSubtask: newSubtask)
-            }
-        }
-    }
     
     private func createIncompleteTask(from task: Task) {
         // Skipped impulses don't roll over — bringing one back should be a deliberate choice.
@@ -1812,10 +1793,8 @@ struct TasksCalendarView: View {
         modelContext.insert(newTask)
 
         // Copy subtasks if the toggle is enabled
-        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
-            for subtask in subtasks {
-                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
-            }
+        if task.copySubtasks {
+            SubtaskOrder.copyAll(from: task, to: newTask, context: modelContext)
         }
 
         try? modelContext.save()
@@ -2399,10 +2378,10 @@ struct TaskActionsView: View {
     }
 
     private var topLevelSubtasks: [Subtask] {
-        allSubtasks.filter {
+        SubtaskOrder.sorted(allSubtasks.filter {
             $0.parentTask?.persistentModelID == task.persistentModelID &&
             $0.parentSubtask == nil
-        }.sorted { $0.createdAt < $1.createdAt }
+        })
     }
 
     private var subtaskCount: Int {
@@ -2860,24 +2839,6 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         TaskRepeater.createNextInstance(from: task, context: modelContext)
     }
 
-    private func copySubtaskRecursively(_ subtask: Subtask, to task: Task, parentSubtask: Subtask?) {
-        let newSubtask = Subtask(
-            name: subtask.name,
-            notes: subtask.notes,
-            parentTask: task,
-            parentSubtask: parentSubtask,
-            completed: false // Reset completion status for new task
-        )
-        
-        modelContext.insert(newSubtask)
-        
-        // Recursively copy child subtasks
-        if let childSubtasks = subtask.childSubtasks {
-            for childSubtask in childSubtasks {
-                copySubtaskRecursively(childSubtask, to: task, parentSubtask: newSubtask)
-            }
-        }
-    }
 
         private func createIncompleteTask(from task: Task) {
         // Skipped impulses don't roll over — bringing one back should be a deliberate choice.
@@ -2922,10 +2883,8 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         modelContext.insert(newTask)
 
         // Copy subtasks if the toggle is enabled
-        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
-            for subtask in subtasks {
-                copySubtaskRecursively(subtask, to: newTask, parentSubtask: nil)
-            }
+        if task.copySubtasks {
+            SubtaskOrder.copyAll(from: task, to: newTask, context: modelContext)
         }
 
         try? modelContext.save()

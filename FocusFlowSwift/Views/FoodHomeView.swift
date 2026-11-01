@@ -525,7 +525,7 @@ struct FoodLogSheet: View {
         case .unplanned(let day, let t):
             trigger = t
             if !Calendar.current.isDateInToday(day) {
-                time = Calendar.current.date(byAdding: .hour, value: 12, to: day)!
+                time = day.atClock(hour: 12)
             }
         case .swap(let e):
             food = e.actualFood
@@ -604,7 +604,7 @@ struct FoodLogSheet: View {
 
     private func place(_ time: Date, on day: Date) -> Date {
         let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-        return Calendar.current.date(byAdding: .minute, value: (c.hour ?? 0) * 60 + (c.minute ?? 0), to: day.startOfDay)!
+        return day.atClock(minutes: (c.hour ?? 0) * 60 + (c.minute ?? 0))
     }
 
     private func close() {

@@ -92,9 +92,7 @@ struct FocusTimerIndicatorView: View {
     }
 
     private func date(forMinutes minutes: Int) -> Date {
-        let cal = Calendar.current
-        let base = cal.startOfDay(for: Date())
-        return cal.date(byAdding: .minute, value: minutes, to: base) ?? base
+        Date().atClock(minutes: minutes)
     }
 
     private var todayNoteContent: String {

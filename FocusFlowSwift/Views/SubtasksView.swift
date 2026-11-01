@@ -18,7 +18,12 @@ struct SubtasksView: View {
         self.parentSubtask = parentSubtask
     }
     
+    /// This level's subtasks in the user's order.
     private var filteredSubtasks: [Subtask] {
+        SubtaskOrder.sorted(unsortedSubtasks)
+    }
+
+    private var unsortedSubtasks: [Subtask] {
         if let parentTask = parentTask {
             // Filter subtasks that belong to this task
             return allSubtasks.filter { 
@@ -37,10 +42,37 @@ struct SubtasksView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(filteredSubtasks) { subtask in
-                    SubtaskRow(subtask: subtask)
+                let ordered = filteredSubtasks
+                ForEach(Array(ordered.enumerated()), id: \.element.persistentModelID) { index, subtask in
+                    SubtaskRow(subtask: subtask, number: index + 1)
+                        .contextMenu {
+                            Button {
+                                shift(subtask, by: -1, in: ordered)
+                            } label: { Label("Move Up", systemImage: "arrow.up") }
+                            .disabled(index == 0)
+                            Button {
+                                shift(subtask, by: 1, in: ordered)
+                            } label: { Label("Move Down", systemImage: "arrow.down") }
+                            .disabled(index == ordered.count - 1)
+                            Button {
+                                shift(subtask, by: -index, in: ordered)
+                            } label: { Label("Move to Top", systemImage: "arrow.up.to.line") }
+                            .disabled(index == 0)
+                            Button {
+                                shift(subtask, by: ordered.count - 1 - index, in: ordered)
+                            } label: { Label("Move to Bottom", systemImage: "arrow.down.to.line") }
+                            .disabled(index == ordered.count - 1)
+                        }
                 }
                 .onDelete(perform: deleteSubtasks)
+                .onMove(perform: moveSubtasks)
+
+                if ordered.count > 1 {
+                    Text("Drag to reorder, or long-press a subtask to move it. Tap Edit for drag handles.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .listRowBackground(Color.clear)
+                }
             }
             .navigationTitle(parentTask?.title ?? parentSubtask?.name ?? "Subtasks")
             .navigationBarTitleDisplayMode(.inline)
@@ -50,7 +82,10 @@ struct SubtasksView: View {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if filteredSubtasks.count > 1 {
+                        EditButton()
+                    }
                     Button {
                         showingAddSubtask = true
                     } label: {
@@ -61,17 +96,30 @@ struct SubtasksView: View {
             .sheet(isPresented: $showingAddSubtask) {
                 AddSubtaskView(
                     parentTask: parentTask,
-                    parentSubtask: parentSubtask
+                    parentSubtask: parentSubtask,
+                    nextOrder: SubtaskOrder.nextOrder(after: unsortedSubtasks)
                 )
             }
         }
     }
     
     private func deleteSubtasks(at offsets: IndexSet) {
+        let ordered = filteredSubtasks
         for index in offsets {
-            let subtask = filteredSubtasks[index]
-            deleteSubtaskAndChildren(subtask)
+            deleteSubtaskAndChildren(ordered[index])
         }
+        SubtaskOrder.renumber(ordered.enumerated().filter { !offsets.contains($0.offset) }.map(\.element))
+        try? modelContext.save()
+    }
+
+    private func moveSubtasks(from source: IndexSet, to destination: Int) {
+        SubtaskOrder.move(filteredSubtasks, from: source, to: destination)
+        try? modelContext.save()
+    }
+
+    private func shift(_ subtask: Subtask, by step: Int, in ordered: [Subtask]) {
+        withAnimation { SubtaskOrder.shift(subtask, by: step, in: ordered) }
+        try? modelContext.save()
     }
     
     private func deleteSubtaskAndChildren(_ subtask: Subtask) {
@@ -82,6 +130,8 @@ struct SubtasksView: View {
 
 struct SubtaskRow: View {
     @Bindable var subtask: Subtask
+    /// Position shown before the name (1, 2, 3…); nil hides it.
+    var number: Int? = nil
     @State private var showingSubtasks = false
     @State private var showingEditNotes = false
     
@@ -98,6 +148,12 @@ struct SubtaskRow: View {
                     .foregroundColor(subtask.completed ? .green : .gray)
             }
             .buttonStyle(.plain)
+
+            if let number {
+                Text("\(number).")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
             
             Button {
                 showingEditNotes = true
@@ -152,6 +208,8 @@ struct AddSubtaskView: View {
     
     let parentTask: Task?
     let parentSubtask: Subtask?
+    /// Where the new subtask goes: at the end of the list.
+    var nextOrder: Int = 0
     
     @State private var name = ""
     @State private var notes = ""
@@ -191,7 +249,8 @@ struct AddSubtaskView: View {
             name: name,
             notes: notes.isEmpty ? nil : notes,
             parentTask: parentTask,
-            parentSubtask: parentSubtask
+            parentSubtask: parentSubtask,
+            sortOrder: nextOrder
         )
         modelContext.insert(subtask)
         

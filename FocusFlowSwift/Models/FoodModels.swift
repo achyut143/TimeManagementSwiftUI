@@ -35,7 +35,7 @@ final class FoodBreak {
     }
 
     func time(on day: Date) -> Date {
-        Calendar.current.date(byAdding: .minute, value: minutes, to: day.startOfDay)!
+        day.atClock(minutes: minutes)
     }
 
     static let icons = ["fork.knife", "cup.and.saucer.fill", "mug.fill", "takeoutbag.and.cup.and.straw.fill",
@@ -483,7 +483,7 @@ enum FoodNotifications {
         }
 
         let tomorrow = cal.date(byAdding: .day, value: 1, to: now.startOfDay)!
-        let reminder = cal.date(byAdding: .minute, value: FoodSettings.planReminderMinutes, to: now.startOfDay)!
+        let reminder = now.atClock(minutes: FoodSettings.planReminderMinutes)
         if reminder > now && !FoodRules.isDayPlanned(tomorrow, entries: entries) {
             let content = UNMutableNotificationContent()
             content.title = "Plan tomorrow's food"
@@ -527,7 +527,7 @@ enum FoodSetup {
                 ("Dinner", "moon.stars.fill", p.dinner, p.dinnerTime, p.dinnerEaten, 19)
             ]
             for (name, icon, food, time, eaten, hour) in meals {
-                let at = time ?? Calendar.current.date(byAdding: .hour, value: hour, to: p.date)!
+                let at = time ?? p.date.atClock(hour: hour)
                 let entry = FoodEntry(day: p.date, time: at, kind: .planned, breakName: name, icon: icon,
                                       food: food.trimmingCharacters(in: .whitespaces))
                 entry.plannedAt = entry.hasPlan ? p.createdAt : nil

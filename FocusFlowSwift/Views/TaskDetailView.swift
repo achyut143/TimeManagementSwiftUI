@@ -27,7 +27,7 @@ struct TaskDetailView: View {
                     
                     // Subtasks Section
                     if let subtasks = task.subtasks, !subtasks.isEmpty {
-                        subtasksSection(subtasks)
+                        subtasksSection(SubtaskOrder.topLevel(of: task))
                     }
                     
                     Spacer(minLength: 50)

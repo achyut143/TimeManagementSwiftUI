@@ -44,28 +44,13 @@ enum TaskRepeater {
         ImpulseRules.inherit(from: task, to: newTask, context: context)
         context.insert(newTask)
 
-        if task.copySubtasks, let subtasks = task.subtasks?.filter({ $0.parentSubtask == nil }) {
-            for subtask in subtasks {
-                copySubtask(subtask, to: newTask, parent: nil, context: context)
-            }
+        if task.copySubtasks {
+            SubtaskOrder.copyAll(from: task, to: newTask, context: context)
         }
 
         try? context.save()
     }
 
-    private static func copySubtask(_ subtask: Subtask, to task: Task, parent: Subtask?, context: ModelContext) {
-        let copy = Subtask(
-            name: subtask.name,
-            notes: subtask.notes,
-            parentTask: task,
-            parentSubtask: parent,
-            completed: false
-        )
-        context.insert(copy)
-        for child in subtask.childSubtasks ?? [] {
-            copySubtask(child, to: task, parent: copy, context: context)
-        }
-    }
 }
 
 /// Moving timed tasks within a day. Used by Snooze, Extend and Move Tasks.

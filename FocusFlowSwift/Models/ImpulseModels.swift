@@ -317,7 +317,7 @@ enum ImpulseRules {
 
     static func startDate(of task: Task) -> Date? {
         guard let date = task.date, let mins = minutes(from: task.startTime) else { return nil }
-        return Calendar.current.date(byAdding: .minute, value: mins, to: date.startOfDay)
+        return date.atClock(minutes: mins)
     }
 
     static func scheduledMinutes(of task: Task) -> Double {
@@ -353,7 +353,7 @@ enum ImpulseRules {
     /// `time`'s hour and minute on `day`.
     static func combine(day: Date, time: Date) -> Date {
         let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-        return Calendar.current.date(byAdding: .minute, value: (c.hour ?? 0) * 60 + (c.minute ?? 0), to: day.startOfDay)!
+        return day.atClock(minutes: (c.hour ?? 0) * 60 + (c.minute ?? 0))
     }
 
     /// Why an impulse would count as unplanned if saved now, or nil if it would be planned.
@@ -584,7 +584,7 @@ enum PlannerRules {
     }
 
     static func clock(_ minutes: Int) -> String {
-        let date = Calendar.current.date(byAdding: .minute, value: minutes, to: Date().startOfDay)!
+        let date = Date().atClock(minutes: minutes)
         return date.formatted(date: .omitted, time: .shortened)
     }
 
@@ -595,13 +595,13 @@ enum PlannerRules {
     }
 
     static func wakeTarget(on date: Date, _ v: SleepScheduleVersion) -> Date {
-        Calendar.current.date(byAdding: .minute, value: v.wakeMinutes, to: date.startOfDay)!
+        date.atClock(minutes: v.wakeMinutes)
     }
 
     /// A target before noon (e.g. 12:30 am) belongs to the night that started on `date`.
     static func sleepTarget(on date: Date, _ v: SleepScheduleVersion) -> Date {
         let offset = v.sleepMinutes < 12 * 60 ? v.sleepMinutes + 24 * 60 : v.sleepMinutes
-        return Calendar.current.date(byAdding: .minute, value: offset, to: date.startOfDay)!
+        return date.atClock(minutes: offset)
     }
 
     /// Going to bed at 12:40 am counts for the previous evening.
