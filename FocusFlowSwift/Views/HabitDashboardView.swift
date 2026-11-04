@@ -8,10 +8,11 @@ struct HabitDashboardView: View {
     @Query private var tasks: [Task]
     @Query private var eventDays: [EventDay]
     @State private var selectedHabit = ""
-    @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-    @State private var toDate = Date()
-    @State private var pendingFromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-    @State private var pendingToDate = Date()
+    // Opens on the current month (1st to last day).
+    @State private var fromDate = Date.monthBounds().start
+    @State private var toDate = Date.monthBounds().end
+    @State private var pendingFromDate = Date.monthBounds().start
+    @State private var pendingToDate = Date.monthBounds().end
     @State private var filterMode = "all"
     
     private static let startDateKey = "HabitDashboardStartDate"
@@ -211,12 +212,12 @@ struct HabitDashboardView: View {
     }
     
     private func loadStartDate() {
-        if let savedDate = UserDefaults.standard.object(forKey: Self.startDateKey) as? Date {
-            fromDate = savedDate
-            pendingFromDate = savedDate
-        }
-        toDate = Date()
-        pendingToDate = Date()
+        // Always open on the current month; picked dates last until the screen closes.
+        let month = Date.monthBounds()
+        fromDate = month.start
+        pendingFromDate = month.start
+        toDate = month.end
+        pendingToDate = month.end
         recomputeTabStats()
     }
 
@@ -310,13 +311,47 @@ struct HabitDashboardView: View {
         }
     }
     
+    /// Every day of the range, one column per weekday, so rows are real weeks.
     private var habitCalendar: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 4) {
-            ForEach(activeDates, id: \.self) { date in
-                habitDayView(date: date)
+        VStack(spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 4) {
+                ForEach(Array(weekdayHeaders.enumerated()), id: \.offset) { _, symbol in
+                    Text(symbol)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(0..<leadingBlankCount, id: \.self) { i in
+                    Color.clear.frame(width: 40, height: 40).id("blank-\(i)")
+                }
+                ForEach(dateRange, id: \.self) { date in
+                    habitDayView(date: date)
+                }
             }
+            HStack(spacing: 12) {
+                legendItem(colorForStatus(.completedIdle), "Done")
+                legendItem(colorForStatus(.missed), "Not done")
+                legendItem(.clear, "Not marked", dashed: true)
+                legendItem(colorForStatus(.noData), "No task")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
         .padding()
+    }
+
+    private func legendItem(_ color: Color, _ label: String, dashed: Bool = false) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(color)
+                .overlay {
+                    if dashed {
+                        RoundedRectangle(cornerRadius: 3)
+                            .strokeBorder(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                    }
+                }
+                .frame(width: 12, height: 12)
+            Text(label)
+        }
     }
 
     private var visualizationPicker: some View {
@@ -430,9 +465,17 @@ struct HabitDashboardView: View {
                     .font(.caption2)
             }
             .frame(width: 40, height: 40)
-            .background(colorForStatus(status))
+            .background(isUnmarked(date) ? Color.clear : colorForStatus(status))
             .foregroundColor(status == .noData || status == .completedGood ? .primary : .white)
             .cornerRadius(6)
+            .overlay {
+                // Task existed but was never marked: dashed outline so the gap shows.
+                if isUnmarked(date) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.orange, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                }
+            }
+            .opacity(Calendar.current.startOfDay(for: date) > Date() ? 0.4 : 1)
             
             // Event day halos - circular glowing rings with gaps
             if !eventTypes.isEmpty {
@@ -709,26 +752,31 @@ struct HabitDashboardView: View {
     .sorted()
   }
     
+    /// Every day in the range, start date through end date (whole days).
     private var dateRange: [Date] {
-        var dates: [Date] = []
-        var currentDate = fromDate
-        
-        while currentDate <= toDate {
-            dates.append(currentDate)
-            currentDate = Calendar.current.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
-        }
-        
-        return dates
+        Date.days(from: fromDate, through: toDate)
     }
-    
-    private var activeDates: [Date] {
-        dateRange.filter { date in
-            let dayTasks = filteredHabitTasks.filter { task in
-                task.title == selectedHabit &&
-                Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
-            }
-            return !dayTasks.isEmpty && (dayTasks.contains(where: { $0.completed || $0.notCompleted }))
+
+    /// Blank cells before the first day so each grid column is one weekday.
+    private var leadingBlankCount: Int {
+        guard let first = dateRange.first else { return 0 }
+        let cal = Calendar.current
+        return (cal.component(.weekday, from: first) - cal.firstWeekday + 7) % 7
+    }
+
+    /// Weekday initials in grid order (respects the calendar's first weekday).
+    private var weekdayHeaders: [String] {
+        let cal = Calendar.current
+        let symbols = cal.veryShortWeekdaySymbols
+        return (0..<7).map { symbols[(cal.firstWeekday - 1 + $0) % 7] }
+    }
+
+    /// The habit has a task that day, but it was never marked done or not done.
+    private func isUnmarked(_ date: Date) -> Bool {
+        let dayTasks = filteredHabitTasks.filter {
+            $0.title == selectedHabit && Calendar.current.isDate($0.date ?? Date(), inSameDayAs: date)
         }
+        return !dayTasks.isEmpty && !dayTasks.contains { $0.completed || $0.notCompleted }
     }
 
     // MARK: - Bar Chart Data

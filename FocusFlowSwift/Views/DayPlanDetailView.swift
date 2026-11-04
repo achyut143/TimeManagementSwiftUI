@@ -142,6 +142,7 @@ struct DayPlanDetailView: View {
             ForEach(status.impulseTasks) { task in
                 ImpulseTaskRow(task: task, type: types.first { $0.id == task.impulseTypeID }, noImpulseDay: status.noImpulseDay)
             }
+            ImpulseQuickLogButton(date: date)
         }
 
         let budget = ImpulseRules.budget(forMonthOf: date, tasks: impulseTasks, versions: budgets)
@@ -395,6 +396,10 @@ struct DayPlanDetailView: View {
                 if let task = item.existing { modelContext.delete(task) }
                 continue
             }
+            // Leave impulses the user didn't touch exactly as they are. Re-saving
+            // them would give untimed (logged) ones the default 8 PM start and
+            // re-check them, which could wrongly turn unplanned time into planned.
+            if item.existing != nil && !item.isChanged { continue }
             let task: Task
             let before: ImpulseRules.Snapshot?
             if let existing = item.existing {
@@ -478,6 +483,19 @@ private struct ImpulseDraft: Identifiable {
     var hasActualEnd = false
     var actualEnd: Date
     var deleted = false
+    /// Values when loaded from an existing task, to tell if the user edited it.
+    private var original: Fingerprint?
+
+    private struct Fingerprint: Equatable {
+        let typeID: UUID, title: String, start: Date, duration: Int, hasActualEnd: Bool, actualEnd: Date
+    }
+
+    private var fingerprint: Fingerprint {
+        Fingerprint(typeID: typeID, title: title, start: start, duration: duration,
+                    hasActualEnd: hasActualEnd, actualEnd: actualEnd)
+    }
+
+    var isChanged: Bool { original != fingerprint }
 
     init(type: ImpulseType, day: Date) {
         typeID = type.id
@@ -498,6 +516,7 @@ private struct ImpulseDraft: Identifiable {
         } else {
             actualEnd = start.addingTimeInterval(Double(duration) * 60)
         }
+        original = fingerprint
     }
 }
 

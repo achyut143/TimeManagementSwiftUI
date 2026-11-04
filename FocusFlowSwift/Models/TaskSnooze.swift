@@ -301,3 +301,85 @@ enum TaskSwapper {
         return (s, e < s ? e + 24 * 60 : e)
     }
 }
+
+/// Splits a timed task into two at a clock time (the calendar's red now-line).
+///
+/// The first part keeps the task (its status, time spent, notes, subtasks and
+/// files) and ends at the split. The second part is a new task from the split to
+/// the old end, not yet done. Weight is shared by length so totals don't change.
+///
+/// Repeat (habit) tasks: the next occurrence is created right away at the
+/// original time, and both parts get the red repeat icon, so finishing either
+/// part doesn't create another one.
+enum TaskSplitter {
+    /// Clock minute to split at, if `task` is today's and `now` is inside it
+    /// (at least 1 minute from each end).
+    static func splitMinute(for task: Task, now: Date = Date()) -> Int? {
+        guard let date = task.date, Calendar.current.isDate(date, inSameDayAs: now),
+              let start = ImpulseRules.minutes(from: task.startTime),
+              var end = ImpulseRules.minutes(from: task.endTime) else { return nil }
+        if end <= start { end += 24 * 60 }   // runs past midnight
+        let c = Calendar.current.dateComponents([.hour, .minute], from: now)
+        let minute = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+        guard minute > start, minute < end else { return nil }
+        return minute
+    }
+
+    /// Returns the new second part, or nil when the task can't be split now.
+    @discardableResult
+    static func split(_ task: Task, now: Date = Date(), context: ModelContext) -> Task? {
+        guard let minute = splitMinute(for: task, now: now),
+              let start = ImpulseRules.minutes(from: task.startTime),
+              var end = ImpulseRules.minutes(from: task.endTime) else { return nil }
+        if end <= start { end += 24 * 60 }
+
+        // Habit: make tomorrow's occurrence now, at the full original time.
+        TaskMover.prepareRepeats([task], context: context)
+
+        let total = Double(end - start)
+        let first = Double(minute - start)
+        let share = first / total
+        let splitTime = hm(minute)
+        let originalEnd = task.endTime
+
+        let second = Task(
+            title: task.title,
+            taskDescription: task.taskDescription,
+            startTime: splitTime,
+            endTime: originalEnd,
+            reassign: task.repeatAgain != nil ? true : task.reassign,
+            weight: task.weight * (1 - share),
+            notes: task.notes,
+            date: task.date,
+            repeatAgain: task.repeatAgain,
+            priority: task.priority,
+            copySubtasks: task.copySubtasks,
+            whyStatement: task.whyStatement,
+            whyStatementPinned: task.whyStatementPinned,
+            goal: task.goal,
+            info: task.info
+        )
+
+        // Impulse time: planned minutes go to the first part first, the rest after.
+        if let typeID = task.impulseTypeID {
+            let planned = task.impulsePlannedMinutes ?? 0
+            second.impulseTypeID = typeID
+            second.impulseCheckedAt = task.impulseCheckedAt
+            second.impulsePlannedMinutes = max(0, planned - first)
+            second.actualEndTime = task.actualEndTime
+            task.impulsePlannedMinutes = min(planned, first)
+            task.actualEndTime = nil
+        }
+
+        task.endTime = splitTime
+        task.weight *= share
+        context.insert(second)
+        try? context.save()
+        return second
+    }
+
+    static func hm(_ minute: Int) -> String {
+        let m = ((minute % 1440) + 1440) % 1440
+        return String(format: "%d:%02d", m / 60, m % 60)
+    }
+}

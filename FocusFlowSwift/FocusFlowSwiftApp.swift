@@ -22,6 +22,7 @@ struct MigrationWrapper<Content: View>: View {
                 if !hasMigrated {
                     TaskAttachmentMigration.migrateAttachmentsIfNeeded(modelContext: modelContext)
                     FoodSetup.runOnce(context: modelContext)
+                    ImpulseRules.repairLoggedImpulses(context: modelContext)
                     hasMigrated = true
                 }
                 // Settles any away-time exit left pending from a force-quit
@@ -34,6 +35,11 @@ struct MigrationWrapper<Content: View>: View {
                 AwayTimeTracker.shared.recordReturn()
                 FocusSessionTracker.shared.recordEnter()
                 FoodNotifications.reschedule(context: modelContext)
+                ImpulseGate.presentIfPending()
+            }
+            // An "Impulse check" from a Shortcuts automation brought the app forward.
+            .onReceive(NotificationCenter.default.publisher(for: ImpulseGate.requestedNotification)) { _ in
+                ImpulseGate.presentIfPending()
             }
             // Any project timer left running when the app is backgrounded or
             // killed gets paused here, so its elapsed time never silently
@@ -142,7 +148,7 @@ struct FocusFlowSwiftApp: App {
             TabataWorkout.self, RepWorkout.self, WorkoutSession.self, WorkoutPicture.self, WorkoutPlanEntry.self,
             VocabWord.self, VocabTestResult.self,
             FoodBreak.self, FoodEntry.self, FoodCraving.self,
-            WorkoutFolder.self, ExerciseGuide.self
+            WorkoutFolder.self, ExerciseGuide.self, ImpulseGateEvent.self
         ]
         // Scheduled activities, alerts, the old Plan view and Start with a Why
         // were removed — their tables are dropped by SwiftData's automatic

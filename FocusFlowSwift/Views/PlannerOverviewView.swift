@@ -23,6 +23,7 @@ struct PlannerHeaderView: View {
     @State private var showGoals = false
     @State private var showSettings = false
     @State private var showIfThen = false
+    @State private var showImpulseLog = false
 
     private var day: Date { date.startOfDay }
     private var planner: PlannerDay? { days.first { $0.date == day } }
@@ -55,6 +56,9 @@ struct PlannerHeaderView: View {
         }
         .sheet(isPresented: $showIfThen) {
             IfThenPlansSheet()
+        }
+        .sheet(isPresented: $showImpulseLog) {
+            ImpulseQuickLogView(date: day)
         }
     }
 
@@ -285,6 +289,7 @@ struct PlannerHeaderView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Impulses").font(.caption.weight(.semibold))
+                ImpulseQuickLogButton(date: day)
                 Spacer()
                 if status.noImpulseBroken {
                     Badge(text: "No-impulse day broken", color: .red)
@@ -334,7 +339,25 @@ struct PlannerHeaderView: View {
                               color: status.mealsDone ? .teal : .secondary)
                     StripChip(title: "Workout", value: workoutChipText,
                               color: status.workoutSet ? .teal : .secondary)
-                    StripChip(title: "Impulse", value: impulseChipText, color: impulseChipColor)
+                    // Tapping the Impulse box logs an unplanned impulse (no calendar time needed).
+                    Button { showImpulseLog = true } label: {
+                        Group {
+                            if status.noImpulseDay || status.impulseTasks.isEmpty {
+                                StripChip(title: "Impulse", value: impulseChipText, color: impulseChipColor)
+                            } else {
+                                ImpulseSplitChip(planned: status.plannedImpulseMinutes,
+                                                 unplanned: status.unplannedImpulseMinutes)
+                            }
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.red)
+                                .background(Circle().fill(Color(.systemBackground)))
+                                .offset(x: 4, y: -4)
+                        }
+                    }
+                    .buttonStyle(.plain)
                     StripChip(title: "Sleep", value: sleepChipText, color: .indigo)
                     if let budgetMinutes = budget.budgetMinutes {
                         StripChip(title: "Budget",
@@ -435,6 +458,37 @@ struct StripChip: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(.tertiarySystemFill)))
+    }
+}
+
+/// "Impulse" chip with planned and unplanned time side by side:
+/// 15m planned · 30m unplanned (each part shown only when there is some).
+struct ImpulseSplitChip: View {
+    let planned: Double
+    let unplanned: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text("Impulse").font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                if planned > 0 || unplanned == 0 { part(planned, "planned", .green) }
+                if planned > 0 && unplanned > 0 {
+                    Text("·").font(.caption).foregroundStyle(.secondary)
+                }
+                if unplanned > 0 { part(unplanned, "unplanned", .red) }
+            }
+            .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(.tertiarySystemFill)))
+    }
+
+    private func part(_ minutes: Double, _ label: String, _ color: Color) -> some View {
+        HStack(spacing: 2) {
+            Text(PlannerRules.formatMinutes(minutes)).font(.caption.weight(.semibold)).foregroundStyle(color)
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+        }
     }
 }
 

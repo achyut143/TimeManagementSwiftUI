@@ -7,10 +7,11 @@ struct HabitOverviewView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var tasks: [Task]
     @Query private var eventDays: [EventDay]
-    @State private var fromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-    @State private var toDate = Date()
-    @State private var pendingFromDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-    @State private var pendingToDate = Date()
+    // Opens on the current month (1st to last day).
+    @State private var fromDate = Date.monthBounds().start
+    @State private var toDate = Date.monthBounds().end
+    @State private var pendingFromDate = Date.monthBounds().start
+    @State private var pendingToDate = Date.monthBounds().end
     @State private var selectedView = "chart"  // "chart" | "table" | "all" | "time"
     @State private var timeChartSortOrder: String = "desc"
     @State private var filterMode = "all"
@@ -965,13 +966,7 @@ struct HabitOverviewView: View {
 
     private func recomputeAllStats() {
         let cal = Calendar.current
-        var dates: [Date] = []
-        var cur = fromDate
-        while cur <= toDate {
-            dates.append(cur)
-            cur = cal.date(byAdding: .day, value: 1, to: cur) ?? cur
-        }
-        cachedDateRange = dates
+        cachedDateRange = Date.days(from: fromDate, through: toDate, calendar: cal)
 
         let htasks = tasks.filter { $0.repeatAgain != nil }
         let names = Array(Set(htasks.map { $0.title }))
@@ -1745,12 +1740,13 @@ struct HabitOverviewView: View {
     
     private func loadHabitSettings() {
         habitSettings = HabitSettings.getOrCreate(context: modelContext)
-        if let settings = habitSettings {
-            fromDate = settings.fromDate
-            pendingFromDate = settings.fromDate
-            toDate = Date()
-            pendingToDate = Date()
-        }
+        // Always open on the current month; changes made with the date
+        // pickers last until the screen is closed.
+        let month = Date.monthBounds()
+        fromDate = month.start
+        pendingFromDate = month.start
+        toDate = month.end
+        pendingToDate = month.end
         loadSavedSearches()
         recomputeAllStats()
     }

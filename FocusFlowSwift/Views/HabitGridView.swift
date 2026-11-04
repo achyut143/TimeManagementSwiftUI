@@ -104,13 +104,7 @@ struct HabitGridView: View {
 
     private func recomputeGrid() {
         let cal = Calendar.current
-        var dates: [Date] = []
-        var cur = appliedFromDate
-        while cur <= appliedToDate {
-            dates.append(cur)
-            cur = cal.date(byAdding: .day, value: 1, to: cur) ?? cur
-        }
-        cachedDateRange = dates
+        cachedDateRange = Date.days(from: appliedFromDate, through: appliedToDate, calendar: cal)
 
         let ht = tasks.filter { $0.repeatAgain != nil }
         var names = Array(Set(ht.map { $0.title })).sorted()
@@ -132,7 +126,7 @@ struct HabitGridView: View {
             var completions: [(Date, Bool)] = []
             var idealCount = 0, goodCount = 0, survivalCount = 0, idleCount = 0
 
-            for date in dates {
+            for date in cachedDateRange {
                 let day = habitTasks.filter { cal.isDate($0.date ?? .distantPast, inSameDayAs: date) }
                 let key = "\(habit)|\(date.timeIntervalSince1970)"
                 if day.isEmpty {

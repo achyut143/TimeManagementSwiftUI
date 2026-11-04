@@ -18,6 +18,8 @@ final class ImpulseType {
     var isArchived: Bool = false
     var sortOrder: Int = 0
     var createdAt: Date = Date()
+    /// Apps linked to this type, as JSON (see ImpulseGate.swift). Added later; nil = none.
+    var linkedAppsData: Data? = nil
 
     init(name: String, colorHex: String, planBeforeHours: Double, sortOrder: Int = 0) {
         self.id = UUID()
@@ -406,6 +408,14 @@ enum ImpulseRules {
             }
         }
 
+        // An unplanned impulse that's already marked done has happened (e.g. one
+        // logged after the fact). Editing or moving it can't make it planned.
+        if let before, before.typeID == typeID, task.impulseCheckedAt != nil,
+           (task.impulsePlannedMinutes ?? 0) == 0, task.completed {
+            task.impulsePlannedMinutes = 0
+            return
+        }
+
         guard let before, before.typeID == typeID, task.impulseCheckedAt != nil,
               let oldStart = before.start, let start else {
             checkFresh()
@@ -435,6 +445,26 @@ enum ImpulseRules {
 
     static func isPlannedLabel(_ task: Task, noImpulseDay: Bool = false) -> Bool {
         plannedMinutes(of: task, noImpulseDay: noImpulseDay) > 0
+    }
+
+    /// One-time fix: before skipping untouched impulses, saving the Day Plan gave
+    /// impulses logged without a time ("Log unplanned") an 8 PM start and could
+    /// re-check them as planned. Those are recognizable: done, with the same logged
+    /// minutes in `elapsedTime` and `timeSpent`. Puts them back as untimed and unplanned.
+    static func repairLoggedImpulses(context: ModelContext) {
+        let key = "impulse.repairLoggedImpulses.v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let all = (try? context.fetch(FetchDescriptor<Task>(predicate: #Predicate { $0.impulseTypeID != nil }))) ?? []
+        for task in all where task.completed && !task.startTime.isEmpty
+            && (task.impulsePlannedMinutes ?? 0) > 0
+            && task.elapsedTime != nil && task.elapsedTime == task.timeSpent {
+            task.startTime = ""
+            task.endTime = ""
+            task.actualEndTime = nil
+            task.impulsePlannedMinutes = 0
+        }
+        try? context.save()
+        UserDefaults.standard.set(true, forKey: key)
     }
 
     /// Carries the impulse type onto a repeat/rollover copy, checked fresh.
@@ -557,6 +587,12 @@ struct PlannerDayStatus {
     var plannedImpulseMinutes: Double {
         impulseTasks.filter { !ImpulseRules.isSkipped($0) }
             .reduce(0) { $0 + ImpulseRules.plannedMinutes(of: $1, noImpulseDay: noImpulseDay) }
+    }
+
+    /// Unplanned time, including any overrun past a planned impulse's end.
+    var unplannedImpulseMinutes: Double {
+        impulseTasks.filter { !ImpulseRules.isSkipped($0) }
+            .reduce(0) { $0 + ImpulseRules.unplannedMinutes(of: $1, noImpulseDay: noImpulseDay) }
     }
 }
 

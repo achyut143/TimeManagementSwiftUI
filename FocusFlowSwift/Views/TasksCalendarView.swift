@@ -31,6 +31,9 @@ struct TasksCalendarView: View {
     @State private var tasks: [Task] = []
     @State private var allTasks: [Task] = [] // For metrics calculation
     @State private var currentTime = Date()
+    /// Where each 5-minute row actually sits in the timeline, so the red
+    /// now-line lines up with the real rows (their heights vary).
+    @State private var slotFrames: [Int: CGRect] = [:]
     @State private var timer: Timer?
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var editingTask: Task?
@@ -497,6 +500,9 @@ struct TasksCalendarView: View {
                                 .fontWeight(.medium)
                         }
                     }
+
+                    TaskConflictWarning(date: selectedDate, start: startTime, end: endTime,
+                                        excluding: backlogSourceTask?.id)
                 }
                 
                 HStack {
@@ -830,9 +836,20 @@ struct TasksCalendarView: View {
                 VStack(spacing: 0) {
                     ForEach(timeSlots, id: \.self) { slot in
                         timeSlotView(slot: slot)
+                            .background {
+                                GeometryReader { g in
+                                    Color.clear.preference(
+                                        key: TimelineSlotFramesKey.self,
+                                        value: [slot.index: g.frame(in: .named("timeline"))]
+                                    )
+                                }
+                            }
                     }
                 }
-                .overlay(currentTimeIndicator)
+                .coordinateSpace(name: "timeline")
+                .onPreferenceChange(TimelineSlotFramesKey.self) { slotFrames = $0 }
+                .overlay(alignment: .topLeading) { taskLayer }
+                .overlay(alignment: .top) { currentTimeIndicator }
             }
             .onAppear {
                 scrollToCurrentTime(proxy: proxy)
@@ -843,15 +860,31 @@ struct TasksCalendarView: View {
     private func timeSlotView(slot: TimeSlot) -> some View {
         HStack(alignment: .top, spacing: 0) {
         Text(slot.minute == 0 ? slot.timeString : "")
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-                .frame(width: 60, alignment: .trailing)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(width: 60, height: Self.slotHeight, alignment: .topTrailing)
                 .padding(.trailing, 8)
+                // Tasks never cover the time column, so tapping here always creates
+                // a task at this row — even inside a longer task (2:15 in 1:00–3:00).
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    startTaskCreation(atHour: slot.hour, minute: slot.minute)
+                }
             
             ZStack(alignment: .topLeading) {
                 Rectangle()
                     .fill(Color.gray.opacity(0.05))
-                    .frame(height: 10)
+                    .frame(height: Self.slotHeight)
+                    .overlay(alignment: .top) {
+                        // Hour line, plus a faint one at each half hour.
+                        if slot.minute == 0 || slot.minute == 30 {
+                            Rectangle()
+                                .fill(Color.gray.opacity(slot.minute == 0 ? 0.25 : 0.12))
+                                .frame(height: 0.5)
+                        }
+                    }
                     .contentShape(Rectangle())
                     .onTapGesture {
                         startTaskCreation(atHour: slot.hour, minute: slot.minute)
@@ -862,16 +895,72 @@ struct TasksCalendarView: View {
                         updateTaskTime(droppedTask, to: slot)
                         return true
                     }
+            }
+            .frame(maxWidth: .infinity, minHeight: Self.slotHeight, maxHeight: Self.slotHeight, alignment: .topLeading)
+        }
+        .frame(height: Self.slotHeight)
+        .id("\(slot.hour)-\(slot.minute)")
+    }
 
-                GeometryReader { geometry in
-                    ForEach(tasksForSlot(slot)) { task in
-                        taskView(task: task, slot: slot, containerWidth: geometry.size.width)
-                    }
+    /// Width of the time labels on the left (label + its padding).
+    private static let timeLabelWidth: CGFloat = 68
+
+    /// All tasks, drawn in one layer above the rows at their real positions.
+    /// Keeping them out of the rows means a later row can never sit on top of
+    /// an earlier task, and side-by-side tasks each get their own tap area.
+    private var taskLayer: some View {
+        GeometryReader { g in
+            let width = max(0, g.size.width - Self.timeLabelWidth)
+            ForEach(timeSlots, id: \.self) { slot in
+                ForEach(tasksForSlot(slot)) { task in
+                    taskView(task: task, slot: slot, containerWidth: width)
+                        .padding(.leading, Self.timeLabelWidth)
+                        .padding(.top, CGFloat(slot.index) * Self.slotHeight)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 10)
         }
-        .id("\(slot.hour)-\(slot.minute)")
+    }
+
+    /// Height of one 5-minute row. Tasks are exactly `minutes / 5` rows tall.
+    static let slotHeight: CGFloat = 18
+
+    /// One-line (5 min) or two-line (10 min) layout for short tasks.
+    @ViewBuilder
+    private func compactTaskContent(_ task: Task, duration: Int) -> some View {
+        let time = "\(formatTimeToAMPM(task.startTime)) – \(formatTimeToAMPM(task.endTime))"
+        let title = HStack(spacing: 4) {
+            if task.completed {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.green)
+            }
+            Text(task.title)
+                .font(.system(size: 11, weight: .semibold))
+                .strikethrough(task.completed)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        if duration <= 5 {
+            HStack(spacing: 6) {
+                title
+                Spacer(minLength: 4)
+                Text(time)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .frame(maxHeight: .infinity)
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                title
+                Text("\(time) · \(duration)m")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+        }
     }
     
    private func taskView(
@@ -884,15 +973,9 @@ struct TasksCalendarView: View {
   let slotMinutes  = slot.hour * 60 + slot.minute
   let isStartSlot  = slotMinutes == startMinutes
 
-  let overlappingTasks   = getOverlappingTasks(for: task)
-  let position           = overlappingTasks.firstIndex { $0.id == task.id } ?? 0
-  let totalOverlapping   = overlappingTasks.count
-  let taskWidth          = totalOverlapping > 1
-    ? 1.0 / Double(totalOverlapping)
-    : 1.0
-  let leftOffset         = totalOverlapping > 1
-    ? Double(position) / Double(totalOverlapping)
-    : 0.0
+  let column             = taskColumns()[task.id] ?? (column: 0, columns: 1)
+  let taskWidth          = 1.0 / Double(column.columns)
+  let leftOffset         = Double(column.column) / Double(column.columns)
 
   // Compute duration in minutes, wrapping past midnight if needed
   let duration = endMinutes > startMinutes
@@ -900,7 +983,8 @@ struct TasksCalendarView: View {
     : (24 * 60 - startMinutes) + endMinutes
 
   // Compute taskHeight based on duration
-  let taskHeight = max(10.0, (Double(duration) / 5.0 * 14.2)-20)
+  // Exactly as tall as the rows it covers, less a 1pt gap before the next task.
+  let taskHeight = max(Self.slotHeight, CGFloat(duration) / 5 * Self.slotHeight) - 1
   let now = Calendar.current.dateComponents([.hour, .minute], from: currentTime)
   let currentMinutes = (now.hour ?? 0) * 60 + (now.minute ?? 0)
   let isCurrentTaskToday = Calendar.current.isDate(selectedDate, inSameDayAs: Date()) && 
@@ -908,7 +992,9 @@ struct TasksCalendarView: View {
   let remaining = isCurrentTaskToday ? max(0, endMinutes - currentMinutes) : 0
 
   return VStack(alignment: .leading, spacing: 4) {
-    if isStartSlot {
+    if isStartSlot && duration <= 10 {
+      compactTaskContent(task, duration: duration)
+    } else if isStartSlot {
       let metrics = task.repeatAgain != nil ? task.calculateMetrics(days: metricDays, allTasks: allTasks, referenceDate: selectedDate) : nil
       
       VStack(alignment: .leading, spacing: 2) {
@@ -1096,28 +1182,23 @@ struct TasksCalendarView: View {
                 }
             }
         }
-    HStack {
-        Text(" ")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        
-        Spacer()
-    }
-.frame(height: taskHeight)
-.overlay(
-    Rectangle()
-        .fill(Color.clear)
-        .frame(height: taskHeight)
-)
 }//vstacn end
     }
   }
-  .padding(isStartSlot ? 0 : 0)
+  .padding(.leading, 7)
+  .padding(.trailing, 4)
+  .padding(.vertical, duration <= 10 ? 0 : 3)
+  .frame(maxWidth: .infinity, minHeight: taskHeight, maxHeight: taskHeight, alignment: .topLeading)
   .background(taskBackgroundColor(task))
+  .overlay(alignment: .leading) {
+    // Colored edge, like most calendar apps.
+    Rectangle().fill(priorityColor(task.priority)).frame(width: 3)
+  }
+  .clipShape(RoundedRectangle(cornerRadius: 4))
   .overlay(impulseOverlay(task))
   .overlay(alignment: .topTrailing) { impulseStatusBadge(task) }
   .overlay(
-    Rectangle()
+    RoundedRectangle(cornerRadius: 4)
       .stroke(isCurrentTask(task) ? Color.blue : Color.clear, lineWidth: 2)
   )
   // Use taskHeight here
@@ -1125,7 +1206,9 @@ struct TasksCalendarView: View {
     width: containerWidth * taskWidth,
     // height: taskHeight
   )
-  .offset(x: containerWidth * leftOffset)
+  // Padding (not offset) so the tap area moves with the task.
+  .contentShape(Rectangle())
+  .padding(.leading, containerWidth * leftOffset)
   .draggable(TaskDragPayload(id: task.id))
   .dropDestination(for: TaskDragPayload.self) { payloads, _ in
     guard let payload = payloads.first,
@@ -1154,14 +1237,35 @@ struct TasksCalendarView: View {
         }
     }
     
+    /// The red line at the current time. Redraws at the start of every minute and
+    /// is placed inside the measured row for that time, so it stays exact even
+    /// though rows with labels or tasks are taller than empty ones.
     private var currentTimeIndicator: some View {
-        Rectangle()
-            .fill(Color.red)
-            .frame(height: 2)
-            .offset(y: currentTimeOffset)
-            .opacity(Calendar.current.isDate(selectedDate, inSameDayAs: Date()) ? 1 : 0)
+        TimelineView(.everyMinute) { context in
+            if Calendar.current.isDate(selectedDate, inSameDayAs: context.date),
+               let y = nowLineY(at: context.date) {
+                Rectangle()
+                    .fill(Color.red)
+                    .frame(height: 2)
+                    .overlay(alignment: .leading) {
+                        Circle().fill(Color.red).frame(width: 8, height: 8).offset(x: 64)
+                    }
+                    .offset(y: y - 1)
+                    .allowsHitTesting(false)
+            }
+        }
     }
-    
+
+    /// Y position of `date`'s clock time within the measured rows.
+    private func nowLineY(at date: Date) -> CGFloat? {
+        let c = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
+        let minutes = Double((c.hour ?? 0) * 60 + (c.minute ?? 0)) + Double(c.second ?? 0) / 60
+        let index = Int(minutes / 5)
+        guard let frame = slotFrames[index] else { return nil }
+        let fraction = (minutes - Double(index * 5)) / 5
+        return frame.minY + frame.height * fraction
+    }
+
     private var timeSlots: [TimeSlot] {
         var slots: [TimeSlot] = []
         for hour in 0..<24 {
@@ -1176,35 +1280,11 @@ struct TasksCalendarView: View {
 
 
 
-    private var currentTimeOffset: CGFloat {
-        let hour = Calendar.current.component(.hour, from: currentTime)
-        let minute = Calendar.current.component(.minute, from: currentTime)
-    
-    // Convert to 12-hour format where 12 PM = 0
-    let adjustedHour: Int
-    if hour == 0 {
-        adjustedHour = -12  // 12 AM = -12
-    } else if hour <= 12 {
-        adjustedHour = hour - 12  // 1 AM = -11, 2 AM = -10, ..., 12 PM = 0
-    } else {
-        adjustedHour = hour - 12  // 1 PM = 1, 2 PM = 2, ..., 11 PM = 11
-    }
-    
-    // Calculate offset: each hour = 180 units, plus proportional minutes
-    let hourOffset = CGFloat(adjustedHour) * 170
-    let minuteOffset = CGFloat(minute) * (170.0 / 60.0)  // 3 units per minute
-    
-    return hourOffset + minuteOffset
-}
-
     private func tasksForSlot(_ slot: TimeSlot) -> [Task] {
         let slotMinutes = slot.hour * 60 + slot.minute
         let filteredTasks = tasks.filter { task in
             let startMinutes = timeToMinutes(task.startTime)
             return slotMinutes == startMinutes && passesPercentageFilter(task)
-        }
-        if filteredTasks.count > 0 {
-            print("Slot \(slot.hour):\(slot.minute) has \(filteredTasks.count) tasks")
         }
         return filteredTasks
     }
@@ -1324,17 +1404,42 @@ struct TasksCalendarView: View {
         }
     }
     
-    private func getOverlappingTasks(for task: Task) -> [Task] {
-        let taskStart = timeToMinutes(task.startTime)
-        let taskEnd = timeToMinutes(task.endTime)
-        
-        return tasks.filter { t in
-            let tStart = timeToMinutes(t.startTime)
-            let tEnd = timeToMinutes(t.endTime)
-            return (tStart < taskEnd && tEnd > taskStart)
+    /// Side-by-side placement for overlapping tasks, like calendar apps:
+    /// each task takes the first free column, and every task in a group of
+    /// overlapping tasks shares that group's column count, so none sit on top
+    /// of each other.
+    private func taskColumns() -> [UUID: (column: Int, columns: Int)] {
+        let timed = tasks
+            .filter { !$0.startTime.isEmpty && !$0.endTime.isEmpty }
+            .map { t -> (id: UUID, start: Int, end: Int) in
+                let start = timeToMinutes(t.startTime)
+                var end = timeToMinutes(t.endTime)
+                if end <= start { end = 24 * 60 }   // runs past midnight
+                return (t.id, start, end)
+            }
+            .sorted { $0.start != $1.start ? $0.start < $1.start : $0.end > $1.end }
+
+        var result: [UUID: (column: Int, columns: Int)] = [:]
+        var group: [(id: UUID, column: Int)] = []
+        var columnEnds: [Int] = []   // when each column frees up, within the group
+        var groupEnd = -1
+
+        func closeGroup() {
+            for item in group { result[item.id] = (item.column, max(1, columnEnds.count)) }
+            group = []; columnEnds = []
         }
+
+        for t in timed {
+            if t.start >= groupEnd { closeGroup() }
+            let column = columnEnds.firstIndex { $0 <= t.start } ?? columnEnds.count
+            if column == columnEnds.count { columnEnds.append(t.end) } else { columnEnds[column] = t.end }
+            group.append((t.id, column))
+            groupEnd = max(groupEnd, t.end)
+        }
+        closeGroup()
+        return result
     }
-    
+
     private func timeToMinutes(_ timeStr: String) -> Int {
         let cleanTimeStr = timeStr.trimmingCharacters(in: .whitespaces)
         let components = cleanTimeStr.components(separatedBy: ":")
@@ -1921,9 +2026,20 @@ struct TasksCalendarView: View {
 }
 
 
+/// Frames of the timeline's 5-minute rows, keyed by `TimeSlot.index`.
+struct TimelineSlotFramesKey: PreferenceKey {
+    static var defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
 struct TimeSlot: Hashable {
     let hour: Int
     let minute: Int
+
+    /// 0 for 12:00 AM, 1 for 12:05 AM, … 287 for 11:55 PM.
+    var index: Int { hour * 12 + minute / 5 }
     
     var timeString: String {
         let displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour)
@@ -2053,6 +2169,9 @@ struct EditTaskView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    TaskConflictWarning(date: taskDate ?? Date(), start: startTime, end: endTime,
+                                        excluding: task.id)
                 }
                 
                 if !isUntimed && !task.startTime.isEmpty && task.date != nil {
@@ -2347,6 +2466,7 @@ struct TaskActionsView: View {
     @State private var customIsExtend = false
     @State private var showSwap = false
     @State private var didSwap = false
+    @State private var showSplitConfirm = false
     @Query(sort: \ImpulseType.sortOrder) private var snoozeImpulseTypes: [ImpulseType]
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
 
@@ -2367,6 +2487,32 @@ struct TaskActionsView: View {
 
     private var extendMessage: String {
         "Adds time to the end of this task. Tasks starting within \(TaskMover.followWindowMinutes) min after it are pushed later by the same amount; later tasks it would run into are pushed just enough to not overlap."
+    }
+
+    // MARK: Split
+
+    private var splitTimeText: String {
+        guard let m = TaskSplitter.splitMinute(for: task) else { return "" }
+        return formatTimeToAMPM(TaskSplitter.hm(m))
+    }
+
+    private var splitMessage: String {
+        let parts = "\(formatTimeToAMPM(task.startTime)) – \(splitTimeText) and \(splitTimeText) – \(formatTimeToAMPM(task.endTime))"
+        var text = "Makes two tasks: \(parts). The first keeps its status, notes, subtasks and files."
+        if task.repeatAgain != nil {
+            text += task.reassign
+                ? " The next occurrence is already handled (repeat is red)."
+                : " The next occurrence is created now and the repeat turns red on both parts."
+        }
+        return text
+    }
+
+    private func splitAtNow() {
+        guard let second = TaskSplitter.split(task, context: modelContext) else { return }
+        // Refresh start/end alerts for both parts.
+        NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: [task.id, second.id])
+        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
+        dismiss()
     }
 
     private func extend(by minutes: Int) {
@@ -2598,6 +2744,19 @@ struct TaskActionsView: View {
                                 Button("Cancel", role: .cancel) {}
                             } message: {
                                 Text(extendMessage)
+                            }
+
+                            if TaskSplitter.splitMinute(for: task) != nil {
+                                iconTile("scissors", color: .pink, label: "Split at now") {
+                                    showSplitConfirm = true
+                                }
+                                .confirmationDialog("Split this task at the red line?",
+                                                    isPresented: $showSplitConfirm, titleVisibility: .visible) {
+                                    Button("Split at \(splitTimeText)") { splitAtNow() }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: {
+                                    Text(splitMessage)
+                                }
                             }
 
                             if !task.completed && !task.notCompleted {

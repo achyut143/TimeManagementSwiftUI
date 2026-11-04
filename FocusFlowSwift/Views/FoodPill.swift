@@ -305,17 +305,20 @@ struct FoodPill: View {
 /// (which can't present sheets itself, since it only takes touches on the pills).
 @MainActor
 enum FoodPresenter {
-    static func present<V: View>(_ make: (_ close: @escaping () -> Void) -> V) {
+    /// Returns false when there's no window to present on yet.
+    @discardableResult
+    static func present<V: View>(_ make: (_ close: @escaping () -> Void) -> V) -> Bool {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
         let windows = scene?.windows.filter { !($0 is FloatingButtonsWindow) } ?? []
         guard let window = windows.first(where: \.isKeyWindow) ?? windows.first,
-              var top = window.rootViewController else { return }
+              var top = window.rootViewController else { return false }
         while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
 
         let host = UIHostingController<AnyView>(rootView: AnyView(EmptyView()))
         let close: () -> Void = { [weak host] in host?.dismiss(animated: true) }
         host.rootView = AnyView(make(close).modelContainer(FocusFlowSwiftApp.sharedContainer))
         top.present(host, animated: true)
+        return true
     }
 }

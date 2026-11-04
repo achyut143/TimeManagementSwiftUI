@@ -195,6 +195,28 @@ struct BattleMetrics: Equatable {
 extension Date {
     var startOfDay: Date { Calendar.current.startOfDay(for: self) }
 
+    /// First and last day of `date`'s month (start-of-day dates).
+    static func monthBounds(of date: Date = Date(), calendar: Calendar = .current) -> (start: Date, end: Date) {
+        let start = calendar.dateInterval(of: .month, for: date)?.start ?? calendar.startOfDay(for: date)
+        let next = calendar.date(byAdding: .month, value: 1, to: start) ?? start
+        let end = calendar.date(byAdding: .day, value: -1, to: next) ?? start
+        return (start, end)
+    }
+
+    /// Every day from `start`'s day through `end`'s day, inclusive, as start-of-day
+    /// dates. Ignores the time of day, so the last day is never dropped.
+    static func days(from start: Date, through end: Date, calendar: Calendar = .current) -> [Date] {
+        var day = calendar.startOfDay(for: start)
+        let last = calendar.startOfDay(for: end)
+        var result: [Date] = []
+        while day <= last {
+            result.append(day)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return result
+    }
+
     /// The clock time `minutes` after midnight on this date's day, e.g. 360 → 6:00 AM.
     /// Unlike adding minutes to midnight, this stays right on daylight-saving days
     /// (when midnight + 6 hours is 5 AM or 7 AM on the clock). 1440 or more rolls
