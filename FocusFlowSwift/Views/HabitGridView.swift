@@ -107,7 +107,7 @@ struct HabitGridView: View {
         cachedDateRange = Date.days(from: appliedFromDate, through: appliedToDate, calendar: cal)
 
         let ht = tasks.filter { $0.repeatAgain != nil }
-        var names = Array(Set(ht.map { $0.title })).sorted()
+        var names = Array(Set(ht.map { $0.habitName })).sorted()
         if !appliedSearch.isEmpty {
             names = names.filter { $0.localizedCaseInsensitiveContains(appliedSearch) }
         }
@@ -115,7 +115,7 @@ struct HabitGridView: View {
 
         var tasksByHabit: [String: [Task]] = [:]
         for task in ht {
-            tasksByHabit[task.title, default: []].append(task)
+            tasksByHabit[task.habitName, default: []].append(task)
         }
 
         var statsMap: [String: GridHabitStats] = [:]

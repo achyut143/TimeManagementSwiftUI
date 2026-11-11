@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Combine
 import BackgroundTasks
 import AVFoundation
 import UserNotifications
@@ -23,8 +24,13 @@ struct MigrationWrapper<Content: View>: View {
                     TaskAttachmentMigration.migrateAttachmentsIfNeeded(modelContext: modelContext)
                     FoodSetup.runOnce(context: modelContext)
                     ImpulseRules.repairLoggedImpulses(context: modelContext)
+                    // One time: link existing repeat tasks into series.
+                    RepeatSeries.migrateOnce(context: modelContext)
+                    HabitNames.shared.rebuild(context: modelContext)
                     hasMigrated = true
                 }
+                // Today's repeat tasks (weekly/monthly/every N days).
+                RepeatScheduler.fillToday(context: modelContext)
                 // Settles any away-time exit left pending from a force-quit
                 // while the app was backgrounded, up to right now.
                 AwayTimeTracker.shared.recordReturn()
@@ -36,6 +42,18 @@ struct MigrationWrapper<Content: View>: View {
                 FocusSessionTracker.shared.recordEnter()
                 FoodNotifications.reschedule(context: modelContext)
                 ImpulseGate.presentIfPending()
+                RepeatScheduler.fillToday(context: modelContext)
+            }
+            // Habit names follow renames and new series.
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskUpdated"))) { _ in
+                HabitNames.shared.rebuild(context: modelContext)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskCreated"))) { _ in
+                HabitNames.shared.rebuild(context: modelContext)
+            }
+            // Midnight passed with the app open: add the new day's repeat tasks.
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+                RepeatScheduler.fillToday(context: modelContext)
             }
             // An "Impulse check" from a Shortcuts automation brought the app forward.
             .onReceive(NotificationCenter.default.publisher(for: ImpulseGate.requestedNotification)) { _ in

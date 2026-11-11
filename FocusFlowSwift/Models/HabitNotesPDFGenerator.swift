@@ -6,7 +6,7 @@ class HabitNotesPDFGenerator {
     static func generatePDF(habitName: String, tasks: [Task], fromDate: Date, toDate: Date) -> URL? {
         // Filter tasks for this habit within date range with notes
         let filteredTasks = tasks.filter { task in
-            guard task.title == habitName,
+            guard task.habitName == habitName,
                   let taskDate = task.date,
                   taskDate >= fromDate && taskDate <= toDate,
                   let notes = task.notes,

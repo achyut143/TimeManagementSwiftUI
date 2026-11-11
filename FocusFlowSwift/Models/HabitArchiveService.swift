@@ -5,7 +5,7 @@ class HabitArchiveService {
     
     static func archiveHabit(habitName: String, tasks: [Task], context: ModelContext) -> ArchivedHabit? {
         // Get all tasks for this habit
-        let habitTasks = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }
+        let habitTasks = tasks.filter { $0.habitName == habitName && $0.repeatAgain != nil }
         
         guard !habitTasks.isEmpty else { return nil }
         

@@ -500,7 +500,7 @@ struct TaskRowView: View {
         let calendar = Calendar.current
         let end = calendar.startOfDay(for: refDate)
         let start = calendar.date(byAdding: .day, value: -metricDays, to: end) ?? end
-        let habitTasks = allTasks.filter { $0.title == task.title && $0.repeatAgain != nil }
+        let habitTasks = allTasks.filter { $0.repeatAgain != nil && $0.isSameHabit(as: task) }
         var earned = 0.0, allocated = 0.0
         var day = start
         while day <= end {

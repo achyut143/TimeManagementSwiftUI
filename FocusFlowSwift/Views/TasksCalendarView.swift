@@ -45,6 +45,7 @@ struct TasksCalendarView: View {
     @State private var endTime = Calendar.current.date(byAdding: .minute, value: 15, to: Date()) ?? Date()
     @State private var taskDurationMinutes = 15
     @State private var repeatDays = 0
+    @State private var repeatDraft = RepeatDraft()
     @State private var taskWeight = 1.0
     @State private var taskPriority = "P3"
     @State private var isUntimedTask = false
@@ -157,6 +158,8 @@ struct TasksCalendarView: View {
                 DatePicker("", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact)
                     .onChange(of: selectedDate) { _, _ in
+                        // Opening a day (today or later) adds its repeat tasks.
+                        RepeatScheduler.fill(day: selectedDate, context: modelContext)
                         updateQuery()
                     }
                 
@@ -354,15 +357,8 @@ struct TasksCalendarView: View {
                 TaskNotesPagerView(task: task)
             }
         }
-        .alert("Delete Task", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                if let task = taskToDelete {
-                    deleteTask(task)
-                }
-            }
-        } message: {
-            Text("Are you sure you want to delete this task?")
+        .taskDeleteAlert(isPresented: $showDeleteConfirmation, task: taskToDelete) { _ in
+            updateQuery()
         }
         .alert("Mark All as Not Completed", isPresented: $showMarkAllNotCompletedConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -517,15 +513,6 @@ struct TasksCalendarView: View {
                     }
                     
                     VStack(alignment: .leading) {
-                        Text("Repeat (days)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("0 = no repeat", value: $repeatDays, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
-                    }
-                    
-                    VStack(alignment: .leading) {
                         Text("Priority")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -545,6 +532,11 @@ struct TasksCalendarView: View {
                     .buttonStyle(.borderedProminent)
                 }
                 
+                RepeatSummaryButton(draft: $repeatDraft, taskDate: selectedDate)
+                    .font(.caption)
+                    .padding(.horizontal)
+                    .onChange(of: repeatDraft) { _, d in repeatDays = d.repeatAgain }
+
                 if repeatDays > 0 {
                     Toggle("Copy Subtasks on Repeat", isOn: $copySubtasks)
                         .padding(.horizontal)
@@ -758,10 +750,10 @@ struct TasksCalendarView: View {
                             .clipShape(Capsule())
                     }
                     
-                    if let repeatDays = task.repeatAgain {
+                    if let rule = task.repeatRule {
                         HStack(spacing: 2) {
                             Image(systemName: "repeat")
-                            Text("\(repeatDays)")
+                            Text(rule.badge)
                         }
                         .font(.caption)
                         .foregroundStyle(.blue)
@@ -913,9 +905,11 @@ struct TasksCalendarView: View {
             let width = max(0, g.size.width - Self.timeLabelWidth)
             ForEach(timeSlots, id: \.self) { slot in
                 ForEach(tasksForSlot(slot)) { task in
+                    // Exact minute, so a task at 2:17 sits 2/5 into the 2:15 row.
+                    let start = timeToMinutes(task.startTime)
                     taskView(task: task, slot: slot, containerWidth: width)
                         .padding(.leading, Self.timeLabelWidth)
-                        .padding(.top, CGFloat(slot.index) * Self.slotHeight)
+                        .padding(.top, CGFloat(start) / 5 * Self.slotHeight)
                 }
             }
         }
@@ -971,7 +965,7 @@ struct TasksCalendarView: View {
   let startMinutes = timeToMinutes(task.startTime)
   let endMinutes   = timeToMinutes(task.endTime)
   let slotMinutes  = slot.hour * 60 + slot.minute
-  let isStartSlot  = slotMinutes == startMinutes
+  let isStartSlot  = slotMinutes == startMinutes - startMinutes % 5
 
   let column             = taskColumns()[task.id] ?? (column: 0, columns: 1)
   let taskWidth          = 1.0 / Double(column.columns)
@@ -1103,10 +1097,10 @@ struct TasksCalendarView: View {
                         .clipShape(Capsule())
                 }
                 
-                if let repeatDays = task.repeatAgain {
+                if let rule = task.repeatRule {
                     HStack(spacing: 2) {
                         Image(systemName: "repeat")
-                        Text("\(repeatDays)")
+                        Text(rule.badge)
                     }
                     .font(.caption2)
                     .foregroundStyle(.blue)
@@ -1283,8 +1277,10 @@ struct TasksCalendarView: View {
     private func tasksForSlot(_ slot: TimeSlot) -> [Task] {
         let slotMinutes = slot.hour * 60 + slot.minute
         let filteredTasks = tasks.filter { task in
+            // Tasks starting between marks (e.g. 2:17 after a split) belong to
+            // the 5-minute row they start in.
             let startMinutes = timeToMinutes(task.startTime)
-            return slotMinutes == startMinutes && passesPercentageFilter(task)
+            return slotMinutes == startMinutes - startMinutes % 5 && passesPercentageFilter(task)
         }
         return filteredTasks
     }
@@ -1359,7 +1355,7 @@ struct TasksCalendarView: View {
         }
         
         // Get all tasks with the same title (same habit)
-        let habitTasks = allTasks.filter { $0.title == task.title && $0.repeatAgain != nil }
+        let habitTasks = allTasks.filter { $0.repeatAgain != nil && $0.isSameHabit(as: task) }
         
         var earnedPoints: Double = 0
         var allocatedPoints: Double = 0
@@ -1635,7 +1631,7 @@ struct TasksCalendarView: View {
                 createRepeatTask(from: task)
             }
             
-            if task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1) {
+            if !task.isDailyRepeat {
                 createIncompleteTask(from: task)
             }
         }
@@ -1676,7 +1672,7 @@ struct TasksCalendarView: View {
             source.taskDescription = taskTags
             source.weight = taskWeight
             source.priority = taskPriority
-            source.repeatAgain = repeatDays > 0 ? repeatDays : nil
+            RepeatRule.apply(repeatDraft.rule, to: source)
             source.copySubtasks = copySubtasks
             let before = ImpulseRules.Snapshot(source)
             source.goal = selectedGoalForNewTask
@@ -1738,6 +1734,7 @@ struct TasksCalendarView: View {
                 scheduleTaskNotifications(for: task)
             }
 
+            RepeatRule.apply(repeatDraft.rule, to: task)
             task.goal = selectedGoalForNewTask
             task.impulseTypeID = selectedImpulseTypeID
             ImpulseRules.reconcile(task, before: nil, types: impulseTypes)
@@ -1755,6 +1752,7 @@ struct TasksCalendarView: View {
         taskTitle = ""
         taskTags = ""
         repeatDays = 0
+        repeatDraft = RepeatDraft()
         taskWeight = 1.0
         taskPriority = "P3"
         isUntimedTask = false
@@ -1779,6 +1777,7 @@ struct TasksCalendarView: View {
         if task.repeatAgain != nil {
             repeatDays = task.repeatAgain ?? 0
         }
+        repeatDraft = RepeatDraft(task: task)
         backlogSourceTask = task
     }
 
@@ -1892,6 +1891,7 @@ struct TasksCalendarView: View {
             whyStatement: task.whyStatement,
             whyStatementPinned: task.whyStatementPinned
         )
+        task.copyRepeat(to: newTask)
         newTask.goal = task.goal
         ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
@@ -2070,6 +2070,7 @@ struct EditTaskView: View {
     @State private var weight: Double
     @State private var taskDate: Date?
     @State private var repeatDays: Int
+    @State private var repeatDraft: RepeatDraft
     @State private var priority: String
     @State private var isUntimed: Bool
     @State private var timeSpent: Double
@@ -2113,6 +2114,7 @@ struct EditTaskView: View {
         _durationMinutes = State(initialValue: existingDuration > 0 ? existingDuration : 15)
         _weight = State(initialValue: task.weight)
         _repeatDays = State(initialValue: task.repeatAgain ?? 0)
+        _repeatDraft = State(initialValue: RepeatDraft(task: task))
         _priority = State(initialValue: task.priority)
         _timeSpent = State(initialValue: task.timeSpent ?? 0.0)
         _elapsedTime = State(initialValue: task.elapsedTime ?? 0.0)
@@ -2214,12 +2216,8 @@ struct EditTaskView: View {
                         .frame(width: 100)
                 }
                 
-                HStack {
-                    Text("Repeat (days)")
-                    TextField("0 = no repeat", value: $repeatDays, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
-                }
+                RepeatSummaryButton(draft: $repeatDraft, taskDate: taskDate ?? Date())
+                    .onChange(of: repeatDraft) { _, d in repeatDays = d.repeatAgain }
                 
                 if repeatDays > 0 {
                     Toggle("Copy Subtasks on Repeat", isOn: $copySubtasks)
@@ -2380,6 +2378,9 @@ struct EditTaskView: View {
 
         // Capture the old effective weight before making changes
         let oldEffectiveWeight = task.effectiveWeight
+        // Repeat settings edited here carry on to this series' later copies.
+        let repeatChanged = RepeatDraft(task: task) != repeatDraft
+        let oldDate = task.date
         let impulseBefore = ImpulseRules.Snapshot(task)
 
         task.title = title
@@ -2391,7 +2392,7 @@ struct EditTaskView: View {
             task.startTime = ""
             task.endTime = ""
             task.date = taskDate // Keep the date for untimed tasks
-            task.repeatAgain = repeatDays > 0 ? repeatDays : nil // Allow repeat for untimed tasks
+            RepeatRule.apply(repeatDraft.rule, to: task) // Allow repeat for untimed tasks
             task.elapsedTime = elapsedTime > 0 ? elapsedTime : nil // Set elapsed time for untimed tasks
         } else {
             // Enforce the 5-minute floor here (on save) rather than while the
@@ -2401,7 +2402,7 @@ struct EditTaskView: View {
             task.startTime = formatter.string(from: startTime)
             task.endTime = formatter.string(from: endTime)
             task.date = taskDate
-            task.repeatAgain = repeatDays > 0 ? repeatDays : nil
+            RepeatRule.apply(repeatDraft.rule, to: task)
             task.elapsedTime = nil // Clear elapsed time for timed tasks
         }
         
@@ -2411,6 +2412,12 @@ struct EditTaskView: View {
         task.weight = weight
         task.priority = priority
         task.copySubtasks = copySubtasks
+        if repeatChanged { RepeatSeries.applyRuleToFuture(from: task, context: modelContext) }
+        // Moved to another day: the old day keeps counting as handled, so the
+        // daily fill doesn't put a copy back there.
+        if let oldDate, let newDate = task.date, !Calendar.current.isDate(oldDate, inSameDayAs: newDate) {
+            RepeatScheduler.markFilled(task, on: oldDate)
+        }
         task.goal = selectedGoal
 
         task.impulseTypeID = impulseTypeID
@@ -2454,7 +2461,8 @@ struct TaskActionsView: View {
     @State private var showTimeSpentDialog = false
     @State private var showFileAttachments = false
     @State private var showSubtasksView = false
-    @State private var copiedTask: Task?
+    @State private var showDuplicate = false
+    @State private var didDuplicate = false
     @State private var navigateToHabits = false
     @State private var showPartialTimeAlert = false
     @State private var subtasksAccordionExpanded = true
@@ -2466,7 +2474,8 @@ struct TaskActionsView: View {
     @State private var customIsExtend = false
     @State private var showSwap = false
     @State private var didSwap = false
-    @State private var showSplitConfirm = false
+    @State private var showSplitSheet = false
+    @State private var didSplit = false
     @Query(sort: \ImpulseType.sortOrder) private var snoozeImpulseTypes: [ImpulseType]
     @AppStorage("metricDays") private var metricDays: Int = 30 // Use AppStorage for cross-view sync
 
@@ -2487,32 +2496,6 @@ struct TaskActionsView: View {
 
     private var extendMessage: String {
         "Adds time to the end of this task. Tasks starting within \(TaskMover.followWindowMinutes) min after it are pushed later by the same amount; later tasks it would run into are pushed just enough to not overlap."
-    }
-
-    // MARK: Split
-
-    private var splitTimeText: String {
-        guard let m = TaskSplitter.splitMinute(for: task) else { return "" }
-        return formatTimeToAMPM(TaskSplitter.hm(m))
-    }
-
-    private var splitMessage: String {
-        let parts = "\(formatTimeToAMPM(task.startTime)) – \(splitTimeText) and \(splitTimeText) – \(formatTimeToAMPM(task.endTime))"
-        var text = "Makes two tasks: \(parts). The first keeps its status, notes, subtasks and files."
-        if task.repeatAgain != nil {
-            text += task.reassign
-                ? " The next occurrence is already handled (repeat is red)."
-                : " The next occurrence is created now and the repeat turns red on both parts."
-        }
-        return text
-    }
-
-    private func splitAtNow() {
-        guard let second = TaskSplitter.split(task, context: modelContext) else { return }
-        // Refresh start/end alerts for both parts.
-        NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: [task.id, second.id])
-        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
-        dismiss()
     }
 
     private func extend(by minutes: Int) {
@@ -2746,16 +2729,19 @@ struct TaskActionsView: View {
                                 Text(extendMessage)
                             }
 
-                            if TaskSplitter.splitMinute(for: task) != nil {
-                                iconTile("scissors", color: .pink, label: "Split at now") {
-                                    showSplitConfirm = true
+                            if TaskSplitter.canSplit(task) {
+                                iconTile("scissors", color: .pink, label: "Split task") {
+                                    showSplitSheet = true
                                 }
-                                .confirmationDialog("Split this task at the red line?",
-                                                    isPresented: $showSplitConfirm, titleVisibility: .visible) {
-                                    Button("Split at \(splitTimeText)") { splitAtNow() }
-                                    Button("Cancel", role: .cancel) {}
-                                } message: {
-                                    Text(splitMessage)
+                                .sheet(isPresented: $showSplitSheet, onDismiss: {
+                                    if didSplit { dismiss() }
+                                }) {
+                                    SplitTaskView(task: task) { second in
+                                        didSplit = true
+                                        // Refresh start/end alerts for both parts.
+                                        NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: [task.id, second.id])
+                                        NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
+                                    }
                                 }
                             }
 
@@ -2805,13 +2791,16 @@ struct TaskActionsView: View {
                             }
                         }
 
-                        iconTile("doc.on.doc", color: .blue, label: "Copy") {
-                            copiedTask = task
+                        iconTile("plus.square.on.square", color: .blue, label: "Duplicate") {
+                            showDuplicate = true
                         }
-
-                        if copiedTask != nil {
-                            iconTile("doc.on.clipboard", color: .green, label: "Paste") {
-                                pasteTask()
+                        .sheet(isPresented: $showDuplicate, onDismiss: {
+                            if didDuplicate { onTaskDeleted(); dismiss() }
+                        }) {
+                            DuplicateTaskView(task: task) { copy in
+                                didDuplicate = true
+                                NotificationCenter.default.post(name: NSNotification.Name("TasksSnoozed"), object: [copy.id])
+                                NotificationCenter.default.post(name: NSNotification.Name("TaskUpdated"), object: nil)
                             }
                         }
 
@@ -2843,14 +2832,9 @@ struct TaskActionsView: View {
                 }
             }
         }
-        .alert("Delete Task", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                deleteTask()
-                dismiss()
-            }
-        } message: {
-            Text("Are you sure you want to delete this task?")
+        .taskDeleteAlert(isPresented: $showDeleteConfirmation, task: task) { _ in
+            onTaskDeleted()
+            dismiss()
         }
         .sheet(isPresented: $showEditDialog) {
             EditTaskView(task: task)
@@ -2901,7 +2885,7 @@ struct TaskActionsView: View {
         }
         .sheet(isPresented: $navigateToHabits) {
             NavigationStack {
-                HabitDashboardView(initialHabit: task.title)
+                HabitDashboardView(initialHabit: task.habitName)
             }
         }
     }
@@ -2963,7 +2947,7 @@ struct TaskActionsView: View {
         }
          if task.notCompleted,
 
-task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
+!task.isDailyRepeat
     {
         createIncompleteTask(from: task)
        
@@ -3036,6 +3020,7 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
             whyStatementPinned: task.whyStatementPinned // Copy pin status
             // timeSpent is intentionally not copied for repeat tasks
         )
+        task.copyRepeat(to: newTask)
         newTask.goal = task.goal
         ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
@@ -3055,35 +3040,13 @@ task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1)
         onTaskDeleted()
     }
     
-    private func pasteTask() {
-        guard let copied = copiedTask else { return }
-        
-        let newTask = Task(
-            title: copied.title,
-            taskDescription: copied.taskDescription,
-            startTime: copied.startTime,
-            endTime: copied.endTime,
-            weight: copied.weight,
-            date: copied.date,
-            repeatAgain: copied.repeatAgain,
-            copySubtasks: copied.copySubtasks
-            // timeSpent is intentionally not copied when pasting tasks
-        )
-        newTask.goal = copied.goal
-
-        modelContext.insert(newTask)
-        try? modelContext.save()
-        onTaskDeleted()
-        dismiss()
-    }
-    
     private func calculatePointsForTask(_ task: Task) -> (earned: Double, allocated: Double) {
         guard task.repeatAgain != nil else {
             return (earned: 0, allocated: 0)
         }
         
         // Get all tasks with the same title (same habit)
-        let habitTasks = allTasks.filter { $0.title == task.title && $0.repeatAgain != nil }
+        let habitTasks = allTasks.filter { $0.repeatAgain != nil && $0.isSameHabit(as: task) }
         
         var earnedPoints: Double = 0
         var allocatedPoints: Double = 0

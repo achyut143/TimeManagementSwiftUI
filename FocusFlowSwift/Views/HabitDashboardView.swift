@@ -30,6 +30,9 @@ struct HabitDashboardView: View {
     @State private var habitVisualization: HabitVisualization = .calendar
     @State private var chartGranularity: ChartGranularity = .range
     @State private var chartYear: Int = Calendar.current.component(.year, from: Date())
+    @State private var showEndSheet = false
+    @State private var endDay = Date()
+    @State private var confirmResume = false
 
     var initialHabit: String? = nil
     
@@ -87,6 +90,7 @@ struct HabitDashboardView: View {
 
       // 3. The rest of your content shows only if there’s a selected habit
     if !selectedHabit.isEmpty {
+    habitEndBanner
     visualizationPicker
     if habitVisualization == .calendar {
         habitCalendar
@@ -110,6 +114,15 @@ struct HabitDashboardView: View {
       } else if selectedHabit.isEmpty, let first = filteredHabitNames.first {
         selectedHabit = first
       }
+      jumpToEndIfEnded()
+    }
+    .onChange(of: selectedHabit) { _, _ in jumpToEndIfEnded() }
+    .sheet(isPresented: $showEndSheet) { endHabitSheet }
+    .confirmationDialog("Resume \(selectedHabit)?", isPresented: $confirmResume, titleVisibility: .visible) {
+        Button("Resume habit") { HabitEnd.resume(selectedHabit, context: modelContext) }
+        Button("Cancel", role: .cancel) {}
+    } message: {
+        Text("The end date is removed and it starts repeating again from today.")
     }
     .onChange(of: fromDate) { _, _ in recomputeTabStats() }
     .onChange(of: toDate) { _, _ in recomputeTabStats() }
@@ -211,6 +224,113 @@ struct HabitDashboardView: View {
         UserDefaults.standard.set(fromDate, forKey: Self.startDateKey)
     }
     
+    // MARK: Ending habits
+
+    /// End date of the selected habit (past or upcoming), if any.
+    private var selectedEndDate: Date? { HabitEnd.endDate(of: selectedHabit, in: tasks) }
+
+    private var selectedHasEnded: Bool {
+        guard let end = selectedEndDate else { return false }
+        return Calendar.current.startOfDay(for: end) < Calendar.current.startOfDay(for: Date())
+    }
+
+    /// An ended habit opens on the month it ended, not the current month.
+    private func jumpToEndIfEnded() {
+        guard selectedHasEnded, let end = selectedEndDate else { return }
+        let month = Date.monthBounds(of: end)
+        guard !(fromDate <= end && end <= toDate) else { return }
+        fromDate = month.start; pendingFromDate = month.start
+        toDate = month.end; pendingToDate = month.end
+        recomputeTabStats()
+    }
+
+    private func isEndDay(_ date: Date) -> Bool {
+        guard let end = selectedEndDate else { return false }
+        return Calendar.current.isDate(date, inSameDayAs: end)
+    }
+
+    @ViewBuilder
+    private var habitEndBanner: some View {
+        HStack(spacing: 10) {
+            if let end = selectedEndDate {
+                Image(systemName: "flag.checkered")
+                    .foregroundStyle(selectedHasEnded ? Color.red : Color.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedHasEnded ? "Ended" : "Ends")
+                        .font(.subheadline.weight(.semibold))
+                    Text(end.formatted(date: .complete, time: .omitted))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if selectedHasEnded {
+                    Button("Go to end") {
+                        let month = Date.monthBounds(of: end)
+                        fromDate = month.start; pendingFromDate = month.start
+                        toDate = month.end; pendingToDate = month.end
+                        recomputeTabStats()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Menu {
+                    Button("Change end date…") { endDay = end; showEndSheet = true }
+                    Button("Resume (remove end date)") { confirmResume = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            } else {
+                Image(systemName: "repeat")
+                    .foregroundStyle(.green)
+                Text("Active habit")
+                    .font(.subheadline)
+                Spacer()
+                Button {
+                    endDay = Date()
+                    showEndSheet = true
+                } label: {
+                    Label("End habit", systemImage: "flag.checkered")
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
+        .padding(.horizontal)
+    }
+
+    private var endHabitSheet: some View {
+        let start = HabitEnd.startDate(of: selectedHabit, in: tasks).map { Calendar.current.startOfDay(for: $0) } ?? .distantPast
+        return NavigationStack {
+            Form {
+                Section {
+                    DatePicker("Last day", selection: $endDay, in: start..., displayedComponents: .date)
+                } header: {
+                    Text(selectedHabit)
+                } footer: {
+                    Text("No copies are made after this day. Planned copies after it are removed; days you already marked done or not done stay in its history. You can resume it later.")
+                }
+            }
+            .navigationTitle("End habit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showEndSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("End") {
+                        HabitEnd.end(selectedHabit, on: endDay, context: modelContext)
+                        showEndSheet = false
+                        jumpToEndIfEnded()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
     private func loadStartDate() {
         // Always open on the current month; picked dates last until the screen closes.
         let month = Date.monthBounds()
@@ -476,6 +596,15 @@ struct HabitDashboardView: View {
                 }
             }
             .opacity(Calendar.current.startOfDay(for: date) > Date() ? 0.4 : 1)
+            .overlay(alignment: .topTrailing) {
+                // The habit's last day.
+                if isEndDay(date) {
+                    Image(systemName: "flag.checkered.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white, .red)
+                        .offset(x: 5, y: -5)
+                }
+            }
             
             // Event day halos - circular glowing rings with gaps
             if !eventTypes.isEmpty {
@@ -747,7 +876,7 @@ struct HabitDashboardView: View {
    private var habitNames: [String] {
     Array(Set(
       tasks.filter { $0.repeatAgain != nil }
-           .map { $0.title }
+           .map { $0.habitName }
     ))
     .sorted()
   }
@@ -774,7 +903,7 @@ struct HabitDashboardView: View {
     /// The habit has a task that day, but it was never marked done or not done.
     private func isUnmarked(_ date: Date) -> Bool {
         let dayTasks = filteredHabitTasks.filter {
-            $0.title == selectedHabit && Calendar.current.isDate($0.date ?? Date(), inSameDayAs: date)
+            $0.habitName == selectedHabit && Calendar.current.isDate($0.date ?? Date(), inSameDayAs: date)
         }
         return !dayTasks.isEmpty && !dayTasks.contains { $0.completed || $0.notCompleted }
     }
@@ -830,7 +959,7 @@ struct HabitDashboardView: View {
     private func taskCounts(for habitName: String, in interval: DateInterval) -> (completed: Int, missed: Int) {
         let cal = Calendar.current
         let habitSpecificTasks = tasks.filter { task in
-            guard task.repeatAgain != nil && task.title == habitName else { return false }
+            guard task.repeatAgain != nil && task.habitName == habitName else { return false }
             switch filterMode {
             case "routines": return task.title.lowercased().contains("routine")
             case "repeats":  return !task.title.lowercased().contains("routine")
@@ -875,7 +1004,7 @@ struct HabitDashboardView: View {
 
     private func getStatusForDay(date: Date) -> HabitStatus {
         let dayTasks = filteredHabitTasks.filter { task in
-            task.title == selectedHabit &&
+            task.habitName == selectedHabit &&
             Calendar.current.isDate(task.date ?? Date(), inSameDayAs: date)
         }
         if dayTasks.isEmpty { return .noData }
@@ -900,7 +1029,7 @@ struct HabitDashboardView: View {
         
         // Get tasks for this specific habit with proper filtering
         let habitSpecificTasks = tasks.filter { task in
-            guard task.repeatAgain != nil && task.title == habitName else { return false }
+            guard task.repeatAgain != nil && task.habitName == habitName else { return false }
             
             // Apply filter mode
             switch filterMode {
@@ -956,7 +1085,7 @@ struct HabitDashboardView: View {
     
     private func calculateTimeStatsForHabit(_ habitName: String) -> (ideal: Int, good: Int, survival: Int, idle: Int) {
         let cal = Calendar.current
-        let habitSpecificTasks = filteredHabitTasks.filter { $0.title == habitName }
+        let habitSpecificTasks = filteredHabitTasks.filter { $0.habitName == habitName }
         let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
 
         var ideal = 0, good = 0, survival = 0, idle = 0
@@ -1015,7 +1144,7 @@ struct HabitDashboardView: View {
             modelContext.insert(archivedHabit)
             
             // Delete the original habit tasks
-            let tasksToDelete = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }
+            let tasksToDelete = tasks.filter { $0.habitName == habitName && $0.repeatAgain != nil }
             for task in tasksToDelete {
                 modelContext.delete(task)
             }
@@ -1032,7 +1161,7 @@ struct HabitDashboardView: View {
     }
     
     private func deleteHabit(_ habitName: String) {
-        let tasksToDelete = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }
+        let tasksToDelete = tasks.filter { $0.habitName == habitName && $0.repeatAgain != nil }
         for task in tasksToDelete {
             modelContext.delete(task)
         }

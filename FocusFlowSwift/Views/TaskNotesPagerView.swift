@@ -186,9 +186,15 @@ struct TaskNotesPagerView: View {
     private func loadMatches() {
         windowEnd = calendar.startOfDay(for: task.date ?? Date())
 
-        let title = task.title
-        let descriptor = FetchDescriptor<Task>(predicate: #Predicate<Task> { $0.title == title })
-        allMatchingTasks = (try? modelContext.fetch(descriptor)) ?? [task]
+        // A repeating task's notes pages follow its series; others match by title.
+        if let seriesID = task.repeatSeriesID {
+            let descriptor = FetchDescriptor<Task>(predicate: #Predicate<Task> { $0.repeatSeriesID == seriesID })
+            allMatchingTasks = (try? modelContext.fetch(descriptor)) ?? [task]
+        } else {
+            let title = task.title
+            let descriptor = FetchDescriptor<Task>(predicate: #Predicate<Task> { $0.title == title })
+            allMatchingTasks = (try? modelContext.fetch(descriptor)) ?? [task]
+        }
     }
 
     private func shiftWindow(by days: Int) {

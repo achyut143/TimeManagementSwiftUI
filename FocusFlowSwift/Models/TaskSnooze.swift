@@ -9,21 +9,29 @@ import SwiftData
 /// occurrence; red (true) = it won't, because the next one is already handled
 /// (a rolled-over copy, a snoozed task, or turned off by tapping the icon).
 enum TaskRepeater {
+    /// Creates the next occurrence after this task's day, following its
+    /// repeat rule (every N days, weekly or monthly) and end date.
     static func createNextInstance(from task: Task, context: ModelContext) {
-        guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
+        guard let rule = task.repeatRule, let currentDate = task.date,
+              let nextDate = rule.next(after: currentDate) else { return }
+        makeOccurrence(of: task, on: nextDate, context: context)
+        try? context.save()
+    }
 
-        let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
-
-        // Skip if that occurrence already exists.
+    /// Adds a copy of `task` on `day` unless that day already has it
+    /// (same title, start and end). Doesn't save.
+    @discardableResult
+    static func makeOccurrence(of task: Task, on day: Date, context: ModelContext) -> Task? {
+        let nextDate = Calendar.current.startOfDay(for: day)
         let existing = (try? context.fetch(FetchDescriptor<Task>())) ?? []
         let exists = existing.contains { other in
             guard let d = other.date else { return false }
             return Calendar.current.isDate(d, inSameDayAs: nextDate) &&
                 other.startTime == task.startTime &&
                 other.endTime == task.endTime &&
-                other.title == task.title
+                (task.repeatSeriesID != nil ? other.repeatSeriesID == task.repeatSeriesID : other.title == task.title)
         }
-        if exists { return }
+        if exists { return nil }
 
         let newTask = Task(
             title: task.title,
@@ -32,7 +40,6 @@ enum TaskRepeater {
             endTime: task.endTime,
             weight: task.weight,
             date: nextDate,
-            repeatAgain: task.repeatAgain,
             priority: task.priority,
             elapsedTime: task.elapsedTime,
             copySubtasks: task.copySubtasks,
@@ -40,17 +47,17 @@ enum TaskRepeater {
             whyStatementPinned: task.whyStatementPinned
             // timeSpent is intentionally not copied for repeat tasks
         )
+        task.copyRepeat(to: newTask)
         newTask.goal = task.goal
         ImpulseRules.inherit(from: task, to: newTask, context: context)
         context.insert(newTask)
+        RepeatScheduler.markFilled(newTask)
 
         if task.copySubtasks {
             SubtaskOrder.copyAll(from: task, to: newTask, context: context)
         }
-
-        try? context.save()
+        return newTask
     }
-
 }
 
 /// Moving timed tasks within a day. Used by Snooze, Extend and Move Tasks.
@@ -325,13 +332,33 @@ enum TaskSplitter {
         return minute
     }
 
-    /// Returns the new second part, or nil when the task can't be split now.
-    @discardableResult
-    static func split(_ task: Task, now: Date = Date(), context: ModelContext) -> Task? {
-        guard let minute = splitMinute(for: task, now: now),
-              let start = ImpulseRules.minutes(from: task.startTime),
+    /// Start and end in minutes from the task's midnight; the end goes past
+    /// 1440 when the task runs past midnight.
+    static func range(of task: Task) -> (start: Int, end: Int)? {
+        guard let start = ImpulseRules.minutes(from: task.startTime),
               var end = ImpulseRules.minutes(from: task.endTime) else { return nil }
         if end <= start { end += 24 * 60 }
+        return (start, end)
+    }
+
+    /// Whether the task is long enough to split (at least 2 minutes).
+    static func canSplit(_ task: Task) -> Bool {
+        guard let r = range(of: task) else { return false }
+        return r.end - r.start >= 2
+    }
+
+    /// Splits at the red line. Returns the new second part, or nil when it can't.
+    @discardableResult
+    static func split(_ task: Task, now: Date = Date(), context: ModelContext) -> Task? {
+        guard let minute = splitMinute(for: task, now: now) else { return nil }
+        return split(task, atMinute: minute, context: context)
+    }
+
+    /// Splits at a chosen clock minute (may be past 1440 for past-midnight
+    /// tasks). It must be strictly inside the task.
+    @discardableResult
+    static func split(_ task: Task, atMinute minute: Int, context: ModelContext) -> Task? {
+        guard let (start, end) = range(of: task), minute > start, minute < end else { return nil }
 
         // Habit: make tomorrow's occurrence now, at the full original time.
         TaskMover.prepareRepeats([task], context: context)
@@ -359,6 +386,8 @@ enum TaskSplitter {
             goal: task.goal,
             info: task.info
         )
+
+        task.copyRepeat(to: second)
 
         // Impulse time: planned minutes go to the first part first, the rest after.
         if let typeID = task.impulseTypeID {

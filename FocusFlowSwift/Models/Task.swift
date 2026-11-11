@@ -21,6 +21,19 @@ class Task: Transferable {
     var persistentNotes: String?
     var date: Date?
     var repeatAgain: Int?
+    // Repeat rule details (see RepeatRule.swift). All defaulted, so older
+    // tasks open unchanged and read as "every `repeatAgain` days".
+    /// nil = every N days; "weekly" or "monthly".
+    var repeatKindRaw: String? = nil
+    /// 1 = Sunday … 7 = Saturday (weekly).
+    var repeatWeekdays: [Int] = []
+    /// 1…31 (monthly).
+    var repeatMonthDays: [Int] = []
+    /// Last day it may repeat on; nil = no end.
+    var repeatEndDate: Date? = nil
+    /// Shared by every copy of a repeating task. Older tasks get one from a
+    /// one-time migration (same title = same series).
+    var repeatSeriesID: UUID? = nil
     var priority: String = "P3"
     var timeSpent: Double? // Actual time spent in minutes
     var elapsedTime: Double? // Allocated/elapsed time in minutes for untimed tasks

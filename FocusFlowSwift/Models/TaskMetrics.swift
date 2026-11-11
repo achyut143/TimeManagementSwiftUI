@@ -14,7 +14,7 @@ extension Task {
         let startDate = calendar.date(byAdding: .day, value: -days, to: endDate) ?? endDate
         
         // Get all tasks with the same title (same habit)
-        let habitTasks = allTasks.filter { $0.title == self.title && $0.repeatAgain != nil }
+        let habitTasks = allTasks.filter { $0.repeatAgain != nil && $0.isSameHabit(as: self) }
         
         // Track daily completions
         var dailyCompletions: [(Date, Bool)] = []

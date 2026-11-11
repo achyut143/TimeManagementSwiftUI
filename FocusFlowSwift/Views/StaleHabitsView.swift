@@ -38,7 +38,7 @@ struct StaleHabitsView: View {
     private var staleHabits: [StaleHabit] {
         let startOfToday = Calendar.current.startOfDay(for: Date())
         let repeatTasks = tasks.filter { $0.repeatAgain != nil }
-        let grouped = Dictionary(grouping: repeatTasks, by: { $0.title })
+        let grouped = Dictionary(grouping: repeatTasks, by: { $0.habitName })
 
         return grouped.compactMap { title, habitTasks -> StaleHabit? in
             let dated = habitTasks.filter { $0.date != nil }
@@ -191,7 +191,7 @@ struct StaleHabitsView: View {
     private func archiveHabit(_ habitName: String) {
         if let archivedHabit = HabitArchiveService.archiveHabit(habitName: habitName, tasks: tasks, context: modelContext) {
             modelContext.insert(archivedHabit)
-            let tasksToDelete = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }
+            let tasksToDelete = tasks.filter { $0.habitName == habitName && $0.repeatAgain != nil }
             for task in tasksToDelete {
                 modelContext.delete(task)
             }
@@ -200,7 +200,7 @@ struct StaleHabitsView: View {
     }
 
     private func deleteHabit(_ habitName: String) {
-        let tasksToDelete = tasks.filter { $0.title == habitName && $0.repeatAgain != nil }
+        let tasksToDelete = tasks.filter { $0.habitName == habitName && $0.repeatAgain != nil }
         for task in tasksToDelete {
             modelContext.delete(task)
         }

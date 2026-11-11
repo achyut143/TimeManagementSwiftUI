@@ -389,6 +389,7 @@ struct RepWorkoutDetailView: View {
     @State private var editing = false
     @State private var paused: PausedRepRun?
     @State private var confirmStartOver = false
+    @State private var weightTarget: WeightEditTarget?
 
     var body: some View {
         List {
@@ -406,9 +407,25 @@ struct RepWorkoutDetailView: View {
                                 WorkoutPictureThumb(imageID: ex.imageID)
                                 Text(ex.name)
                                 Spacer()
-                                Text([ ex.amountText, WorkoutFormat.weight(ex.weight, unit: weightUnit) ]
-                                    .compactMap { $0 }.joined(separator: " · "))
+                                Text(ex.amountText)
                                     .foregroundStyle(.secondary)
+                                // Tap to change the weight right here.
+                                Button {
+                                    weightTarget = WeightEditTarget(setIndex: i, exercise: ex)
+                                } label: {
+                                    Text(WorkoutFormat.weight(ex.weight, unit: weightUnit) ?? "+ weight")
+                                        .font(.subheadline.monospacedDigit())
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Edit weight for \(ex.name)")
+                                ExerciseGuideButton(exerciseName: ex.name,
+                                                    guideContext: ExerciseGuideContext.make(workout, folders: folders),
+                                                    tint: .accentColor)
+                                    .buttonStyle(.borderless)
+                                    .font(.body)
                             }
                             if !ex.displayNote.isEmpty {
                                 Text(ex.displayNote).font(.caption).foregroundStyle(.secondary)
@@ -472,6 +489,9 @@ struct RepWorkoutDetailView: View {
             Text("The paused run is discarded and nothing from it is saved to history.")
         }
         .sheet(isPresented: $editing) { RepWorkoutEditorView(workout: workout) }
+        .sheet(item: $weightTarget) { target in
+            ExerciseWeightEditor(workout: workout, target: target)
+        }
         .onAppear {
             lookup = RepHistoryLookup(workoutID: workout.id, context: modelContext)
             paused = PausedRunStore.load(workout.id)

@@ -301,7 +301,7 @@ struct HabitTrendsView: View {
     // MARK: - Data
 
     private var seriesNames: [String] {
-        Array(Set(tasks.filter { $0.repeatAgain != nil }.map { $0.title })).sorted()
+        Array(Set(tasks.filter { $0.repeatAgain != nil }.map { $0.habitName })).sorted()
     }
 
     private var allPoints: [TrendPoint] {
@@ -317,7 +317,7 @@ struct HabitTrendsView: View {
 
             var counts: [String: Int] = [:]
             for t in inBucket where t.repeatAgain != nil {
-                counts[t.title, default: 0] += 1
+                counts[t.habitName, default: 0] += 1
             }
 
             for name in names {

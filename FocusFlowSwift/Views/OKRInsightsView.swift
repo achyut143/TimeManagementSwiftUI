@@ -41,11 +41,11 @@ func uniqueRepeatItems(from tasks: [Task]) -> [RepeatTaskItem] {
     var seen: [String: Task] = [:]
     for t in tasks {
         guard t.repeatAgain != nil else { continue }
-        let key = t.title.lowercased().trimmingCharacters(in: .whitespaces)
+        let key = t.habitName.lowercased().trimmingCharacters(in: .whitespaces)
         if seen[key] == nil { seen[key] = t }
     }
     return seen.map { key, t in
-        RepeatTaskItem(id: key, displayTitle: t.title, interval: t.repeatAgain ?? 1)
+        RepeatTaskItem(id: key, displayTitle: t.habitName, interval: t.repeatGapDays ?? 1)
     }.sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
 }
 
@@ -512,12 +512,12 @@ struct InsightsSection: View {
             var dateMap: [Date: Task] = [:]
             for t in allTasks {
                 guard t.repeatAgain != nil else { continue }
-                let tKey = t.title.lowercased().trimmingCharacters(in: .whitespaces)
+                let tKey = t.habitName.lowercased().trimmingCharacters(in: .whitespaces)
                 guard tKey == key, let d = t.date else { continue }
                 let day = cal.startOfDay(for: d)
                 guard day >= fromDay && day <= toDay else { continue }
                 dateMap[day] = t
-                displayTitles[key] = t.title
+                displayTitles[key] = t.habitName
             }
             byKeyAndDate[key] = dateMap
         }
@@ -572,14 +572,14 @@ struct InsightsSection: View {
 
         let matchingInRange = allTasks.filter { t in
             guard t.repeatAgain != nil else { return false }
-            let tKey = t.title.lowercased().trimmingCharacters(in: .whitespaces)
+            let tKey = t.habitName.lowercased().trimmingCharacters(in: .whitespaces)
             guard tKey == key else { return false }
             if let d = t.date { return d >= Calendar.current.startOfDay(for: fromDate) && d <= Calendar.current.startOfDay(for: toDate) }
             return false
         }.sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
 
         let displayTitle = matchingInRange.first?.title ?? okr?.displayTitle ?? key
-        let interval = matchingInRange.first?.repeatAgain ?? okr?.repeatInterval ?? 1
+        let interval = matchingInRange.first?.repeatGapDays ?? okr?.repeatInterval ?? 1
 
         var lines: [String] = []
         lines.append("Task: \"\(displayTitle)\" (repeats every \(interval) day\(interval == 1 ? "" : "s"))")

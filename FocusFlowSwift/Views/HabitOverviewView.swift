@@ -45,6 +45,8 @@ struct HabitOverviewView: View {
     @State private var cachedDateRange: [Date] = []
     @State private var cachedHabitTags: [String] = []
     @State private var cachedHabitCountPerTag: [String: Int] = [:]
+    /// Ended habits (end date passed) and their last day.
+    @State private var cachedEnded: [String: Date] = [:]
     
     var body: some View {
         NavigationStack {
@@ -91,7 +93,11 @@ struct HabitOverviewView: View {
             .onChange(of: fromDate) { _, _ in recomputeAllStats() }
             .onChange(of: toDate) { _, _ in recomputeAllStats() }
             .onChange(of: tasks.count) { _, _ in recomputeAllStats() }
-            .sheet(isPresented: $showDetailedView) {
+            // Ending or resuming a habit changes dates, not the task count.
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TaskUpdated"))) { _ in
+                recomputeAllStats()
+            }
+            .sheet(isPresented: $showDetailedView, onDismiss: recomputeAllStats) {
                 if let selectedHabit = selectedHabit {
                     NavigationStack {
                         HabitDashboardView(initialHabit: selectedHabit)
@@ -241,10 +247,68 @@ struct HabitOverviewView: View {
                     AxisMarks(position: .bottom)
                 }
                 .chartLegend(position: .bottom)
-                .frame(height: max(340, CGFloat(overviewBarChartEntries.count) * 56))
+                .frame(height: max(overviewBarChartEntries.isEmpty ? 120 : 340, CGFloat(overviewBarChartEntries.count) * 56))
                 .padding(.horizontal)
                 .padding(.bottom, 12)
+
+                if !endedBarChartEntries.isEmpty {
+                    endedHabitsChart
+                }
             }
+        }
+    }
+
+    /// Habits whose end date has passed, with their whole history.
+    private var endedHabitsChart: some View {
+        let entries = endedBarChartEntries
+        let segments = entries.flatMap { e in
+            [HabitOverviewBarSegment(label: e.label, status: "Completed", count: e.completed),
+             HabitOverviewBarSegment(label: e.label, status: "Missed", count: e.missed)]
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider().padding(.horizontal)
+            HStack(spacing: 6) {
+                Image(systemName: "flag.checkered")
+                Text("Ended habits (\(entries.count))")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(.secondary)
+            .padding(.horizontal)
+            Text("Whole history, not just the dates above. Tap one to see where it ended.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+
+            Chart {
+                ForEach(segments) { segment in
+                    BarMark(x: .value("Tasks", segment.count), y: .value("Habit", segment.label))
+                        .foregroundStyle(by: .value("Status", segment.status))
+                        .annotation(position: .overlay) {
+                            if segment.count > 0 {
+                                Text("\(segment.count)")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                }
+            }
+            .chartForegroundStyleScale(domain: ["Completed", "Missed"], range: [Color.green.opacity(0.6), Color.red.opacity(0.4)])
+            .chartYScale(domain: entries.map(\.label))
+            .chartOverlay { proxy in
+                habitTapOverlay(proxy: proxy) { label in
+                    label.components(separatedBy: "\n").first ?? label
+                }
+            }
+            .chartYAxis {
+                AxisMarks { _ in
+                    AxisGridLine()
+                    AxisValueLabel().font(.caption2)
+                }
+            }
+            .chartLegend(.hidden)
+            .frame(height: max(120, CGFloat(entries.count) * 56))
+            .padding(.horizontal)
+            .padding(.bottom, 12)
         }
     }
 
@@ -857,14 +921,14 @@ struct HabitOverviewView: View {
     private func getHabitFrequencies() -> String {
         let filteredTasks = tasks.filter { task in
             guard task.repeatAgain != nil else { return false }
-            guard filteredHabitNames.contains(task.title) else { return false }
+            guard filteredHabitNames.contains(task.habitName) else { return false }
             return true
         }
         
         let frequencies = Dictionary(grouping: filteredTasks) { $0.repeatAgain ?? 1 }
         
         let frequencyStrings = frequencies.map { interval, tasks in
-            let count = Set(tasks.map { $0.title }).count
+            let count = Set(tasks.map { $0.habitName }).count
             switch interval {
             case 1: return "\(count) daily"
             case 7: return "\(count) weekly"
@@ -890,7 +954,7 @@ struct HabitOverviewView: View {
         // Build lookup dictionary once — avoids re-filtering tasks for every habit name
         var tasksByTitle: [String: [Task]] = [:]
         for task in tasks where task.repeatAgain != nil {
-            tasksByTitle[task.title, default: []].append(task)
+            tasksByTitle[task.habitName, default: []].append(task)
         }
         let allHabitNames = tasksByTitle.keys.sorted(by: Self.caseInsensitiveAscending)
 
@@ -928,7 +992,8 @@ struct HabitOverviewView: View {
     private var dateRange: [Date] { cachedDateRange }
 
     private var overviewBarChartEntries: [HabitOverviewBarEntry] {
-        var entries = filteredHabitNames.map { name in
+        // Ended habits have their own chart below.
+        var entries = filteredHabitNames.filter { cachedEnded[$0] == nil }.map { name in
             let stats = cachedStats[name]
             let interval = cachedRepeatInterval[name] ?? 1
             return HabitOverviewBarEntry(
@@ -953,6 +1018,21 @@ struct HabitOverviewView: View {
         return entries
     }
 
+    /// Ended habits, most recently ended first, counted over their whole life.
+    private var endedBarChartEntries: [HabitOverviewBarEntry] {
+        filteredHabitNames
+            .compactMap { name in cachedEnded[name].map { (name, $0) } }
+            .sorted { $0.1 < $1.1 }   // chart draws bottom-up: latest at the top
+            .map { name, end in
+                let counts = HabitEnd.lifetimeCounts(of: name, in: tasks)
+                return HabitOverviewBarEntry(
+                    label: "\(name)\n(ended \(end.formatted(.dateTime.month(.abbreviated).day().year(.twoDigits))))",
+                    completed: counts.completed,
+                    missed: counts.missed
+                )
+            }
+    }
+
     private var overviewBarChartSegments: [HabitOverviewBarSegment] {
         overviewBarChartEntries.flatMap { entry in
             [
@@ -969,7 +1049,7 @@ struct HabitOverviewView: View {
         cachedDateRange = Date.days(from: fromDate, through: toDate, calendar: cal)
 
         let htasks = tasks.filter { $0.repeatAgain != nil }
-        let names = Array(Set(htasks.map { $0.title }))
+        let names = Array(Set(htasks.map { $0.habitName }))
 
         var stats: [String: HabitStats] = [:]
         var pts: [String: (earned: Double, allocated: Double)] = [:]
@@ -982,7 +1062,7 @@ struct HabitOverviewView: View {
             pts[name] = calculatePointsForHabit(name)
             disc[name] = calculateDisciplineScoreForHabit(name)
             evts[name] = calculateEventStatsForHabit(name)
-            repeatIntervals[name] = htasks.first { $0.title == name }?.repeatAgain ?? 1
+            repeatIntervals[name] = htasks.first { $0.habitName == name }?.repeatGapDays ?? 1
         }
 
         cachedStats = stats
@@ -997,11 +1077,11 @@ struct HabitOverviewView: View {
             let tags = task.taskDescription.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             for tag in tags where !tag.isEmpty {
                 allTags.insert(tag)
-                countPerTag[tag, default: Set()].insert(task.title)
+                countPerTag[tag, default: Set()].insert(task.habitName)
             }
             if task.taskDescription.trimmingCharacters(in: .whitespaces).isEmpty {
                 allTags.insert("")
-                countPerTag["", default: Set()].insert(task.title)
+                countPerTag["", default: Set()].insert(task.habitName)
             }
         }
         cachedHabitTags = Array(allTags).sorted { f, s in
@@ -1010,14 +1090,15 @@ struct HabitOverviewView: View {
             return f < s
         }
         cachedHabitCountPerTag = countPerTag.mapValues { $0.count }
+        cachedEnded = HabitEnd.endedHabits(in: tasks)
     }
 
     // MARK: - Helper Methods
     
     private func calculateDisciplineScoreForHabit(_ habitName: String) -> DisciplineMuscleScore {
         let cal = Calendar.current
-        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
-        let repeatInterval = habitSpecificTasks.first?.repeatAgain ?? 1
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.habitName == habitName }
+        let repeatInterval = habitSpecificTasks.first?.repeatGapDays ?? 1
 
         // Index tasks by day once — avoids O(dates × tasks) nested filter
         let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
@@ -1041,7 +1122,7 @@ struct HabitOverviewView: View {
         var missed = 0
         let cal = Calendar.current
 
-        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.habitName == habitName }
 
         // Index tasks by day once — avoids O(dates × tasks) nested filter
         let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
@@ -1081,7 +1162,7 @@ struct HabitOverviewView: View {
     
     private func calculatePointsForHabit(_ habitName: String) -> (earned: Double, allocated: Double) {
         let cal = Calendar.current
-        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.habitName == habitName }
 
         // Index by day once — avoids O(dates × tasks) nested filter
         let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
@@ -1795,8 +1876,8 @@ struct HabitOverviewView: View {
 
             guard effectiveElapsed > 0 || effectiveSpent > 0 else { continue }
 
-            spentByTitle[task.title, default: 0] += effectiveSpent
-            elapsedByTitle[task.title, default: 0] += effectiveElapsed
+            spentByTitle[task.habitName, default: 0] += effectiveSpent
+            elapsedByTitle[task.habitName, default: 0] += effectiveElapsed
         }
 
         let searchTerms = appliedMultiSearch
@@ -1870,7 +1951,7 @@ struct HabitOverviewView: View {
         if selectedView == "time" {
             let titlesInRange = Set(tasks.compactMap { task -> String? in
                 guard task.repeatAgain != nil, let d = task.date, d >= fromDate && d <= toDate else { return nil }
-                return task.title
+                return task.habitName
             })
             candidates = titlesInRange.sorted(by: Self.caseInsensitiveAscending)
         } else {
@@ -1918,7 +1999,7 @@ struct HabitOverviewView: View {
     }
     
     private func getHabitCountForRepeatValue(_ repeatValue: Int) -> Int {
-        let habitNames = Set(tasks.filter { ($0.repeatAgain ?? 0) <= repeatValue && $0.repeatAgain != nil }.map { $0.title })
+        let habitNames = Set(tasks.filter { ($0.repeatAgain ?? 0) <= repeatValue && $0.repeatAgain != nil }.map { $0.habitName })
         return habitNames.count
     }
     
@@ -1962,7 +2043,7 @@ struct HabitOverviewView: View {
     
     private func calculateEventStatsForHabit(_ habitName: String) -> (eventDays: Int, nonEventMisses: Int) {
         let cal = Calendar.current
-        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.title == habitName }
+        let habitSpecificTasks = tasks.filter { $0.repeatAgain != nil && $0.habitName == habitName }
 
         // Index habit tasks and event days by startOfDay — avoids O(n²) nested search
         let tasksByDay = Dictionary(grouping: habitSpecificTasks) { cal.startOfDay(for: $0.date ?? Date()) }
@@ -1988,7 +2069,7 @@ struct HabitOverviewView: View {
     
     private func getNotesCount(habitName: String) -> Int {
         let habitTasks = tasks.filter { task in
-            guard task.title == habitName,
+            guard task.habitName == habitName,
                   let taskDate = task.date,
                   taskDate >= fromDate && taskDate <= toDate,
                   let notes = task.notes,
@@ -2003,7 +2084,7 @@ struct HabitOverviewView: View {
     private func downloadHabitNotes(habitName: String) {
         // Get tasks for this habit within date range
         let habitTasks = tasks.filter { task in
-            guard task.title == habitName,
+            guard task.habitName == habitName,
                   let taskDate = task.date,
                   taskDate >= fromDate && taskDate <= toDate else {
                 return false

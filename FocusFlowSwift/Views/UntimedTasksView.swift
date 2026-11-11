@@ -16,6 +16,7 @@ struct UntimedTasksView: View {
     @State private var taskWeight = 1.0
     @State private var taskPriority = "P3"
     @State private var repeatDays = 0
+    @State private var repeatDraft = RepeatDraft()
     @State private var showNotesDialog = false
     @State private var notesTask: Task?
     @State private var showDeleteConfirmation = false
@@ -47,6 +48,8 @@ struct UntimedTasksView: View {
                 DatePicker("", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact)
                     .onChange(of: selectedDate) { _, _ in
+                        // Opening a day (today or later) adds its repeat tasks.
+                        RepeatScheduler.fill(day: selectedDate, context: modelContext)
                         updateQuery()
                     }
 
@@ -120,15 +123,8 @@ struct UntimedTasksView: View {
                 TaskNotesPagerView(task: task)
             }
         }
-        .alert("Delete Task", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                if let task = taskToDelete {
-                    deleteTask(task)
-                }
-            }
-        } message: {
-            Text("Are you sure you want to delete this task?")
+        .taskDeleteAlert(isPresented: $showDeleteConfirmation, task: taskToDelete) { _ in
+            updateQuery()
         }
         .alert("Mark All as Not Completed", isPresented: $showMarkAllNotCompletedConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -291,10 +287,10 @@ struct UntimedTasksView: View {
                             .clipShape(Capsule())
                     }
                     
-                    if let repeatDays = task.repeatAgain {
+                    if let rule = task.repeatRule {
                         HStack(spacing: 2) {
                             Image(systemName: "repeat")
-                            Text("\(repeatDays)")
+                            Text(rule.badge)
                         }
                         .font(.caption)
                         .foregroundStyle(.blue)
@@ -402,15 +398,6 @@ struct UntimedTasksView: View {
                     }
                     
                     VStack(alignment: .leading) {
-                        Text("Repeat (days)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("0 = no repeat", value: $repeatDays, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
-                    }
-                    
-                    VStack(alignment: .leading) {
                         Text("Priority")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -431,6 +418,10 @@ struct UntimedTasksView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
+
+                RepeatSummaryButton(draft: $repeatDraft, taskDate: selectedDate)
+                    .font(.caption)
+                    .onChange(of: repeatDraft) { _, d in repeatDays = d.repeatAgain }
             }
         }
         .padding()
@@ -478,7 +469,8 @@ struct UntimedTasksView: View {
             repeatAgain: repeatDays > 0 ? repeatDays : nil,
             priority: taskPriority
         )
-        
+        RepeatRule.apply(repeatDraft.rule, to: task)
+
         modelContext.insert(task)
         
         do {
@@ -494,6 +486,7 @@ struct UntimedTasksView: View {
         taskWeight = 1.0
         taskPriority = "P3"
         repeatDays = 0
+        repeatDraft = RepeatDraft()
     }
     
     private func createQuickTask(from parsed: QuickTaskParser.ParsedTask) {
@@ -552,7 +545,7 @@ struct UntimedTasksView: View {
                 createRepeatTask(from: task)
             }
             
-            if task.repeatAgain == nil || (task.repeatAgain != nil && task.repeatAgain! > 1) {
+            if !task.isDailyRepeat {
                 createIncompleteTask(from: task)
             }
         }
@@ -603,7 +596,7 @@ struct UntimedTasksView: View {
         }
         
         // Get all tasks with the same title (same habit)
-        let habitTasks = allTasks.filter { $0.title == task.title && $0.repeatAgain != nil }
+        let habitTasks = allTasks.filter { $0.repeatAgain != nil && $0.isSameHabit(as: task) }
         
         var earnedPoints: Double = 0
         var allocatedPoints: Double = 0
@@ -634,79 +627,13 @@ struct UntimedTasksView: View {
     }
     
     private func createRepeatTask(from task: Task) {
-        guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
-        
-        let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
-        
-        // Check if task already exists
-        let descriptor = FetchDescriptor<Task>()
-        do {
-            let existingTasks = try modelContext.fetch(descriptor)
-            let taskExists = existingTasks.contains { existingTask in
-                guard let existingDate = existingTask.date else { return false }
-                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
-                       existingTask.startTime == task.startTime &&
-                       existingTask.endTime == task.endTime &&
-                       existingTask.title == task.title
-            }
-            if taskExists { return }
-        } catch { return }
-        
-        let newTask = Task(
-            title: task.title,
-            taskDescription: task.taskDescription,
-            startTime: task.startTime,
-            endTime: task.endTime,
-            weight: task.weight,
-            date: nextDate,
-            repeatAgain: task.repeatAgain,
-            priority: task.priority,
-            elapsedTime: task.elapsedTime // Copy elapsed time to new task
-            // timeSpent is intentionally not copied for repeat tasks
-        )
-        newTask.goal = task.goal
-        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
-
-        modelContext.insert(newTask)
-        try? modelContext.save()
+        // Follows the task's repeat rule (every N days, weekly, monthly) and end date.
+        TaskRepeater.createNextInstance(from: task, context: modelContext)
     }
 
     private func createRepeatTaskFromActions(from task: Task) {
-        guard let repeatDays = task.repeatAgain, let currentDate = task.date else { return }
-        
-        let nextDate = Calendar.current.date(byAdding: .day, value: repeatDays, to: currentDate) ?? currentDate
-        
-        // Check if task already exists
-        let descriptor = FetchDescriptor<Task>()
-        do {
-            let existingTasks = try modelContext.fetch(descriptor)
-            let taskExists = existingTasks.contains { existingTask in
-                guard let existingDate = existingTask.date else { return false }
-                return Calendar.current.isDate(existingDate, inSameDayAs: nextDate) &&
-                       existingTask.startTime == task.startTime &&
-                       existingTask.endTime == task.endTime &&
-                       existingTask.title == task.title
-            }
-            if taskExists { return }
-        } catch { return }
-        
-        let newTask = Task(
-            title: task.title,
-            taskDescription: task.taskDescription,
-            startTime: task.startTime,
-            endTime: task.endTime,
-            weight: task.weight,
-            date: nextDate,
-            repeatAgain: task.repeatAgain,
-            priority: task.priority,
-            elapsedTime: task.elapsedTime // Copy elapsed time to new task
-            // timeSpent is intentionally not copied for repeat tasks
-        )
-        newTask.goal = task.goal
-        ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
-
-        modelContext.insert(newTask)
-        try? modelContext.save()
+        // Follows the task's repeat rule (every N days, weekly, monthly) and end date.
+        TaskRepeater.createNextInstance(from: task, context: modelContext)
     }
 
     private func createIncompleteTask(from task: Task) {
@@ -743,6 +670,7 @@ struct UntimedTasksView: View {
             elapsedTime: task.elapsedTime // Copy elapsed time to new task
             // timeSpent is intentionally not copied for repeat tasks
         )
+        task.copyRepeat(to: newTask)
         newTask.goal = task.goal
         ImpulseRules.inherit(from: task, to: newTask, context: modelContext)
 
