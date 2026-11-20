@@ -43,7 +43,7 @@ struct RoutineReminderSettingsView: View {
                     set: { RoutineReminder.setEnabled($0) }
                 ))
             } footer: {
-                Text("Runs the steps below in order, then repeats. A floating timer shows the current step, and steps with a bell ask you to acknowledge when they start.")
+                Text("Runs the steps below in order, then repeats. The timer only runs while the app is open, and a step with a bell waits for you to acknowledge it before its time starts.")
             }
 
             Section {
@@ -227,7 +227,7 @@ struct RoutineReminderSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("\(step.minutes) min")
+            Text(step.lengthLabel)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Image(systemName: "chevron.right")
@@ -238,7 +238,7 @@ struct RoutineReminderSettingsView: View {
     }
 
     private var summary: String {
-        steps.map { "\($0.name) \($0.minutes)" }.joined(separator: " → ") + " min, then repeat."
+        steps.map { "\($0.name) \($0.lengthLabel)" }.joined(separator: " → ") + ", then repeat."
     }
 
     /// Saves through RoutineReminder so the current step keeps going instead
@@ -260,10 +260,16 @@ struct RoutineStepEditor: View {
         Form {
             Section {
                 TextField("Name", text: $step.name)
-                Stepper("\(step.minutes) min", value: $step.minutes, in: 1...240)
-                Toggle("Remind & ask to acknowledge", isOn: $step.remind)
+                Toggle("Event (no timer)", isOn: $step.isEvent.animation())
+                if !step.isEvent {
+                    Stepper("\(step.minutes) min", value: $step.minutes, in: 1...240)
+                }
+                Toggle(step.isEvent ? "Say it out loud when it comes up" : "Remind & ask to acknowledge",
+                       isOn: $step.remind)
             } footer: {
-                Text("Turn off for steps like Work, where you don't need a nudge when they start.")
+                Text(step.isEvent
+                     ? "An event is something you just do, like drinking water. It stays on the timer until you tap Done, then the next step starts."
+                     : "Turn off for steps like Work, where you don't need a nudge when they start.")
             }
 
             Section("Look") {
@@ -321,7 +327,6 @@ struct RoutineTimerPill: View {
     @AppStorage(RoutineReminder.enabledKey) private var enabled = false
     // Read so the pill re-renders when the sequence changes.
     @AppStorage(RoutineReminder.stepsKey) private var stepsRaw = ""
-    @AppStorage(RoutineReminder.startedAtKey) private var startedAt: Double = 0
     // Position as a fraction of the screen, so it survives rotation.
     @AppStorage("standReminder.pillX") private var pillX: Double = 0.82
     @AppStorage("standReminder.pillY") private var pillY: Double = 0.72
@@ -333,6 +338,8 @@ struct RoutineTimerPill: View {
     @State private var dragOffset: CGSize = .zero
     @State private var pendingAck = false
     @State private var lastSpokenAt: Date?
+    /// The event step last announced, so it's announced once when it comes up.
+    @State private var announcedEventID: UUID?
 
     private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -384,9 +391,34 @@ struct RoutineTimerPill: View {
                         .fontWeight(.semibold)
                 }
                 .font(.caption)
-                Text("Tap to acknowledge · \(format(status.secondsRemaining))")
+                Text("Tap to start · \(format(status.secondsRemaining))")
                     .font(.caption2.monospacedDigit())
                 snoozeRow(stepName: step.name, from: now, onDark: true)
+            } else if status.isEvent {
+                HStack(spacing: 6) {
+                    Image(systemName: step.icon)
+                    Text(step.name)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                }
+                .font(.caption)
+
+                let next = RoutineReminder.nextStep(after: status.index)
+                Button {
+                    RoutineReminder.completeEvent()
+                    expanded = false
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                } label: {
+                    Label("Done · start \(next.name)", systemImage: "checkmark")
+                        .font(.caption2.bold())
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+                .controlSize(.small)
+
+                if expanded {
+                    snoozeRow(stepName: step.name, from: now, onDark: false)
+                }
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: step.icon)
@@ -408,7 +440,7 @@ struct RoutineTimerPill: View {
 
                 if expanded {
                     let next = RoutineReminder.nextStep(after: status.index)
-                    Text("Next: \(next.name) \(next.minutes) min")
+                    Text("Next: \(next.name) \(next.lengthLabel)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
@@ -510,6 +542,8 @@ struct RoutineTimerPill: View {
 
     private func tick() {
         let date = Date()
+        RoutineReminder.markSeen(date)
+        announceEventIfNew(at: date)
         let needsAck = RoutineReminder.needsAcknowledgment(at: date)
 
         if needsAck && !pendingAck {
@@ -528,6 +562,18 @@ struct RoutineTimerPill: View {
             let step = RoutineReminder.status(at: date).step
             SpeechManager.shared.speak("\(RoutineReminder.title(for: step)). Please acknowledge.")
         }
+    }
+
+    private func announceEventIfNew(at date: Date) {
+        let st = RoutineReminder.status(at: date)
+        guard st.isEvent else {
+            announcedEventID = nil
+            return
+        }
+        guard announcedEventID != st.step.id else { return }
+        announcedEventID = st.step.id
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        if st.step.remind { SpeechManager.shared.speak("\(st.step.name) time.") }
     }
 
     private func acknowledge() {

@@ -132,6 +132,8 @@ struct FocusFlowSwiftApp: App {
         NotificationManager.shared.requestPermission()
         NotificationManager.shared.setupNotificationDelegate()
         RemovedFeaturesCleanup.runOnce()
+        // The routine timer pauses while the app is in the background.
+        RoutineReminder.installLifecycleObservers()
     }
     
     var body: some Scene {

@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import UIKit
 
 /// One step in the routine sequence, e.g. "Stand · 30 min".
 struct RoutineStep: Codable, Identifiable, Equatable, Hashable {
@@ -13,6 +14,30 @@ struct RoutineStep: Codable, Identifiable, Equatable, Hashable {
     /// Notify + ask to acknowledge when this step starts. Off for steps like
     /// "Work" where you don't need a nudge when they begin.
     var remind: Bool = true
+    /// Something you just do, like drinking water: no timer. It stays on
+    /// screen until you tap Done, then the next step starts.
+    var isEvent: Bool = false
+}
+
+extension RoutineStep {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, minutes, icon, colorName, remind, isEvent
+    }
+
+    /// Fields added later are optional, so routines saved by older versions still load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        minutes = try c.decodeIfPresent(Int.self, forKey: .minutes) ?? 10
+        icon = try c.decodeIfPresent(String.self, forKey: .icon) ?? "star.fill"
+        colorName = try c.decodeIfPresent(String.self, forKey: .colorName) ?? "pink"
+        remind = try c.decodeIfPresent(Bool.self, forKey: .remind) ?? true
+        isEvent = try c.decodeIfPresent(Bool.self, forKey: .isEvent) ?? false
+    }
+
+    /// "30 min", or "Event" for a step without a timer.
+    var lengthLabel: String { isEvent ? "Event" : "\(minutes) min" }
 }
 
 extension RoutineStep {
@@ -26,7 +51,7 @@ extension RoutineStep {
         RoutineStep(name: "Meditate", minutes: 10, icon: "figure.mind.and.body", colorName: "indigo"),
         RoutineStep(name: "Call", minutes: 15, icon: "phone.fill", colorName: "green"),
         RoutineStep(name: "Walk", minutes: 10, icon: "figure.walk", colorName: "mint"),
-        RoutineStep(name: "Water", minutes: 2, icon: "drop.fill", colorName: "cyan"),
+        RoutineStep(name: "Water", minutes: 2, icon: "drop.fill", colorName: "cyan", isEvent: true),
         RoutineStep(name: "Break", minutes: 10, icon: "cup.and.saucer.fill", colorName: "brown"),
         RoutineStep(name: "Custom", minutes: 10, icon: "star.fill", colorName: "pink"),
     ]
@@ -81,7 +106,7 @@ struct SavedRoutinePreset: Codable, Identifiable, Equatable {
     }
 
     var summary: String {
-        steps.map { "\($0.minutes)" }.joined(separator: "/") + " min"
+        steps.map { $0.isEvent ? "•" : "\($0.minutes)" }.joined(separator: "/") + " min"
     }
 
     static func load(_ raw: String) -> [SavedRoutinePreset] {
@@ -96,32 +121,46 @@ struct SavedRoutinePreset: Codable, Identifiable, Equatable {
     }
 }
 
-/// A repeating sequence of steps (default Sit 30 → Stand 30 → Stretch 5),
-/// running from the moment it was switched on.
+/// A repeating sequence of steps (default Sit 30 → Stand 30 → Stretch 5).
 ///
-/// The current step is worked out from `startedAt` and the clock rather than
-/// a running timer, so it stays correct across backgrounding and relaunches.
-/// Step changes are also queued as local notifications so they arrive while
-/// the app isn't open.
+/// The timer only runs while the app is open: it pauses when the app goes to
+/// the background and carries on from the same point when you come back.
+///
+/// A step with "remind" on doesn't start by itself. When the step before it
+/// ends, the routine waits on it ("Stand time · tap to acknowledge") and its
+/// timer starts only once you acknowledge it. Steps with "remind" off start
+/// straight away.
+///
+/// An event step (e.g. "Water") has no timer: it waits until you tap Done,
+/// and then the next step starts.
 enum RoutineReminder {
     static let enabledKey = "routine.enabled"
     static let stepsKey = "routine.steps"
-    static let startedAtKey = "routine.startedAt"
-    /// When a snoozed step will start, so the pill can say it's snoozed.
-    static let snoozedUntilKey = "routine.snoozedUntil"
-    static let snoozedStepKey = "routine.snoozedStep"
+
+    private static let indexKey = "routine.index"
+    /// Seconds run in the current step before the latest resume.
+    private static let elapsedKey = "routine.elapsed"
+    /// When the current step last resumed. 0 while paused or waiting.
+    private static let runningSinceKey = "routine.runningSince"
+    /// The current step is waiting to be acknowledged before its timer starts.
+    private static let awaitingKey = "routine.awaitingAck"
+    /// Length of the current step in seconds when a snooze changed it. 0 = normal.
+    private static let lengthOverrideKey = "routine.lengthOverride"
+    private static let snoozedStepKey = "routine.snoozedStep"
+    /// Last moment the app was seen open, so a crash or force-quit doesn't
+    /// count the time the app was closed.
+    private static let lastSeenKey = "routine.lastSeen"
 
     private static let notificationPrefix = "routine-reminder-"
-    /// How many upcoming step changes to keep scheduled. Topped up each time
-    /// the app becomes active; iOS caps pending notifications at 64 app-wide.
-    private static let notificationsAhead = 24
 
     struct Status {
         let index: Int
         let step: RoutineStep
         let secondsRemaining: Int
-        /// When this step began.
-        let stepStart: Date
+        /// The step's time hasn't started: it's waiting to be acknowledged.
+        let waitingForAck: Bool
+        /// An event: no timer, waits for Done.
+        var isEvent: Bool { step.isEvent }
     }
 
     private static var defaults: UserDefaults { .standard }
@@ -131,7 +170,7 @@ enum RoutineReminder {
     static var isEnabled: Bool { defaults.bool(forKey: enabledKey) }
 
     /// Never empty. The default sequence is saved on first use so its step
-    /// ids stay stable (acknowledgments are keyed by step id).
+    /// ids stay stable.
     static var steps: [RoutineStep] {
         if let list = decode(defaults.string(forKey: stepsKey) ?? "") { return list }
         let list = RoutinePreset.defaultSteps
@@ -156,35 +195,89 @@ enum RoutineReminder {
         return String(decoding: data, as: UTF8.self)
     }
 
-    static var startedAt: Date {
-        let t = defaults.double(forKey: startedAtKey)
-        return t > 0 ? Date(timeIntervalSince1970: t) : Date()
+    private static func seconds(_ step: RoutineStep) -> Double { Double(max(1, step.minutes) * 60) }
+
+    // MARK: - Stored state
+
+    private static var index: Int {
+        get { defaults.integer(forKey: indexKey) }
+        set { defaults.set(newValue, forKey: indexKey) }
+    }
+    private static var elapsed: Double {
+        get { defaults.double(forKey: elapsedKey) }
+        set { defaults.set(newValue, forKey: elapsedKey) }
+    }
+    private static var runningSince: Double {
+        get { defaults.double(forKey: runningSinceKey) }
+        set { defaults.set(newValue, forKey: runningSinceKey) }
+    }
+    private static var awaiting: Bool {
+        get { defaults.bool(forKey: awaitingKey) }
+        set { defaults.set(newValue, forKey: awaitingKey) }
+    }
+    private static var lengthOverride: Double {
+        get { defaults.double(forKey: lengthOverrideKey) }
+        set { defaults.set(newValue, forKey: lengthOverrideKey) }
     }
 
-    private static func seconds(_ step: RoutineStep) -> Int { max(1, step.minutes) * 60 }
+    private static var isRunning: Bool { runningSince > 0 }
 
-    /// Seconds from the start of a cycle to the start of step `index`.
-    private static func offset(ofIndex index: Int, in list: [RoutineStep]) -> Int {
-        list.prefix(index).reduce(0) { $0 + seconds($1) }
+    private static func length(of i: Int, in list: [RoutineStep]) -> Double {
+        lengthOverride > 0 ? lengthOverride : seconds(list[i])
     }
 
+    private static func runSeconds(at now: Date) -> Double {
+        elapsed + (isRunning ? max(0, now.timeIntervalSince1970 - runningSince) : 0)
+    }
+
+    // MARK: - Status
+
+    /// The current step. Moves on if this one's time is up: a reminder step
+    /// then waits to be acknowledged, any other step starts right away.
     static func status(at now: Date = Date()) -> Status {
         let list = steps
-        if let held = heldStatus(at: now, list: list) { return held }
-        let cycle = list.reduce(0) { $0 + seconds($1) }
-        let elapsed = max(0, Int(now.timeIntervalSince(startedAt)))
-        var pos = elapsed % cycle
-        for (i, step) in list.enumerated() {
-            let len = seconds(step)
-            if pos < len {
-                let remaining = len - pos
-                return Status(index: i, step: step, secondsRemaining: remaining,
-                              stepStart: now.addingTimeInterval(Double(remaining - len)))
-            }
-            pos -= len
+        // Installs from before pausing existed have no index yet.
+        if defaults.object(forKey: indexKey) == nil || index >= list.count {
+            begin(at: 0, now: now)
         }
-        // Not reachable: pos is always inside the cycle.
-        return Status(index: 0, step: list[0], secondsRemaining: seconds(list[0]), stepStart: now)
+        advance(now: now, list: list)
+
+        let i = index
+        if list[i].isEvent {
+            return Status(index: i, step: list[i], secondsRemaining: 0, waitingForAck: false)
+        }
+        let len = length(of: i, in: list)
+        let remaining = awaiting ? len : len - runSeconds(at: now)
+        return Status(index: i, step: list[i], secondsRemaining: max(1, Int(remaining.rounded(.up))),
+                      waitingForAck: awaiting)
+    }
+
+    private static func advance(now: Date, list: [RoutineStep]) {
+        // Bounded in case every step is short and the app froze a long time.
+        for _ in 0..<(list.count * 2) {
+            guard !awaiting, isRunning, !list[index].isEvent else { return }
+            let over = runSeconds(at: now) - length(of: index, in: list)
+            guard over >= 0 else { return }
+
+            let next = (index + 1) % list.count
+            index = next
+            lengthOverride = 0
+            defaults.removeObject(forKey: snoozedStepKey)
+            if list[next].isEvent {
+                // No timer: waits for Done.
+                awaiting = false
+                elapsed = 0
+                runningSince = 0
+            } else if list[next].remind {
+                awaiting = true
+                elapsed = 0
+                runningSince = 0
+            } else {
+                // Starts the moment the last one ended.
+                elapsed = over
+                runningSince = now.timeIntervalSince1970
+            }
+        }
     }
 
     static func nextStep(after index: Int) -> RoutineStep {
@@ -194,23 +287,63 @@ enum RoutineReminder {
 
     // MARK: - Acknowledgment
 
-    /// Stable id for the current step occurrence, for AcknowledgmentStore —
-    /// same mechanism the calendar-task timer uses, so an acknowledged step
-    /// stays acknowledged across view reloads and app relaunches.
-    private static func key(for status: Status) -> String {
-        "routine-\(status.step.id.uuidString)@\(Int(status.stepStart.timeIntervalSince1970 / 60))"
-    }
-
-    /// True when the current step wants acknowledging and hasn't been yet.
+    /// True when a step is waiting to be acknowledged.
     static func needsAcknowledgment(at now: Date = Date()) -> Bool {
-        let st = status(at: now)
-        guard st.step.remind else { return false }
-        return !AcknowledgmentStore.isAcknowledged(date: st.stepStart, identifier: key(for: st))
+        guard isEnabled else { return false }
+        return status(at: now).waitingForAck
     }
 
+    /// Starts the waiting step's timer.
     static func acknowledgeCurrentStep(at now: Date = Date()) {
-        let st = status(at: now)
-        AcknowledgmentStore.acknowledge(date: st.stepStart, identifier: key(for: st))
+        guard awaiting else { return }
+        awaiting = false
+        elapsed = 0
+        runningSince = now.timeIntervalSince1970
+    }
+
+    // MARK: - Pause / resume with the app
+
+    /// Pauses when the app leaves the screen and resumes when it's back.
+    /// Call once at launch.
+    static func installLifecycleObservers() {
+        // A crash or force-quit while open never sent "background", so
+        // count only up to the last time the app was seen.
+        if isRunning {
+            let lastSeen = defaults.double(forKey: lastSeenKey)
+            pause(at: Date(timeIntervalSince1970: max(runningSince, lastSeen)))
+        }
+        // Clear step notifications queued by older versions.
+        reschedule()
+
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            pause(at: Date())
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            resume(at: Date())
+        }
+    }
+
+    /// Called every second by the pill, so a crash loses at most a second.
+    static func markSeen(_ now: Date = Date()) {
+        defaults.set(now.timeIntervalSince1970, forKey: lastSeenKey)
+    }
+
+    private static func pause(at now: Date) {
+        guard isRunning else { return }
+        // Let a step that ended before now move on first.
+        _ = status(at: now)
+        guard isRunning else { return }
+        elapsed = runSeconds(at: now)
+        runningSince = 0
+    }
+
+    private static func resume(at now: Date) {
+        markSeen(now)
+        let list = steps
+        guard isEnabled, !awaiting, !isRunning,
+              list.indices.contains(index), !list[index].isEvent else { return }
+        runningSince = now.timeIntervalSince1970
     }
 
     // MARK: - Actions
@@ -218,110 +351,90 @@ enum RoutineReminder {
     /// Turns the routine on or off. Turning on starts the first step now.
     static func setEnabled(_ on: Bool) {
         defaults.set(on, forKey: enabledKey)
-        if on { startStep(at: 0) }
-        reschedule()
+        if on { begin(at: 0, now: Date()) } else { runningSince = 0 }
     }
 
-    /// Holds a step past its normal end while a snooze runs.
-    private static let holdIndexKey = "routine.holdIndex"
-    private static let holdStartKey = "routine.holdStart"
+    /// Starts a step now. The user chose it, so it doesn't need acknowledging.
+    private static func begin(at i: Int, now: Date) {
+        index = i
+        elapsed = 0
+        awaiting = false
+        lengthOverride = 0
+        defaults.removeObject(forKey: snoozedStepKey)
+        let list = steps
+        runningSince = list.indices.contains(i) && list[i].isEvent ? 0 : now.timeIntervalSince1970
+    }
 
-    /// Delays the next step.
-    /// - If the next step has just started and hasn't been acknowledged yet,
-    ///   it goes back to the step before it until `minutes` from now.
-    /// - Otherwise the current step is held `minutes` past its normal end.
-    /// The snoozed step then starts with its full length, and every later
-    /// step moves back by the same amount.
+    /// Marks the current event as done and starts the next step.
+    static func completeEvent() {
+        let st = status()
+        guard st.isEvent else { return }
+        begin(at: (st.index + 1) % steps.count, now: Date())
+    }
+
+    /// Delays the next step by `minutes`.
+    /// - If a step is waiting to be acknowledged, the routine goes back to the
+    ///   step before it for `minutes`, then asks again.
+    /// - Otherwise the current step runs `minutes` longer.
     static func snooze(minutes: Int, at now: Date = Date()) {
         let list = steps
-        let n = list.count
         let st = status(at: now)
-        let justStarted = needsAcknowledgment(at: now)
         let delay = Double(max(1, minutes) * 60)
+        let holding = st.waitingForAck || st.isEvent
+        let delayed = holding ? st.index : (st.index + 1) % list.count
 
-        let heldIndex = justStarted ? (st.index - 1 + n) % n : st.index
-        let nextIndex = (heldIndex + 1) % n
-        let holdUntil = justStarted ? now.addingTimeInterval(delay)
-                                    : now.addingTimeInterval(Double(st.secondsRemaining) + delay)
-        let holdStart = justStarted ? now : st.stepStart
-
-        // Line the sequence up so the next step starts exactly when the hold ends.
-        let cycle = Double(list.reduce(0) { $0 + seconds($1) })
-        var start = holdUntil.addingTimeInterval(-Double(offset(ofIndex: nextIndex, in: list)))
-        while start > now { start = start.addingTimeInterval(-cycle) }
-        defaults.set(start.timeIntervalSince1970, forKey: startedAtKey)
-
-        defaults.set(heldIndex, forKey: holdIndexKey)
-        defaults.set(holdStart.timeIntervalSince1970, forKey: holdStartKey)
-        defaults.set(holdUntil.timeIntervalSince1970, forKey: snoozedUntilKey)
-        defaults.set(list[nextIndex].name, forKey: snoozedStepKey)
-
-        // The held step was already seen; don't ask to acknowledge it again.
-        acknowledgeCurrentStep(at: now)
-        reschedule()
+        if holding {
+            index = (st.index - 1 + list.count) % list.count
+            awaiting = false
+            elapsed = 0
+            lengthOverride = delay
+        } else {
+            lengthOverride = length(of: st.index, in: list) + delay
+        }
+        defaults.set(list[delayed].name, forKey: snoozedStepKey)
+        if !isRunning { runningSince = now.timeIntervalSince1970 }
     }
 
-    /// The snoozed step's name and when it will start, while a snooze is running.
+    /// The snoozed step's name and when it will start (if the app stays open).
     static func activeSnooze(at now: Date = Date()) -> (step: String, until: Date)? {
-        let until = defaults.double(forKey: snoozedUntilKey)
-        guard until > now.timeIntervalSince1970 else { return nil }
-        return (defaults.string(forKey: snoozedStepKey) ?? "Next step", Date(timeIntervalSince1970: until))
-    }
-
-    /// The held step while a snooze runs.
-    private static func heldStatus(at now: Date, list: [RoutineStep]) -> Status? {
-        let until = defaults.double(forKey: snoozedUntilKey)
-        let index = defaults.integer(forKey: holdIndexKey)
-        guard until > now.timeIntervalSince1970, index < list.count else { return nil }
-        let remaining = Int((until - now.timeIntervalSince1970).rounded(.up))
-        return Status(index: index, step: list[index], secondsRemaining: max(1, remaining),
-                      stepStart: Date(timeIntervalSince1970: defaults.double(forKey: holdStartKey)))
-    }
-
-    private static func clearSnooze() {
-        defaults.set(0.0, forKey: snoozedUntilKey)
+        let st = status(at: now)
+        guard lengthOverride > 0, !st.waitingForAck, !st.isEvent,
+              let name = defaults.string(forKey: snoozedStepKey) else { return nil }
+        return (name, now.addingTimeInterval(Double(st.secondsRemaining)))
     }
 
     /// Ends the current step now and moves to the next one.
     static func skipToNextStep() {
-        let list = steps
-        startStep(at: (status().index + 1) % list.count)
-        reschedule()
+        begin(at: (status().index + 1) % steps.count, now: Date())
     }
 
     /// Restarts the sequence from the first step.
     static func restart() {
-        startStep(at: 0)
-        reschedule()
+        begin(at: 0, now: Date())
     }
 
     /// Saves a new sequence without jumping to a different step: if the
-    /// current step is still in the list, it keeps its start time and only
-    /// its length (and the rest of the cycle) changes. If it was removed,
-    /// the sequence restarts from the first step.
+    /// current step is still in the list, it keeps its progress. If it was
+    /// removed, the sequence restarts from the first step.
     static func updateSteps(_ newSteps: [RoutineStep]) {
         let now = Date()
-        let before = status(at: now)
-        clearSnooze()
+        let old = steps
+        let currentID = old.indices.contains(index) ? old[index].id : nil
         setSteps(newSteps.isEmpty ? RoutinePreset.defaultSteps : newSteps)
         guard isEnabled else { return }
-        let list = steps
-        if let i = list.firstIndex(where: { $0.id == before.step.id }) {
-            let start = before.stepStart.addingTimeInterval(-Double(offset(ofIndex: i, in: list)))
-            defaults.set(start.timeIntervalSince1970, forKey: startedAtKey)
+        if let i = steps.firstIndex(where: { $0.id == currentID }) {
+            index = i
+            lengthOverride = 0
+            if steps[i].isEvent {
+                awaiting = false
+                elapsed = 0
+                runningSince = 0
+            } else if !awaiting && !isRunning {
+                runningSince = now.timeIntervalSince1970
+            }
         } else {
-            startStep(at: 0)
+            begin(at: 0, now: now)
         }
-        reschedule()
-    }
-
-    /// Starts a step now. The user chose it, so it doesn't need acknowledging.
-    private static func startStep(at index: Int) {
-        clearSnooze()
-        let now = Date()
-        let start = now.addingTimeInterval(-Double(offset(ofIndex: index, in: steps)))
-        defaults.set(start.timeIntervalSince1970, forKey: startedAtKey)
-        acknowledgeCurrentStep(at: now)
     }
 
     // MARK: - Notifications
@@ -330,7 +443,8 @@ enum RoutineReminder {
         "\(step.name) time"
     }
 
-    /// Replaces all pending routine notifications with the next ones from now.
+    /// The routine only moves while the app is open, so it no longer queues
+    /// step-change notifications. This clears any left by older versions.
     static func reschedule() {
         let center = UNUserNotificationCenter.current()
         center.getPendingNotificationRequests { requests in
@@ -338,36 +452,6 @@ enum RoutineReminder {
                 $0.hasPrefix(notificationPrefix) || $0.hasPrefix("stand-reminder-")
             }
             center.removePendingNotificationRequests(withIdentifiers: old)
-
-            guard isEnabled else { return }
-
-            let list = steps
-            // Nothing to announce if no step asks for a reminder.
-            guard list.contains(where: \.remind) else { return }
-
-            let current = status()
-            var index = current.index
-            var fireIn = TimeInterval(current.secondsRemaining)
-            var scheduled = 0
-            var guardCount = 0
-
-            while scheduled < notificationsAhead && guardCount < notificationsAhead * list.count {
-                guardCount += 1
-                index = (index + 1) % list.count
-                let step = list[index]
-                defer { fireIn += TimeInterval(seconds(step)) }
-                guard step.remind else { continue }
-
-                let content = UNMutableNotificationContent()
-                content.title = title(for: step)
-                content.body = "\(step.name) for \(step.minutes) min. Open the app to acknowledge."
-                content.sound = .default
-                content.interruptionLevel = .timeSensitive
-
-                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, fireIn), repeats: false)
-                center.add(UNNotificationRequest(identifier: "\(notificationPrefix)\(scheduled)", content: content, trigger: trigger))
-                scheduled += 1
-            }
         }
     }
 }

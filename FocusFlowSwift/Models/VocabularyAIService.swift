@@ -37,9 +37,36 @@ struct VocabularyAIService {
 
     /// Returns `count` new words. `avoid` lists words already saved so they
     /// aren't repeated.
+    ///
+    /// The AI often repeats saved words or sends fewer than asked, and those
+    /// get filtered out. So ask again (a few times at most) until there are
+    /// `count` new words.
     func generateWords(level: VocabLevel, focus: VocabFocus, tone: VocabTone,
                        topic: String, count: Int = 5, avoid: [String]) async throws -> [Draft] {
         guard !apiKey.isEmpty else { throw VocabAIError.missingKey }
+
+        var collected: [Draft] = []
+        var avoidSoFar = avoid
+        var lastError: Error?
+        for _ in 0..<4 where collected.count < count {
+            let needed = count - collected.count
+            do {
+                // Ask for a couple extra so a repeat or two still leaves enough.
+                let batch = try await requestWords(level: level, focus: focus, tone: tone, topic: topic,
+                                                   count: needed + 2, avoid: avoidSoFar)
+                let fresh = Array(batch.prefix(needed))
+                collected += fresh
+                avoidSoFar += fresh.map(\.word)
+            } catch VocabAIError.badFormat {
+                lastError = VocabAIError.badFormat   // every word was a repeat; try again
+            }
+        }
+        if collected.isEmpty { throw lastError ?? VocabAIError.badFormat }
+        return collected
+    }
+
+    private func requestWords(level: VocabLevel, focus: VocabFocus, tone: VocabTone,
+                              topic: String, count: Int, avoid: [String]) async throws -> [Draft] {
 
         let topicLine = topic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? ""
@@ -51,7 +78,7 @@ struct VocabularyAIService {
         case .casual: toneLine = "Write the example sentences the way people speak casually."
         }
         // Keep the prompt short: the most recent words matter most.
-        let avoidList = avoid.suffix(300).joined(separator: ", ")
+        let avoidList = avoid.suffix(500).joined(separator: ", ")
 
         let systemPrompt = """
         You are an English vocabulary coach helping an adult learner speak and write more clearly and confidently.
